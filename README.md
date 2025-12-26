@@ -772,6 +772,8 @@ A high-performance speech recognition framework and beyond.
 <details>
 <summary>GPT-SoVITS</summary>
 
+> Experimental. Feel free to open an issue for any problem.
+
 **Dependency:** `pip install "xtalk[gpt-sovits] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 **Path:** `src/xtalk/speech/tts/gpt_sovits.py`
 
