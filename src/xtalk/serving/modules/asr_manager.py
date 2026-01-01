@@ -7,6 +7,7 @@ import math
 from collections import deque
 import numpy as np
 import re
+import unicodedata
 
 from ...log_utils import logger
 
@@ -27,6 +28,7 @@ from ..events import (
 )
 from ..interfaces import Manager
 from ...pipelines import Pipeline
+from ...speech.interfaces import TurnType
 
 
 @dataclass
@@ -72,6 +74,7 @@ class ASRManager(Manager):
 
         # ASR state
         self.accumulated_text = ""
+        self.accumulated_stable_char_count = 0
         self.chunk_count = 0
 
         # Whether a speech segment is active (driven by frontend VAD)
@@ -83,6 +86,7 @@ class ASRManager(Manager):
 
         # Streaming ASR parameters: hold model ref only, chunking handled by model
         self.asr_model = self.pipeline.get_asr_model()
+        self.turn_detector_model = self.pipeline.get_turn_detector_model()
         self._stream_chunk_bytes_hint = self._get_stream_chunk_hint()
         self.pre_buffer = deque(maxlen=self._compute_prebuffer_len())
 
@@ -239,19 +243,24 @@ class ASRManager(Manager):
         """
         validation_result = {
             "is_valid": False,
-            "text": text,
-            "confidence": 0.0,
-            "validation_time": time.time(),
-            "session_id": self.session_id,
         }
 
+        if self.turn_detector_model:
+            # TODO: enhance detection logic with audio input and more logic to deal with labels
+            # Remove last punctuation
+            text = text[:-1] if unicodedata.category(text[-1]).startswith("P") else text
+            detection_result = self.turn_detector_model.detect(audio=None, text=text)
+            if detection_result == TurnType.COMPLETE:
+                validation_result["is_valid"] = True
+            return validation_result
+
+        # Fallback to rule based turn detection
         try:
             # Minimum audio length gate
             MIN_INTERRUPTION_SECONDS = 1  # seconds
             audio_length = self.consumer_state.processed_secs
             if audio_length < MIN_INTERRUPTION_SECONDS:
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "audio too short"
                 return validation_result
             if semantic_tag:
                 normalized_tag = (semantic_tag or "").strip().lower()
@@ -259,19 +268,12 @@ class ASRManager(Manager):
                     validation_result.update(
                         {
                             "is_valid": True,
-                            "confidence": 1.0,
-                            "reason": normalized_tag,
-                            "text_length": len(text.strip()),
-                            "chunk_count": self.chunk_count,
                         }
                     )
                 else:
                     validation_result.update(
                         {
                             "is_valid": False,
-                            "reason": normalized_tag,
-                            "text_length": len(text.strip()),
-                            "chunk_count": self.chunk_count,
                         }
                     )
                 return validation_result
@@ -279,33 +281,28 @@ class ASRManager(Manager):
             # Basic check: reject empty text
             if not text or not text.strip():
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "text empty"
                 return validation_result
 
             # Length validation
             text_length = len(text.strip())
             if text_length < 1:
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "text too short"
                 return validation_result
 
             # Single-character alphanumeric filter
             if len(text.strip()) == 1 and re.match(r"^[\w]$", text.strip()):
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "single character filtered"
                 return validation_result
 
             # Filler words
             filler_words = ["嗯", "啊", "呃", "哦", "呀", "吧", "呢", "嘛", "咳", "哼"]
             if text.strip() in filler_words:
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "filler filtered"
                 return validation_result
 
             # Placeholder token
             if text == "<EMPTY>":
                 validation_result["is_valid"] = False
-                validation_result["reason"] = "placeholder filtered"
                 return validation_result
 
             # Confidence heuristic (to be refined)
@@ -315,17 +312,12 @@ class ASRManager(Manager):
 
             # Passed validation
             validation_result["is_valid"] = True
-            validation_result["confidence"] = confidence
-            validation_result["reason"] = "validated"
-            validation_result["text_length"] = text_length
-            validation_result["chunk_count"] = self.chunk_count
 
         except Exception as e:
             logger.error(
                 "Text validation error - session: %s, error: %s", self.session_id, e
             )
             validation_result["is_valid"] = False
-            validation_result["reason"] = f"validation error: {str(e)}"
 
         return validation_result
 
@@ -338,11 +330,6 @@ class ASRManager(Manager):
             verification_result_event = VerificationResult(
                 session_id=self.session_id,
                 is_valid=validation_result["is_valid"],
-                text=text,
-                confidence=validation_result["confidence"],
-                reason=validation_result["reason"],
-                text_length=validation_result.get("text_length", 0),
-                chunk_count=validation_result.get("chunk_count", 0),
             )
             # wait_for_completion=True ensures TTS/LLM stop flows finish before the next turn
             await self.event_bus.publish(
@@ -365,6 +352,7 @@ class ASRManager(Manager):
         # Reset state variables
         self._reset_consumer_state()
         self.accumulated_text = ""
+        self.accumulated_stable_char_count = 0
         self.chunk_count = 0
         if self.asr_model:
             self.asr_model.reset()
@@ -382,6 +370,7 @@ class ASRManager(Manager):
             await self._process_accumulated_audio(is_final=True)
         # Placeholder confidence (model may override later)
         final_confidence = 0
+        self.accumulated_stable_char_count = len(self.accumulated_text)
         final_text = self.accumulated_text.strip()
 
         if not final_text:
@@ -564,7 +553,11 @@ class ASRManager(Manager):
             if not current_text:
                 return
 
-            previous_text = self.accumulated_text
+            previous_text = (
+                self.accumulated_text[self.accumulated_stable_char_count :]
+                if len(self.accumulated_text) > self.accumulated_stable_char_count
+                else ""
+            )
             if current_text == previous_text:
                 return
 
@@ -573,7 +566,8 @@ class ASRManager(Manager):
             else:
                 delta_text = current_text
 
-            self.accumulated_text = current_text
+            stable = min(self.accumulated_stable_char_count, len(self.accumulated_text))
+            self.accumulated_text = self.accumulated_text[:stable] + current_text
 
             if not delta_text:
                 return
