@@ -108,7 +108,7 @@ class ASRManager(Manager):
             self.config.get("semantic_timeout_sec", 0.5)
         )
         # turn
-        self._turn_id = 0
+        self._turn_id = 1
         # Sentence-ending punctuation list
         self._seg_punct = "，,。．.!！?？;；:：\n"
         # Segment throttle threshold (ms)
@@ -202,9 +202,6 @@ class ASRManager(Manager):
                 self.audio_buffer.append(item)
             # Clear once moved to avoid reusing old frames next turn
             self.pre_buffer.clear()
-
-        # Increment turn id
-        self._turn_id += 1
 
     @Manager.event_handler(
         TurnASREndRequested,
@@ -407,6 +404,8 @@ class ASRManager(Manager):
                     semantic_tag=semantic_tag,
                     wait_for_completion=True,
                 )
+                # Increment turn id
+                self._turn_id += 1
                 await self._cancel_semantic_timeout()
 
     async def _start_consumer(self) -> None:
