@@ -18,6 +18,7 @@ from ..speech.interfaces import (
     SpeechEnhancer,
     SpeechSpeedController,
     SpeakerEncoder,
+    TurnDetector,
 )
 from .interfaces import Pipeline, PipelineOutput
 
@@ -81,6 +82,9 @@ class DefaultPipeline(Pipeline):
     embeddings_model: Optional[Embeddings] = field(
         default=None, metadata={"init_key": "embeddings", "clone": False}
     )
+    turn_detector_model: Optional[TurnDetector] = field(
+        default=None, metadata={"init_key": "turn_detector", "clone": True}
+    )
 
     def __init__(
         self,
@@ -98,6 +102,7 @@ class DefaultPipeline(Pipeline):
         speaker_encoder: Optional[SpeakerEncoder] = None,
         speech_speed_controller: Optional[SpeechSpeedController] = None,
         embeddings: Optional[Embeddings] = None,
+        turn_detector: Optional[TurnDetector] = None,
     ):
         # Assign directly to dataclass fields
         self.asr_model = asr
@@ -112,6 +117,7 @@ class DefaultPipeline(Pipeline):
         self.speaker_encoder = speaker_encoder
         self._speed_controller = speech_speed_controller
         self.embeddings_model = embeddings
+        self.turn_detector_model = turn_detector
 
         # Normalize rewriters: BaseChatModel -> Default*Rewriter; Rewriter -> use as-is
         if isinstance(caption_rewriter, BaseChatModel):
@@ -187,6 +193,9 @@ class DefaultPipeline(Pipeline):
 
     def get_embeddings_model(self) -> Embeddings | None:
         return self.embeddings_model
+
+    def get_turn_detector_model(self) -> TurnDetector | None:
+        return self.turn_detector_model
 
     # --------------------------
     # runtime switchers (retain original logic)

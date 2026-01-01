@@ -38,6 +38,7 @@ class Xtalk:
         "vad": ["xtalk.speech.vad"],
         "speech_enhancer": ["xtalk.speech.speech_enhancer"],
         "speech_speed_controller": ["xtalk.speech.speech_speed_controller"],
+        "turn_detector": ["xtalk.speech.turn_detector"],
     }
 
     # Cache for file-path modules to avoid re-importing the same file repeatedly

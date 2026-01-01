@@ -7,6 +7,7 @@ from .interfaces import (
     SpeechEnhancer,
     SpeakerEncoder,
     SpeechSpeedController,
+    TurnDetector,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "SpeechEnhancer",
     "SpeakerEncoder",
     "SpeechSpeedController",
+    "TurnDetector",
 ]
