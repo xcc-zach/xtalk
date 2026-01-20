@@ -1,24 +1,40 @@
 {
   "name": "xtalk-frontend",
+  "version": "1.0.0",
   "description": "Frontend API bundle for X-Talk (https://github.com/xcc-zach/xtalk)",
-  "main": "dist/index.js",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.umd.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.umd.cjs"
+    },
+    "./umd": "./dist/index.umd.cjs",
+    "./iife": "./dist/index.iife.min.js"
+  },
+  "unpkg": "dist/index.iife.min.js",
+  "jsdelivr": "dist/index.iife.min.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "webpack --mode production",
-    "watch": "webpack --mode development --watch"
+    "watch": "webpack --mode development --watch",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "html-webpack-plugin": "^5.6.6",
     "ts-loader": "^9.5.4",
+    "terser-webpack-plugin": "^5.3.14",
     "typescript": "^5.9.3",
     "webpack": "^5.104.1",
     "webpack-cli": "^6.0.1"
-  },
-  "type": "module",
-  "version": "1.0.0",
-  "files": [
-    "dist/index.js",
-    "dist/models/**/*",
-    "README.md",
-    "LICENSE"
-  ]
+  }
 }
