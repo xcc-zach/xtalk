@@ -1,0 +1,1 @@
+This is the frontend API bundle for X-Talk. See https://github.com/xcc-zach/xtalk for details.

@@ -1,13 +1,19 @@
-import path from 'path';
-import HtmlWebpackPlugin from 'html-webpack-plugin';
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default {
-    entry: {
-        main: ['./src/index.js', './src/index.ts'],
-    },
+    entry: './src/index.ts',
+    experiments: { outputModule: true },
     output: {
-        filename: 'bundle.js',
-        path: path.resolve(__dirname, 'dist')
+        filename: 'index.js',
+        path: path.resolve(__dirname, 'dist'),
+        module: true,
+        publicPath: "./",
+        library: { type: "module" },
+        clean: true
     },
     resolve: {
         extensions: ['.ts', '.js'],
@@ -27,16 +33,5 @@ export default {
                 },
             }
         ]
-    },
-    plugins: [
-        new HtmlWebpackPlugin({
-            template: './example/index.html',
-            filename: 'index.html',
-        }),
-    ],
-    devServer: {
-        static: path.resolve('dist'),
-        compress: true,
-        port: 7634,
     },
 };
