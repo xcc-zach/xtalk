@@ -60,6 +60,7 @@ async function ensureOrtVad() {
 //   pureFrontend = true enables "pure front-end mode": skip VAD/enhancer and only capture+forward raw audio.
 // simGen: when true, never auto-stop/pause TTS except via toggleStreaming().
 function createAudioSession(onIncomingJson, opts = false) {
+    const scriptUrl = new URL(import.meta.url);
     if (typeof onIncomingJson !== 'function') {
         throw new Error('onIncomingJson must be a function');
     }
@@ -330,7 +331,7 @@ function createAudioSession(onIncomingJson, opts = false) {
             ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`;
 
             // Show FastEnhancer loading info inside the conversation
-            const enhancerURL = '/static/fastenhancer_s.onnx';
+            const enhancerURL = new URL("../fastenhancer_s.onnx", scriptUrl).toString();
             const enhancerArrayBuffer = await fetch(enhancerURL).then(r => r.arrayBuffer());
             enhancerSession = await ort.InferenceSession.create(enhancerArrayBuffer);
 
@@ -423,7 +424,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         } catch (e) {
             // Enhancer load failed: continue without it.
             console.error('FastEnhancer initialization failed, disabling enhancer.', e);
-            modelLog('Enhancer initialization and disabled. Maybe you are using a mobile device.');
+            modelLog('Enhancer initialization failed and disabled. Maybe you are using a mobile device.');
             useEnhancer = false;
             enhanceSpeech = async (audioFrame) => audioFrame; // Passthrough
         }
@@ -564,7 +565,8 @@ function createAudioSession(onIncomingJson, opts = false) {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
         // Load AudioWorklet processor
-        await audioContext.audioWorklet.addModule('/static/js/vad-processor.js');
+        await audioContext.audioWorklet.addModule(new URL("./vad-processor.js", scriptUrl).toString()
+        );
 
         const sourceNode = audioContext.createMediaStreamSource(stream);
 
@@ -668,7 +670,8 @@ function createAudioSession(onIncomingJson, opts = false) {
 
         // Audio context keeps the processing graph silent to avoid playback
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        await audioContext.audioWorklet.addModule('/static/js/vad-processor.js');
+        await audioContext.audioWorklet.addModule(new URL("./vad-processor.js", scriptUrl).toString()
+        );
         const sourceNode = audioContext.createMediaStreamSource(stream);
         const workletNode = new AudioWorkletNode(audioContext, 'vad-processor', {
             processorOptions: { targetSampleRate: 16000, targetFrameSize: frameSamples }
@@ -717,11 +720,16 @@ function createAudioSession(onIncomingJson, opts = false) {
             ws.close();
             ws = null;
         }
-        const wsProtocol = window.location.protocol.startsWith('https') ? 'wss' : 'ws';
-        // Always connect to /ws at the root so different UI routes do not alter the endpoint
-        const webSocketUrl = wsProtocol + '://' + window.location.host + '/ws';
-        ws = new WebSocket(webSocketUrl);
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        const wsPath = new URL('../../ws', scriptUrl);
+
+        wsPath.protocol = wsProtocol;
+        wsPath.host = window.location.host;
+
+        ws = new WebSocket(wsPath.toString());
         ws.binaryType = 'arraybuffer';
+
 
         // Add event listeners for debugging
         ws.addEventListener('open', () => {

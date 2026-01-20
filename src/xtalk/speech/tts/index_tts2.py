@@ -38,7 +38,8 @@ class IndexTTS2(TTS):
 
     def __init__(
         self,
-        voices_map: List[Dict[str, str]],
+        voices: Optional[List[Dict[str, str]]] = None,
+        voices_map: Optional[List[Dict[str, str]]] = None,
         host: str = "localhost",
         port: int = 6006,
         sample_rate: int = 48000,
@@ -48,7 +49,7 @@ class IndexTTS2(TTS):
         Initialize IndexTTS2.
 
         Args:
-            voices_map: List of voice configs containing name/path.
+            voices/voices_map: List of voice configs containing name/path.
             host: TTS server host.
             port: TTS server port.
             sample_rate: Output sample rate.
@@ -57,10 +58,10 @@ class IndexTTS2(TTS):
         self._port = port
         self.url = f"http://{host}:{port}/tts_url"
 
-        self._voices_map = voices_map
+        self._voices_map = voices if voices is not None else voices_map
         self._voice_path_map: Dict[str, str] = {}
         self._active_voice_name: Optional[str] = next(
-            (voice.get("name") for voice in voices_map if voice.get("name")), None
+            (voice.get("name") for voice in self._voices_map if voice.get("name")), None
         )
         self._sample_rate = sample_rate
         self._emotion_control = EmotionControl()
