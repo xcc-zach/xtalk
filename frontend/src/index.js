@@ -1,4 +1,5 @@
 import fastEnhancerOnnxUrl from "../models/fastenhancer_s.onnx";
+import vadProcessorUrl from "./vad-processor.worklet.js";
 // Create low-level audio/WebSocket session.
 //
 // This file now includes on-demand ORT/VAD loading logic:
@@ -565,8 +566,7 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = false) {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
         // Load AudioWorklet processor
-        await audioContext.audioWorklet.addModule(new URL("./vad-processor.js", scriptUrl).toString()
-        );
+        await audioContext.audioWorklet.addModule(vadProcessorUrl);
 
         const sourceNode = audioContext.createMediaStreamSource(stream);
 

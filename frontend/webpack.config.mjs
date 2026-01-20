@@ -14,6 +14,13 @@ const base = {
     resolve: { extensions: [".ts", ".js"] },
     module: {
         rules: [
+            {
+                test: /\.worklet\.(js|ts)$/,
+                type: "asset/resource",
+                generator: {
+                    filename: "worklets/[name].[contenthash][ext]",
+                },
+            },
             { test: /\.ts$/, use: "ts-loader", exclude: /node_modules/ },
             {
                 test: /\.onnx$/,
