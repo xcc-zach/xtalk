@@ -1,6 +1,14 @@
 import { createConversation } from "../../xtalk/index.js";
 
-const convo = createConversation();
+function getWebSocketURL(path = "ws") {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsPath = new URL("./ws", window.location.href);
+    wsPath.protocol = proto;
+    wsPath.host = window.location.host;
+    return wsPath
+}
+
+const convo = createConversation(getWebSocketURL());
 
 const $btnToggle = document.getElementById('btn-toggle');
 const $btnView = document.getElementById('btn-view');

@@ -59,7 +59,7 @@ async function ensureOrtVad() {
 // - Objects may include { simGen?: bool, sim_gen?: bool, pureFrontend?: bool, pure_frontend?: bool }
 //   pureFrontend = true enables "pure front-end mode": skip VAD/enhancer and only capture+forward raw audio.
 // simGen: when true, never auto-stop/pause TTS except via toggleStreaming().
-function createAudioSession(onIncomingJson, opts = false) {
+function createAudioSession(onIncomingJson, websocketURL = null, opts = false) {
     const scriptUrl = new URL(import.meta.url);
     if (typeof onIncomingJson !== 'function') {
         throw new Error('onIncomingJson must be a function');
@@ -727,7 +727,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         wsPath.protocol = wsProtocol;
         wsPath.host = window.location.host;
 
-        ws = new WebSocket(wsPath.toString());
+        ws = new WebSocket(websocketURL || wsPath.toString());
         ws.binaryType = 'arraybuffer';
 
 
@@ -1162,7 +1162,7 @@ function createAudioSession(onIncomingJson, opts = false) {
 // New signature:
 // - createConversation({ sim_gen?: bool, simGen?: bool, pure_frontend?: bool, pureFrontend?: bool })
 //   With pure_frontend=true the frontend skips VAD/enhancer and keeps streaming raw audio frames.
-function createConversation(sim_gen_or_opts = false) {
+function createConversation(websocketURL = null, sim_gen_or_opts = false) {
     const SIM_GEN = (typeof sim_gen_or_opts === 'boolean')
         ? !!sim_gen_or_opts
         : !!(sim_gen_or_opts?.sim_gen ?? sim_gen_or_opts?.simGen ?? false);
@@ -1569,7 +1569,7 @@ function createConversation(sim_gen_or_opts = false) {
                 updateMessageByTurnOrLast({ role: 'info', content: `Error: ${json.data || 'unknown'}` });
         }
     }
-    audioSession = createAudioSession(onIncomingJson, { simGen: SIM_GEN, pureFrontend: PURE_FRONTEND });
+    audioSession = createAudioSession(onIncomingJson, websocketURL, { simGen: SIM_GEN, pureFrontend: PURE_FRONTEND });
     audioSession.initWebSocket();
     state.loading = false;
 
