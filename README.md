@@ -32,6 +32,7 @@ X-Talk is an open-source full-duplex cascaded spoken dialogue system framework f
         - [Text Embedding](#text-embedding)
         - [Tool Use](#tool-use)
     - [Config the Server](#config-the-server)
+        - [Sample Config for Fully Local Deployment](#sample-config-for-fully-local-deployment)
     - [Introduce a New Model](#introduce-a-new-model)
         - [Recipe](#recipe)
     - [Customize the Service](#customize-the-service)
@@ -118,9 +119,7 @@ Then, obtain an API key from [AliCloud Bailian Platform](https://bailian.console
 > Online service may be unstable and of high latency. We recommend using locally deployed models for better user experience. See [server config tutorial](#config-the-server) and [supported models](#supported-models) for details.
 
 After that, create a JSON config specifying the models to use, and **fill in <API_KEY>** with the key you obtained:
-<details>
-<summary>Basic Config</summary>
-    
+
 ```json
 {
     "asr": {
@@ -147,8 +146,6 @@ After that, create a JSON config specifying the models to use, and **fill in <AP
     }
 }
 ```
-    
-</details>
 
 > If you find *Qwen3ASRFlashRealtime* not working properly, you can use `"asr": "SenseVoiceSmallLocal",` instead which is a ~1GB local model. Also, you can try to use local speech generation model *IndexTTS* ([setup tutorial](https://github.com/Ksuriuri/index-tts-vllm)):
 > ```json
@@ -159,6 +156,7 @@ After that, create a JSON config specifying the models to use, and **fill in <AP
 >     }
 > },
 > ```
+> If you want all models deployed locally, see [here](#sample-config-for-fully-local-deployment).
 
 The next step is to compose the startup script. Since we also need to link frontend webpage and scripts to get the demo working, the startup script is ready at `examples/sample_app/configurable_server.py`. We simply need to start the server with the config file (**fill in <PATH_TO_CONFIG>.json** with the path to the config file we just created) and a custom port:
 ```bash
@@ -286,7 +284,7 @@ In order to maintain seperate states for a tool in echo agent, you can also use 
 Built-in tools include agent-scope ones like `web_search` and `get_time`, and pipeline control ones like emotion, timbre and speed of speech. `DefaultAgent` has built-in tools registered by default.
     
 > [!NOTE]
-> In order to enable `web_search` tool, `SERPER_API_KEY` needs to be set. See [SerpAPI](https://serpapi.com/).
+> In order to enable `web_search` tool, `SERPER_API_KEY` needs to be set. See [SerperDev](https://serper.dev/).
 
 ### Config the Server
     
@@ -345,6 +343,105 @@ See [below](##Supported-Models) for full list of model types (`slot`), their opt
 Also, you can restrict concurrency through:
 ```json
     "max_connections": 1
+```
+
+#### Sample Config for Fully Local Deployment
+
+Below is an example config file for X-Talk when you want to have all models hosted locally. `SherpaOnnxASR` is used for speech recognition, and you can see [here](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example) to set up the server. For LLM agent and embeddings, any model adhering to OpenAI protocol is fine. You should provide `api_key`, `base_url` and `model`. `IndexTTS` is used for speech generation, and see [here](https://github.com/Ksuriuri/index-tts-vllm) for server setup. Reference voices can be downloaded [here](https://github.com/xcc-zach/xtalk/releases/tag/audio-v0.1). The captioner is hard to set up, but you can refer to the tutorial [here](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Captioner). **Finally, remember to look into each model type in [Supported Models](#supported-models) for how to install the optional dependencies of X-Talk for that model**.
+
+```json
+{
+    "asr": {
+        "type": "SherpaOnnxASR",
+        "params": {
+            "port": 6006,
+            "mode": "offline"
+        }
+    },
+    "llm_agent": {
+        "type": "DefaultAgent",
+        "params": {
+            "model": {
+                "api_key": "none",
+                "base_url": "http://127.0.0.1:8000/v1",
+                "model": "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
+            },
+            "voice_names": [
+                "Man",
+                "Woman",
+                "Child"
+            ],
+            "emotions": [
+                "happy",
+                "angry",
+                "sad",
+                "fear",
+                "disgust",
+                "depressed",
+                "surprised",
+                "calm",
+                "normal"
+            ]
+        }
+    },
+    "embeddings": {
+        "type": "OpenAIEmbeddings",
+        "params": {
+            "api_key": "none",
+            "base_url": "http://127.0.0.1:8002/v1",
+            "model": "Qwen/Qwen3-Embedding-0.6B"
+        }
+    },
+    "tts": {
+        "type": "IndexTTS",
+        "params": {
+            "port": 11996,
+            "voices": [
+                {
+                    "name": "Man",
+                    "path": "ReferenceVoice/Man"
+                },
+                {
+                    "name": "Woman",
+                    "path": "ReferenceVoice/Woman"
+                },
+                {
+                    "name": "Child",
+                    "path": "ReferenceVoice/Child"
+                }
+            ]
+        }
+    },
+    "speaker_encoder": "PyannoteSpeakerEncoder",
+    "captioner": {
+        "type": "Qwen3OmniCaptioner",
+        "params": {
+            "base_url": "http://localhost:8901/v1",
+            "api_key": "none"
+        }
+    },
+    "caption_rewriter": {
+        "type": "DefaultCaptionRewriter",
+        "params": {
+            "model": {
+                "api_key": "none",
+                "model": "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit",
+                "base_url": "http://127.0.0.1:8000/v1"
+            }
+        }
+    },
+    "thought_rewriter": {
+        "type": "DefaultThoughtRewriter",
+        "params": {
+            "model": {
+                "api_key": "none",
+                "model": "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit",
+                "base_url": "http://127.0.0.1:8000/v1"
+            }
+        }
+    },
+    "speech_speed_controller": "RubberbandSpeedController"
+}
 ```
 
 ### Introduce a New Model
