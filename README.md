@@ -175,30 +175,34 @@ Finally, our demo is ready at `http://localhost:7635`. View it in the browser!
 ### Start the Server
     
 > [!NOTE]
-> See `examples/sample_app/configurable_server.py`, `frontend/src` and `examples/sample_app/templates` for details.
+> See `examples/sample_app/configurable_server.py`, `frontend/src`, `examples/sample_app/templates` and `examples/sample_app/static` for details.
    
 X-Talk has most models and execution on server side, and the client is responsible for interacting with microphone, transmitting audio and Websocket messages, and handle lightweight operations like Voice-Actitvty-Detection.
     
-For client side, you can start with snippet in `examples/sample_app/templates/index.html` and track where `convo` is used to see how to use frontend API:
-```html
-<script type="module">
-        import { createConversation } from "/static/js/index.js";
-
-        const convo = createConversation();
-    ...
-</script>
-```
-    
-The client-side API mainly comes from `frontend/src/js/index.js`, and if interested, you can check the core code to see how different Websocket messages are handled:
+For client side, you can start with snippet in `examples\sample_app\static\js\index.js` and track where `convo` is used to see how to use the client API:
 ```javascript
-switch (json.action) {
-            case 'queue_status': {...}
-            case 'queue_granted': {...}
-    ...
-}    
-```
+async function loadXtalk() {
+    try {
+        return await import("../../xtalk/index.js"); // Try local import first, this is dev only
+    } catch (e) {
+        return await import("https://unpkg.com/xtalk-client@latest/dist/index.js"); // Use unpkg CDN for production
+    }
+}
 
-We plan to improve the client-side API in the near future.
+const { createConversation } = await loadXtalk();
+
+
+function getWebSocketURL() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsPath = new URL("./ws", window.location.href);
+    wsPath.protocol = proto;
+    wsPath.host = window.location.host;
+    return wsPath
+}
+
+const convo = createConversation(getWebSocketURL());
+```
+We recently published the client API as a separate package [xtalk-client](https://www.npmjs.com/package/xtalk-client). Therefore, you can directly import it from `https://unpkg.com/xtalk-client@latest/dist/index.js` without hosting the client code by yourself, as shown above. We plan to continuously improve the client-side API in the future.
 
 For the server side, the core logic is to connect a X-Talk instance to Websocket of FastAPI instance:
 ```python

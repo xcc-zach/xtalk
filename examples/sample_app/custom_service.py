@@ -179,22 +179,26 @@ async def websocket_endpoint(websocket: WebSocket):
     await xtalk_instance.connect(websocket)
 
 
+# Serve static files
 example_server_path = Path(__file__).parent
 templates = Jinja2Templates(directory=str(example_server_path / "templates"))
+static_root = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(static_root)), name="static")
+try:
+    app.mount(
+        "/xtalk",
+        StaticFiles(
+            directory=str(Path(__file__).parent.parent.parent / "frontend" / "dist")
+        ),
+        name="xtalk",
+    )
+except:
+    print("No local X-Talk frontend library found. You may use the library from CDN.")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-
-
-app.mount(
-    "/static",
-    StaticFiles(
-        directory=str(Path(__file__).parent.parent.parent / "frontend" / "src")
-    ),
-    name="static",
-)
 
 
 @app.post("/api/upload")

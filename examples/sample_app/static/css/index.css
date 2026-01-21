@@ -1,0 +1,276 @@
+        :root {
+            color-scheme: dark light;
+        }
+
+        body {
+            margin: 0;
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+            background: #0b0c10;
+            color: #e5e7eb;
+        }
+
+        header {
+            padding: 20px;
+            border-bottom: 1px solid #1f2937;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+
+        button {
+            padding: 10px 14px;
+            border-radius: 12px;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #e5e7eb;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0f172a;
+        }
+
+        button.danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        button.danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        .voice-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-selector label {
+            font-size: 14px;
+            color: #9ca3af;
+        }
+
+        .voice-selector select {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .voice-selector select:hover {
+            background: #0f172a;
+        }
+
+        .voice-selector select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .speed-control label {
+            font-size: 14px;
+            color: #9ca3af;
+        }
+
+        .speed-control select {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .speed-control select:hover {
+            background: #0f172a;
+        }
+
+        .speed-control select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .model-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .model-selector label {
+            font-size: 14px;
+            color: #9ca3af;
+        }
+
+        .model-selector select {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .model-selector select:hover {
+            background: #0f172a;
+        }
+
+        .model-selector select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .upload-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .upload-btn button {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #e5e7eb;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .upload-btn button:hover {
+            background: #0f172a;
+        }
+
+        .metrics {
+            display: flex;
+            gap: 16px;
+            margin: 12px 0 20px;
+            font-size: 14px;
+            color: #9ca3af;
+        }
+
+        .card {
+            background: #0f172a;
+            border: 1px solid #1f2937;
+            border-radius: 14px;
+            padding: 14px 16px;
+        }
+
+        /* Leave spacing between cards to avoid stacked or crowded visuals */
+        .card+.card {
+            margin-top: 12px;
+        }
+
+        /* Chat box stays scrollable while hiding the scrollbar (gestures still work) */
+        #messages {
+            max-height: 48vh;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -ms-overflow-style: none;
+            /* Legacy IE/Edge */
+            scrollbar-width: none;
+            /* Firefox */
+        }
+
+        /* Chrome/Safari/Edge (WebKit/Blink) hide the scrollbar track */
+        #messages::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+        }
+
+        .msg {
+            border-bottom: 1px dashed #1f2937;
+            padding: 10px 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .msg:last-child {
+            border-bottom: none;
+        }
+
+        .role {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-right: 8px;
+            text-transform: uppercase;
+        }
+
+        .user .role {
+            color: #93c5fd;
+        }
+
+        .assistant .role {
+            color: #a7f3d0;
+        }
+
+        /* Display front-end model metadata and system logs (info role) */
+        .info .role {
+            color: #fbbf24;
+            /* amber */
+        }
+
+        footer {
+            padding: 20px;
+            border-top: 1px solid #1f2937;
+            color: #6b7280;
+            text-align: center;
+            font-size: 12px;
+        }
+
+        /* Waveform canvas styles */
+        #waveform {
+            width: 100%;
+            height: 100px;
+            display: block;
+        }
+
+        #waveform-card {
+            margin-bottom: 12px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Mobile tweaks so the waveform is taller and easier to read */
+        @media (max-width: 768px) {
+            #waveform {
+                height: 28vh;
+            }
+
+            #messages {
+                max-height: 54vh;
+                /* Give more vertical space to chat on phones */
+            }
+        }
+
+        @media (max-width: 480px) {
+            #waveform {
+                height: 32vh;
+            }
+
+            #messages {
+                max-height: 58vh;
+            }
+        }
