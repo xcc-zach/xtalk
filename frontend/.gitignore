@@ -1,0 +1,22 @@
+# Node modules
+node_modules/
+
+# npm logs
+npm-debug.log*
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+
+# IDE and editor files
+.idea/
+.vscode/
+
+# OS generated files
+.DS_Store
+
+# ESLint cache
+.eslintcache

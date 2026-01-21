@@ -1,3 +1,5 @@
+import fastEnhancerOnnxUrl from "../models/fastenhancer_s.onnx";
+import vadProcessorUrl from "./vad-processor.worklet.js";
 // Create low-level audio/WebSocket session.
 //
 // This file now includes on-demand ORT/VAD loading logic:
@@ -59,14 +61,16 @@ async function ensureOrtVad() {
 // - Objects may include { simGen?: bool, sim_gen?: bool, pureFrontend?: bool, pure_frontend?: bool }
 //   pureFrontend = true enables "pure front-end mode": skip VAD/enhancer and only capture+forward raw audio.
 // simGen: when true, never auto-stop/pause TTS except via toggleStreaming().
-function createAudioSession(onIncomingJson, opts = false) {
+function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
     const scriptUrl = new URL(import.meta.url);
     if (typeof onIncomingJson !== 'function') {
         throw new Error('onIncomingJson must be a function');
     }
     // Back-compat: boolean second argument is treated as simGen
-    const simGen = (typeof opts === 'boolean') ? !!opts : !!(opts?.simGen ?? opts?.sim_gen ?? false);
-    const pureFrontend = (typeof opts === 'object' && opts !== null) ? !!(opts.pureFrontend ?? opts.pure_frontend ?? false) : false;
+    const simGen = opts?.simGen ?? false;
+    const pureFrontend = opts?.pureFrontend ?? false;
+    // Server PCM sample rate
+    const TTS_SAMPLE_RATE = opts?.ttsSampleRate ?? 48000;
     let ws = null;
     // Whether to suppress the "Lost connection" notice on the next WS close (one-shot)
     let suppressNextCloseLog = false;
@@ -115,11 +119,8 @@ function createAudioSession(onIncomingJson, opts = false) {
     let nextScheduledTime = 0;
     // ===========================================
 
-    // Server PCM sample rate
-    const TTS_SAMPLE_RATE = 48000;
-
     // Audio context local sample rate
-    const LOCAL_SAMPLE_RATE = 48000;
+    const LOCAL_SAMPLE_RATE = 44100;
 
     // VAD params
     const NEGATIVE_SPEECH_THRESHOLD = 0.2;
@@ -334,8 +335,7 @@ function createAudioSession(onIncomingJson, opts = false) {
             ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`;
 
             // Show FastEnhancer loading info inside the conversation
-            const enhancerURL = new URL("../fastenhancer_s.onnx", scriptUrl).toString();
-            const enhancerArrayBuffer = await fetch(enhancerURL).then(r => r.arrayBuffer());
+            const enhancerArrayBuffer = await fetch(fastEnhancerOnnxUrl).then(r => r.arrayBuffer());
             enhancerSession = await ort.InferenceSession.create(enhancerArrayBuffer);
 
             // FastEnhancer parameters
@@ -568,8 +568,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
         // Load AudioWorklet processor
-        await audioContext.audioWorklet.addModule(new URL("./vad-processor.js", scriptUrl).toString()
-        );
+        await audioContext.audioWorklet.addModule(vadProcessorUrl);
 
         const sourceNode = audioContext.createMediaStreamSource(stream);
 
@@ -730,7 +729,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         wsPath.protocol = wsProtocol;
         wsPath.host = window.location.host;
 
-        ws = new WebSocket(wsPath.toString());
+        ws = new WebSocket(websocketURL || wsPath.toString());
         ws.binaryType = 'arraybuffer';
 
 
@@ -910,15 +909,7 @@ function createAudioSession(onIncomingJson, opts = false) {
     function playNextAudio() {
         // Do not start when AudioContext is paused
         if (audioCtx && audioCtx.state === 'suspended') return;
-        
-        // Delayed finish handling for TTS stream
-        if (pendingTTSStreamFinished && playingSources.length === 0 && audioQueue.length === 0) {
-            pendingTTSStreamFinished = false;
-            markTTSStreamState('finished');
-            nextScheduledTime = 0;
-            return;
-        }
-        
+
         if (audioQueue.length === 0) {
             if (ttsStreamFinished) return;
 
@@ -941,7 +932,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         const currentChunkIndex = queueItem.chunkIndex;
 
         newAudioOutputCallback && newAudioOutputCallback(float32, audioCtx ? audioCtx.sampleRate : LOCAL_SAMPLE_RATE);
-        
+
         // Use local AudioContext sample rate for playback
         const buffer = audioCtx.createBuffer(1, float32.length, audioCtx.sampleRate);
         buffer.getChannelData(0).set(float32);
@@ -949,7 +940,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         const src = audioCtx.createBufferSource();
         src.buffer = buffer;
         src.connect(audioCtx.destination);
-        
+
         // Adjust local playback speed (affects pitch because BufferSource changes playback rate)
         try {
             if (typeof ttsPlaybackRate === 'number' && isFinite(ttsPlaybackRate) && ttsPlaybackRate > 0) {
@@ -960,7 +951,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         } catch (_) { }
 
         const currentTime = audioCtx.currentTime;
-        
+
         // If nextScheduledTime hasn't been initialized yet or is already in the past, start from the current time
         if (nextScheduledTime < currentTime) {
             nextScheduledTime = currentTime;
@@ -976,7 +967,7 @@ function createAudioSession(onIncomingJson, opts = false) {
         // Update the next chunk's start time = the end time of the current chunk
         nextScheduledTime = startTime + duration;
 
-        
+
         // ===================================================
 
         src.onended = () => {
@@ -987,6 +978,13 @@ function createAudioSession(onIncomingJson, opts = false) {
             sendJson({ action: "tts_chunk_played", chunk_index: currentChunkIndex, timestamp: Date.now() });
 
             if (playingSources.length === 0 && audioQueue.length === 0) {
+                // Delayed finish handling for TTS stream
+                if (pendingTTSStreamFinished) {
+                    pendingTTSStreamFinished = false;
+                    markTTSStreamState('finished');
+                    nextScheduledTime = 0;
+                    return;
+                }
                 // Case A: playback drained and backend already marked finished
                 if (ttsStreamFinished) {
                     sendJson({ action: "tts_playback_finished", timestamp: Date.now() });
@@ -1009,11 +1007,11 @@ function createAudioSession(onIncomingJson, opts = false) {
         };
 
         playingSources.push(src);
-        
+
         try {
             onIncomingJson({ action: 'client_tts_playback_started', data: { timestamp: Date.now() } });
         } catch (_) { }
-        
+
         if (audioQueue.length > 0) {
             playNextAudio();
         }
@@ -1192,13 +1190,9 @@ function createAudioSession(onIncomingJson, opts = false) {
 // New signature:
 // - createConversation({ sim_gen?: bool, simGen?: bool, pure_frontend?: bool, pureFrontend?: bool })
 //   With pure_frontend=true the frontend skips VAD/enhancer and keeps streaming raw audio frames.
-function createConversation(sim_gen_or_opts = false) {
-    const SIM_GEN = (typeof sim_gen_or_opts === 'boolean')
-        ? !!sim_gen_or_opts
-        : !!(sim_gen_or_opts?.sim_gen ?? sim_gen_or_opts?.simGen ?? false);
-    const PURE_FRONTEND = (typeof sim_gen_or_opts === 'object' && sim_gen_or_opts !== null)
-        ? !!(sim_gen_or_opts.pure_frontend ?? sim_gen_or_opts.pureFrontend ?? false)
-        : false;
+function createConversation(websocketURL = null, opts = null) {
+    const SIM_GEN = opts?.simGen ?? false;
+    const PURE_FRONTEND = opts?.pureFrontend ?? false;
     // Helper vars
     let lastClientVadStartTs = null;
     let waitingFirstUpdateResp = false;
@@ -1599,7 +1593,7 @@ function createConversation(sim_gen_or_opts = false) {
                 updateMessageByTurnOrLast({ role: 'info', content: `Error: ${json.data || 'unknown'}` });
         }
     }
-    audioSession = createAudioSession(onIncomingJson, { simGen: SIM_GEN, pureFrontend: PURE_FRONTEND });
+    audioSession = createAudioSession(onIncomingJson, websocketURL, opts);
     audioSession.initWebSocket();
     state.loading = false;
 
