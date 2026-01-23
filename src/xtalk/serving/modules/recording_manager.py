@@ -33,7 +33,7 @@ from ..events import (
     AudioFrameReceived,
     EnhancedAudioFrameReceived,
     TTSChunkGenerated,
-    TTSChunkPlayedConfirm,
+    TTSChunkPlayed,
     ConversationEnded,
 )
 
@@ -145,8 +145,8 @@ class RecordingManager(Manager):
                 "RecordingManager: failed to cache generated tts chunk: %s", e
             )
 
-    @Manager.event_handler(TTSChunkPlayedConfirm, priority=50)
-    async def _on_tts_chunk_played_confirm(self, event: TTSChunkPlayedConfirm) -> None:
+    @Manager.event_handler(TTSChunkPlayed, priority=50)
+    async def _on_tts_chunk_played_confirm(self, event: TTSChunkPlayed) -> None:
         """
         Commit confirmed TTS chunks to the right channel.
 

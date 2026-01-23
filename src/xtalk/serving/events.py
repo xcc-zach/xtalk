@@ -8,6 +8,7 @@ from typing import ClassVar, Dict, Any, Type
 @dataclass
 class BaseEvent:
     """Base dataclass for all xtalk events."""
+
     timestamp: float = field(init=False)
     session_id: str
     TYPE: ClassVar[str] = "base"
@@ -189,7 +190,7 @@ class TTSChunkGenerated(BaseEvent):
 
 
 @dataclass
-class TTSChunkPlayedConfirm(BaseEvent):
+class TTSChunkPlayed(BaseEvent):
     """Frontend confirmed playback completion for a TTS audio chunk.
 
     InputGateway publishes this after receiving tts_chunk_played.
