@@ -1,8 +1,9 @@
 from abc import abstractmethod, ABC
-from typing import Iterable, AsyncIterator, Any
+from typing import Iterable, AsyncIterator, Any, Optional
 import numpy as np
 import asyncio
 from functools import partial
+from enum import Enum
 from .utils import MockStreamRecognizer
 
 
@@ -367,3 +368,31 @@ class SpeechSpeedController(ABC):
         return await loop.run_in_executor(
             None, lambda: self.process(audio_bytes, speed)
         )
+
+
+class TurnType(Enum):
+    COMPLETE = 1  # user finished speaking
+    INCOMPLETE = 2  # user not finished speaking
+    BACKCHANNEL = 3  # user is chiming in
+
+
+class TurnDetector(ABC):
+    @abstractmethod
+    def detect(
+        self, audio: Optional[bytes] = None, text: Optional[str] = None
+    ) -> TurnType:
+        """
+        Detect turn with audio and/or text.
+
+        Args:
+            audio (bytes): The audio data of the turn. PCM 16bit mono, 16000Hz bytes.
+            text: Text of the turn
+
+        Returns:
+            TurnType
+        """
+        pass
+
+    @abstractmethod
+    def clone(self) -> "TurnDetector":
+        pass

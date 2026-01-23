@@ -8,6 +8,7 @@ from typing import ClassVar, Dict, Any, Type
 @dataclass
 class BaseEvent:
     """Base dataclass for all xtalk events."""
+
     timestamp: float = field(init=False)
     session_id: str
     TYPE: ClassVar[str] = "base"
@@ -209,11 +210,6 @@ class TTSPlaybackFinished(BaseEvent):
 class VerificationResult(BaseEvent):
     TYPE: ClassVar[str] = "verification.result"
     is_valid: bool = False
-    text: str = ""
-    confidence: float = 0.0
-    reason: str = ""
-    text_length: int = 0
-    chunk_count: int = 0
 
 
 @dataclass

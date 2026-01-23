@@ -13,6 +13,7 @@ from ..speech.interfaces import (
     SpeechEnhancer,
     SpeakerEncoder,
     SpeechSpeedController,
+    TurnDetector,
 )
 from ..rewriter.interfaces import Rewriter
 from ..llm_agent.interfaces import Agent
@@ -157,4 +158,7 @@ class Pipeline(ABC):
         return None
 
     def get_embeddings_model(self) -> Embeddings | None:
+        return None
+
+    def get_turn_detector_model(self) -> TurnDetector | None:
         return None
