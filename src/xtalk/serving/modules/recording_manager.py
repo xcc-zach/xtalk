@@ -64,8 +64,8 @@ class RecordingManager(Manager):
         self._samples_user_raw = 0
         self._samples_tts_raw = 0
 
-        # Cache pending TTS chunks until playback is confirmed; value=(bytes, sr)
-        self._pending_tts_chunks: dict[int, tuple[bytes, int]] = {}
+        # FIFO queue of pending TTS chunks until playback is confirmed; each item=(bytes, sr)
+        self._pending_tts_chunks: list[tuple[bytes, int]] = []
 
         # Output directories
         self._out_dir = os.path.join("logs", "session_audio")
@@ -130,16 +130,15 @@ class RecordingManager(Manager):
 
     @Manager.event_handler(TTSChunkGenerated, priority=50)
     async def _on_tts_chunk_generated(self, event: TTSChunkGenerated) -> None:
-        """Cache generated TTS chunks until playback is confirmed."""
+        """Cache generated TTS chunks until playback is confirmed (FIFO order)."""
         try:
             pcm = getattr(event, "audio_chunk", b"") or b""
             if not pcm:
                 return
             # Default to 48 kHz; event may override in the future
             src_sr = getattr(event, "sample_rate", 48000) or 48000
-            chunk_index = getattr(event, "chunk_index", 0)
             async with self._lock:
-                self._pending_tts_chunks[chunk_index] = (pcm, src_sr)
+                self._pending_tts_chunks.append((pcm, src_sr))
         except Exception as e:
             logger.warning(
                 "RecordingManager: failed to cache generated tts chunk: %s", e
@@ -148,19 +147,17 @@ class RecordingManager(Manager):
     @Manager.event_handler(TTSChunkPlayed, priority=50)
     async def _on_tts_chunk_played_confirm(self, event: TTSChunkPlayed) -> None:
         """
-        Commit confirmed TTS chunks to the right channel.
+        Commit confirmed TTS chunks to the right channel (FIFO order).
 
         Assumptions:
         - This event fires after the chunk finishes playing on the client.
-        - Timeline is determined by arrival order plus chunk durations.
+        - Chunks are played in the same order they were generated.
         """
         try:
-            chunk_index = getattr(event, "chunk_index", 0)
             async with self._lock:
-                info = self._pending_tts_chunks.pop(chunk_index, None)
-            if info is None:
-                return
-            pcm, src_sr = info
+                if not self._pending_tts_chunks:
+                    return
+                pcm, src_sr = self._pending_tts_chunks.pop(0)
             data_i16 = self._to_int16_and_resample(pcm, src_sr, self.TARGET_SR)
             await self._append_tts_audio(data_i16)
         except Exception as e:

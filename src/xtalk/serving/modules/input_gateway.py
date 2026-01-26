@@ -219,12 +219,7 @@ class TextMsgHandler(EventListenerMixin):
 
     async def _handle_tts_chunk_played(self, message_data: dict) -> None:
         """Handle frontend confirmation that a TTS chunk finished playback."""
-        chunk_index = message_data.get("chunk_index", 0)
-
-        event = TTSChunkPlayed(
-            session_id=self.session_id,
-            chunk_index=chunk_index,
-        )
+        event = TTSChunkPlayed(session_id=self.session_id)
         await self.event_bus.publish(event)
 
     # ==================== Event handler methods ====================

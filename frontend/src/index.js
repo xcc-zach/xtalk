@@ -114,7 +114,6 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
     // TTS stream flags
     let ttsStreamActive = false;
     let ttsStreamFinished = false;
-    let pendingChunkIndex = null;
 
     let nextScheduledTime = 0;
     // ===========================================
@@ -849,16 +848,6 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
                         return;
                     }
 
-                    // Dedicated handling for TTS chunk metadata using a standalone chunk_index field
-                    if (json_data.action === 'tts_chunk_meta') {
-                        const meta = json_data.data || {};
-                        if (typeof meta.chunk_index === 'number') {
-                            pendingChunkIndex = meta.chunk_index;
-                        } else {
-                            pendingChunkIndex = null;
-                        }
-                        return;
-                    }
 
                     // Handle queue events even when streaming has not started
                     if (json_data.action === 'queue_status' || json_data.action === 'queue_granted') {
@@ -883,10 +872,7 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
         if (event.data instanceof ArrayBuffer) {
             if (!streaming || ttsStreamFinished) return;
 
-            // With the standalone field, binary frames hold only PCM while JSON carries chunk_index
-            const chunkIndex = (pendingChunkIndex != null) ? pendingChunkIndex : 0;
             const audioData = event.data;
-            pendingChunkIndex = null;
 
             const int16 = new Int16Array(audioData);
             if (int16.length === 0) return;
@@ -898,8 +884,7 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             const targetRate = audioCtx ? audioCtx.sampleRate : LOCAL_SAMPLE_RATE;
             const resampled = resampleChunkPCM(float32, TTS_SAMPLE_RATE, targetRate);
 
-            // Store chunk_index alongside audio data in the queue
-            audioQueue.push({ chunkIndex, audio: resampled });
+            audioQueue.push(resampled);
             enableAllPlayback();
             return;
         }
@@ -926,10 +911,8 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             return;
         }
 
-        // Dequeue items shaped as { chunkIndex, audio }
-        const queueItem = audioQueue.shift();
-        const float32 = queueItem.audio;
-        const currentChunkIndex = queueItem.chunkIndex;
+        // Dequeue audio data (chunks arrive and play in order)
+        const float32 = audioQueue.shift();
 
         newAudioOutputCallback && newAudioOutputCallback(float32, audioCtx ? audioCtx.sampleRate : LOCAL_SAMPLE_RATE);
 
@@ -974,8 +957,8 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             const idx = playingSources.indexOf(src);
             if (idx !== -1) playingSources.splice(idx, 1);
 
-            // Report chunk_index to backend after playback
-            sendJson({ action: "tts_chunk_played", chunk_index: currentChunkIndex, timestamp: Date.now() });
+            // Notify backend that a TTS chunk finished playback (FIFO order)
+            sendJson({ action: "tts_chunk_played", timestamp: Date.now() });
 
             if (playingSources.length === 0 && audioQueue.length === 0) {
                 // Delayed finish handling for TTS stream
@@ -1132,7 +1115,6 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             case 'idle':
                 ttsStreamActive = false;
                 ttsStreamFinished = false;
-                pendingChunkIndex = null;
                 break;
             default:
                 break;

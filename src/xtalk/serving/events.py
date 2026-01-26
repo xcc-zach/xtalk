@@ -186,7 +186,6 @@ class TTSSpeedChange(BaseEvent):
 class TTSChunkGenerated(BaseEvent):
     TYPE: ClassVar[str] = "tts.chunk_generated"
     audio_chunk: bytes = b""
-    chunk_index: int = 0  # Frame index used by frontend confirmations
 
 
 @dataclass
@@ -195,10 +194,10 @@ class TTSChunkPlayed(BaseEvent):
 
     InputGateway publishes this after receiving tts_chunk_played.
     RecordingManager subscribes and writes the chunk into right-channel buffer.
+    Chunks are processed in FIFO order (no index needed).
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
-    chunk_index: int = 0
 
 
 @dataclass
