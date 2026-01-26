@@ -10,7 +10,6 @@ from ..events import (
     ErrorOccurred,
     WebSocketMessageReceived,
     AudioFrameReceived,
-    ConversationEnded,
     VADSpeechStart,
     VADSpeechEnd,
     TTSPlaybackFinished,
@@ -87,23 +86,6 @@ class TextMsgHandler(EventListenerMixin):
         except Exception as e:
             logger.error(
                 "Failed to process clock sync - session: %s, error: %s",
-                self.session_id,
-                e,
-            )
-
-    async def _handle_conversation_start(self, message_data: dict) -> None:
-        """Handle frontend conversation_start signal (currently placeholder)."""
-        pass
-
-    async def _handle_conversation_end(self, message_data: dict) -> None:
-        """Handle frontend conversation_end signal."""
-        try:
-            reason = message_data.get("reason", "")
-            event = ConversationEnded(session_id=self.session_id, reason=reason)
-            await self.event_bus.publish(event)
-        except Exception as e:
-            logger.error(
-                "Failed to process conversation_end - session: %s, error: %s",
                 self.session_id,
                 e,
             )
@@ -255,10 +237,6 @@ class TextMsgHandler(EventListenerMixin):
                         await self._handle_ping(message_data, server_recv_ts)
                     elif message_type == "clock_sync":
                         await self._handle_clock_sync(message_data)
-                    elif message_type == "conversation_start":
-                        await self._handle_conversation_start(message_data)
-                    elif message_type == "conversation_end":
-                        await self._handle_conversation_end(message_data)
                     elif message_type in ["vad_speech_start", "vad_speech_end"]:
                         await self._handle_vad_signal(message_type, message_data)
                     elif message_type == "tts_playback_finished":

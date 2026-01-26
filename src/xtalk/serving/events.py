@@ -113,14 +113,6 @@ class LLMFirstSentence(BaseEvent):
 
 
 @dataclass
-class ConversationEnded(BaseEvent):
-    """Frontend conversation_end signal."""
-
-    TYPE: ClassVar[str] = "conversation.ended"
-    reason: str = ""
-
-
-@dataclass
 class TTSStarted(BaseEvent):
     TYPE: ClassVar[str] = "tts.started"
 

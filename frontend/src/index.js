@@ -1008,14 +1008,12 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             await initRawMic();
             if (!vad) throw new Error('Mic not initialized');
             streaming = true;
-            sendJson({ action: "conversation_start", timestamp: Date.now(), mode: 'pure_frontend' });
             return;
         }
 
         await initVAD();
         if (!vad) throw new Error('VAD not initialized');
         streaming = true;
-        sendJson({ action: "conversation_start", timestamp: Date.now() });
     }
 
     // Stop capture and cleanup
@@ -1037,8 +1035,6 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
                 vad = null;
             }
         }
-
-        sendJson({ action: "conversation_end", timestamp: Date.now() });
     }
 
     function closeWebSocket() {
@@ -1115,6 +1111,7 @@ function createAudioSession(onIncomingJson, websocketURL = null, opts = null) {
             case 'idle':
                 ttsStreamActive = false;
                 ttsStreamFinished = false;
+                pendingChunkIndex = null;
                 break;
             default:
                 break;
@@ -1426,17 +1423,6 @@ function createConversation(websocketURL = null, opts = null) {
             case 'tts_finished':
                 audioSession.pendTTSStreamFinished();
                 break;
-            case 'conversation_started': {
-                lastClientVadStartTs = null;
-                waitingFirstUpdateResp = false;
-                finishASRTs = null;
-                // New conversation: reset assistant text tracking
-                assistantFullText = '';
-                assistantBaseLen = 0;
-                currentAssistantTurnId = 0;
-                currentUserTurnId = 0;
-                break;
-            }
             case 'update_resp': {
                 // Backend now computes synthesis latency and pushes it via latency_metrics
                 // We no longer compute it from the first update_resp
