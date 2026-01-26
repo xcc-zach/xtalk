@@ -41,6 +41,13 @@ class RecordingManager(Manager):
         self.session_id = session_id
         self.config: dict[str, Any] = config or {}
 
+        # Check if recording is enabled
+        self._enabled: bool = self.config.get("recording") is True
+        if not self._enabled:
+            self._wf = None
+            self._flush_task = None
+            return
+
         # Stereo buffers (int16 PCM bytes)
         self._ch_user = bytearray()  # Left channel: raw user input
         self._ch_tts = bytearray()  # Right channel: TTS output
@@ -86,6 +93,8 @@ class RecordingManager(Manager):
     @Manager.event_handler(AudioFrameReceived, priority=50)
     async def _on_audio_frame(self, event: AudioFrameReceived) -> None:
         """Append raw user audio to the left channel."""
+        if not self._enabled:
+            return
         try:
             pcm = event.audio_data or b""
             if not pcm:
@@ -99,6 +108,8 @@ class RecordingManager(Manager):
     @Manager.event_handler(TTSChunkGenerated, priority=50)
     async def _on_tts_chunk_generated(self, event: TTSChunkGenerated) -> None:
         """Queue generated TTS chunks until playback is confirmed."""
+        if not self._enabled:
+            return
         try:
             pcm = getattr(event, "audio_chunk", b"") or b""
             if not pcm:
@@ -112,6 +123,8 @@ class RecordingManager(Manager):
     @Manager.event_handler(TTSChunkPlayed, priority=50)
     async def _on_tts_chunk_played(self, event: TTSChunkPlayed) -> None:
         """Pop one TTS chunk from queue and append to the right channel."""
+        if not self._enabled:
+            return
         try:
             async with self._lock:
                 if not self._pending_tts_chunks:
@@ -239,6 +252,8 @@ class RecordingManager(Manager):
 
     async def shutdown(self) -> None:
         """Finalize recording by flushing remaining buffers and closing the file."""
+        if not self._enabled:
+            return
         # Stop periodic flush
         if self._flush_task and not self._flush_task.done():
             self._flush_task.cancel()
