@@ -38,7 +38,7 @@ TARGET_SR = 16000
 TTS_SR = 48000  # TTS output sample rate
 BYTES_PER_SAMPLE = 2  # int16
 SILENCE_FRAME = b"\x00" * (FRAME_SAMPLES * BYTES_PER_SAMPLE)
-VAD_LATENCY_SEC = 0.3  # extra wait after audio end, before vad_speech_end
+VAD_LATENCY_SEC = 0.5  # extra wait after audio end, before vad_speech_end
 
 
 @dataclass
