@@ -28,8 +28,10 @@ import websockets
 
 FRAME_SAMPLES = 512
 TARGET_SR = 16000
+TTS_SR = 48000  # TTS output sample rate
 BYTES_PER_SAMPLE = 2  # int16
 SILENCE_FRAME = b"\x00" * (FRAME_SAMPLES * BYTES_PER_SAMPLE)
+VAD_LATENCY_SEC = 0.3  # extra wait after audio end, before vad_speech_end
 
 
 @dataclass
@@ -106,7 +108,7 @@ class AudioExchangeClient:
 
         if self.with_vad:
             # Small delay then send VAD end signal
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(VAD_LATENCY_SEC)
             await self.send_json(
                 {"action": "vad_speech_end", "timestamp": int(time.time() * 1000)}
             )
@@ -114,15 +116,14 @@ class AudioExchangeClient:
         print(f"[Sent] {path}")
 
     async def wait_for_response_playback(self):
-        """Wait for TTS to finish, then wait for simulated playback duration."""
+        """Wait for TTS to finish (playback is simulated per-chunk in receive_loop)."""
         # Wait for tts_finished signal
         while not self.state.tts_finished:
             await asyncio.sleep(0.05)
 
-        # Calculate and wait for playback duration
-        duration_s = self.state.tts_bytes_received / (TARGET_SR * BYTES_PER_SAMPLE)
-        print(f"[Wait] Simulating playback: {duration_s:.2f}s")
-        await asyncio.sleep(duration_s)
+        # Calculate total duration for logging
+        duration_s = self.state.tts_bytes_received / (TTS_SR * BYTES_PER_SAMPLE)
+        print(f"[Playback] Total TTS duration: {duration_s:.2f}s")
 
         # Notify server playback finished
         await self.send_json({"action": "tts_playback_finished"})
@@ -133,6 +134,11 @@ class AudioExchangeClient:
             async for msg in self.ws:
                 if isinstance(msg, bytes):
                     self.state.tts_bytes_received += len(msg)
+                    # Simulate playback duration for this chunk
+                    chunk_duration = len(msg) / (TTS_SR * BYTES_PER_SAMPLE)
+                    await asyncio.sleep(chunk_duration)
+                    # Notify server this chunk has been played
+                    await self.send_json({"action": "tts_chunk_played"})
                 else:
                     data = json.loads(msg)
                     action = data.get("action", "")
@@ -288,9 +294,7 @@ Examples:
   python %(prog)s --audio intro.wav:0 --audio q1.wav:on_response_finish --audio q2.wav:30.0
         """,
     )
-    parser.add_argument(
-        "--ws", default="ws://127.0.0.1:8000/ws", help="WebSocket URL"
-    )
+    parser.add_argument("--ws", default="ws://127.0.0.1:8000/ws", help="WebSocket URL")
     parser.add_argument(
         "--audio",
         nargs="+",
