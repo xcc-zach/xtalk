@@ -44,7 +44,7 @@ The system follows a cascaded pipeline architecture: User Speech → ASR → LLM
 
 - `src/xtalk/serving/event_bus.py`: Central event routing and publishing system implementing pub/sub pattern with priority-based handler ordering, async task management, and error handling.
 
-- `src/xtalk/serving/events.py`: Defines all event types (AudioFrameReceived, VADSpeechStart/End, ASRResultPartial/Final, TTSChunkReady, LLMAgentResponseFinish, etc.) used for inter-component communication.
+- `src/xtalk/serving/events.py`: Defines all event types (AudioFrameReceived, VADSpeechStart/End, ASRResultPartial/Final, TTSChunkGenerated, TTSChunkPlayed, TTSFinished, LLMAgentResponseFinish, SessionConfigReceived, etc.) used for inter-component communication. Includes events for TTS playback confirmation and client session configuration.
 
 - `src/xtalk/serving/interfaces.py`: Abstract interfaces for Manager and Service classes defining lifecycle methods and event handler patterns.
 
@@ -54,13 +54,13 @@ The system follows a cascaded pipeline architecture: User Speech → ASR → LLM
 
 - `src/xtalk/serving/session_limiter.py`: Concurrency limiter for controlling maximum simultaneous sessions.
 
-- `src/xtalk/serving/modules/input_gateway.py`: Translates WebSocket input messages (audio chunks, VAD signals) into internal events for the event bus.
+- `src/xtalk/serving/modules/input_gateway.py`: Translates WebSocket input messages (audio chunks, VAD signals, session_config, tts_chunk_played) into internal events for the event bus. Handles client-side VAD and TTS playback confirmation signals.
 
-- `src/xtalk/serving/modules/output_gateway.py`: Converts internal events into WebSocket output messages (audio, text, metadata) for the client.
+- `src/xtalk/serving/modules/output_gateway.py`: Converts internal events into WebSocket output messages (audio, text, metadata) for the client. Handles TTSFinished event to notify frontend when TTS generation completes.
 
-- `src/xtalk/serving/modules/asr_manager.py`: Manages ASR pipeline including audio buffering, streaming/batch recognition modes, and transcription refinement.
+- `src/xtalk/serving/modules/asr_manager.py`: Manages ASR pipeline including audio buffering, streaming/batch recognition modes, transcription refinement, and simultaneous generation mode. Features concurrency safety with async locks, error recovery with configurable thresholds, and duplicate event processing prevention.
 
-- `src/xtalk/serving/modules/tts_manager.py`: Orchestrates TTS synthesis including text chunking, streaming audio generation, and voice/emotion/speed control.
+- `src/xtalk/serving/modules/tts_manager.py`: Orchestrates TTS synthesis including text chunking, streaming audio generation, and voice/emotion/speed control. Uses FIFO queue for audio chunk ordering without index tracking.
 
 - `src/xtalk/serving/modules/llm_agent_manager.py`: Coordinates LLM inference, tool execution (web search, voice change, etc.), and context management for conversational responses.
 
@@ -80,7 +80,7 @@ The system follows a cascaded pipeline architecture: User Speech → ASR → LLM
 
 - `src/xtalk/serving/modules/latency_manager.py`: Performance metrics tracking for monitoring end-to-end latency.
 
-- `src/xtalk/serving/modules/recording_manager.py`: Session audio recording manager for logging and debugging.
+- `src/xtalk/serving/modules/recording_manager.py`: Session audio recording manager producing stereo WAV files (left channel: user audio, right channel: TTS output) with time-based alignment. Supports client-configurable recording paths via `session_config` message and lazy initialization on first audio frame.
 
 - `src/xtalk/speech/interfaces.py`: Abstract base classes for all speech components (ASR, TTS, VAD, Captioner, SpeechEnhancer, SpeakerEncoder, SpeechSpeedController, PuntRestorer).
 
@@ -111,6 +111,8 @@ The system follows a cascaded pipeline architecture: User Speech → ASR → LLM
 - `src/xtalk/speech/tts/elevenlabs.py`: ElevenLabs cloud TTS API integration.
 
 - `src/xtalk/speech/tts/edge_tts.py`: Microsoft Edge TTS integration.
+
+- `src/xtalk/speech/vad/__init__.py`: VAD module initialization with optional SileroVAD export (gracefully handles import failures).
 
 - `src/xtalk/speech/vad/silero_vad.py`: Silero VAD model implementation for voice activity detection.
 
@@ -153,3 +155,5 @@ The system follows a cascaded pipeline architecture: User Speech → ASR → LLM
 - `examples/sample_app/mental_consultant_server.py`: Specialized demo server configured as a mental health counselor application.
 
 - `scripts/gen_event_graph.py`: Utility script to generate event flow graphs for documentation and debugging.
+
+- `scripts/offline_client.py`: Offline test client for audio exchange testing with the xtalk server. Supports directory-based input with timestamp scheduling, optional client-side VAD signals, custom server-side recording paths, and simulated real-time audio playback.
