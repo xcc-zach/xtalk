@@ -8,6 +8,7 @@ Dependencies:
 Usage:
     python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir
     python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir --with-vad
+    python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir --output /path/to/recording.wav
 
 The input directory should contain audio files and a timestamp.txt file.
 Each line in timestamp.txt has the format: audio_file_name.suffix:<timestamp>
@@ -65,10 +66,12 @@ class AudioExchangeClient:
         ws_url: str,
         audio_tasks: List[AudioTask],
         with_vad: bool = False,
+        output_path: Optional[str] = None,
     ):
         self.ws_url = ws_url
         self.audio_tasks = audio_tasks
         self.with_vad = with_vad
+        self.output_path = output_path
         self.state = ClientState()
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self._running = True
@@ -77,6 +80,16 @@ class AudioExchangeClient:
     async def connect(self):
         self.ws = await websockets.connect(self.ws_url, ping_interval=None)
         print(f"[Connected] {self.ws_url}")
+
+        # Send session config if output path is specified
+        if self.output_path:
+            await self.send_json(
+                {
+                    "action": "session_config",
+                    "recording_path": self.output_path,
+                }
+            )
+            print(f"[Config] Recording path: {self.output_path}")
 
     async def send_json(self, obj: dict):
         await self.ws.send(json.dumps(obj))
@@ -313,6 +326,9 @@ Examples:
 
   # With client-side VAD
   python %(prog)s --input /path/to/audio_dir --with-vad
+
+  # With custom server-side recording path
+  python %(prog)s --input /path/to/audio_dir --output /path/to/recording.wav
         """,
     )
     parser.add_argument("--ws", default="ws://127.0.0.1:8000/ws", help="WebSocket URL")
@@ -327,6 +343,10 @@ Examples:
         action="store_true",
         help="Send vad_speech_start/end signals (client-side VAD mode)",
     )
+    parser.add_argument(
+        "--output",
+        help="Server-side recording output path (sent via session_config)",
+    )
     args = parser.parse_args()
 
     audio_tasks = load_tasks_from_directory(args.input)
@@ -335,6 +355,7 @@ Examples:
         ws_url=args.ws,
         audio_tasks=audio_tasks,
         with_vad=args.with_vad,
+        output_path=args.output,
     )
     asyncio.run(client.run())
 
