@@ -20,6 +20,7 @@ from ..events import (
     TTSModelSwitchRequested,
     LLMModelSwitchRequested,
     ClockSyncReceived,
+    SessionConfigReceived,
 )
 from ..interfaces import EventListenerMixin
 from typing import Any
@@ -204,6 +205,14 @@ class TextMsgHandler(EventListenerMixin):
         event = TTSChunkPlayed(session_id=self.session_id)
         await self.event_bus.publish(event)
 
+    async def _handle_session_config(self, message_data: dict) -> None:
+        """Handle per-session configuration from client."""
+        event = SessionConfigReceived(
+            session_id=self.session_id,
+            recording_path=message_data.get("recording_path"),
+        )
+        await self.event_bus.publish(event)
+
     # ==================== Event handler methods ====================
 
     @EventListenerMixin.event_handler(ErrorOccurred, priority=10)
@@ -253,6 +262,8 @@ class TextMsgHandler(EventListenerMixin):
                         await self._handle_change_tts_model(message_data)
                     elif message_type == "change_llm_model":
                         await self._handle_change_llm_model(message_data)
+                    elif message_type == "session_config":
+                        await self._handle_session_config(message_data)
                     else:
                         logger.warning(
                             "Unknown text signal: %s - session: %s",

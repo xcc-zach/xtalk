@@ -417,3 +417,11 @@ class ClockSyncReceived(BaseEvent):
     client_send_ts: float = 0.0
     server_recv_ts: float = 0.0
     client_recv_ts: float = 0.0
+
+
+@dataclass
+class SessionConfigReceived(BaseEvent):
+    """Client sent per-session configuration (e.g., recording path)."""
+
+    TYPE: ClassVar[str] = "session.config_received"
+    recording_path: str | None = None

@@ -6,8 +6,16 @@ Session-level audio recorder that produces a stereo WAV file:
 - Left channel: raw user audio
 - Right channel: TTS output
 
-Recording starts on WebSocket connection (__init__) and stops on shutdown().
-Audio is saved to logs/session_audio/<timestamp>.wav.
+Recording file is initialized lazily on first audio frame or when a
+SessionConfigReceived event is received. If the client sends a session_config
+message with a recording_path, that path is used; otherwise the default path
+logs/session_audio/<timestamp>.wav is used.
+
+Client usage:
+    ws.send(JSON.stringify({
+        action: "session_config",
+        recording_path: "custom/path/recording.wav"
+    }));
 """
 
 import os
@@ -26,6 +34,7 @@ from ..events import (
     TTSChunkGenerated,
     TTSChunkPlayed,
     TTSStarted,
+    SessionConfigReceived,
 )
 
 
@@ -47,9 +56,12 @@ class RecordingManager(Manager):
         # Check if recording is enabled
         self._enabled: bool = self.config.get("recording") is True
         if not self._enabled:
-            self._wf = None
-            self._flush_task = None
             return
+
+        # Defer file creation until SessionConfigReceived or first audio
+        self._output_initialized = False
+        self._out_dir: str = ""
+        self._out_path: str = ""
 
         # Stereo buffers (int16 PCM bytes)
         self._ch_user = bytearray()  # Left channel: raw user input
@@ -65,31 +77,40 @@ class RecordingManager(Manager):
         self._timer_user: Optional[float] = None  # User channel end time
         self._timer_tts: Optional[float] = None  # TTS channel end time
 
-        # Output directory and file path
-        self._out_dir = os.path.join("logs", "session_audio")
-        os.makedirs(self._out_dir, exist_ok=True)
-
-        # Timestamp-based filename
-        _ts = time.time()
-        _ts_str = (
-            time.strftime("%Y%m%d_%H%M%S", time.localtime(_ts))
-            + f"_{int((_ts - int(_ts)) * 1000):03d}"
-        )
-        self._out_path = os.path.join(self._out_dir, f"{_ts_str}.wav")
-
         # Concurrency primitives
         self._lock = asyncio.Lock()
         self._io_lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
+        self._wf: Optional[wave.Wave_write] = None
+
+    def _init_file(self, custom_path: str | None = None) -> None:
+        """Initialize WAV file. Called lazily on first audio or config message."""
+        if self._output_initialized:
+            return
+
+        if custom_path:
+            self._out_path = custom_path
+            self._out_dir = os.path.dirname(custom_path) or "."
+        else:
+            self._out_dir = os.path.join("logs", "session_audio")
+            _ts = time.time()
+            _ts_str = (
+                time.strftime("%Y%m%d_%H%M%S", time.localtime(_ts))
+                + f"_{int((_ts - int(_ts)) * 1000):03d}"
+            )
+            self._out_path = os.path.join(self._out_dir, f"{_ts_str}.wav")
+
+        os.makedirs(self._out_dir, exist_ok=True)
 
         # Open WAV file for the session
-        self._wf: Optional[wave.Wave_write] = wave.open(self._out_path, "wb")
+        self._wf = wave.open(self._out_path, "wb")
         self._wf.setnchannels(2)
         self._wf.setsampwidth(2)
         self._wf.setframerate(self.TARGET_SR)
 
         # Start periodic flush task
         self._flush_task = asyncio.create_task(self._periodic_flush_loop())
+        self._output_initialized = True
 
     def _init_audio_timer(self):
         """Initialize audio timers on first audio frame (user/tts)."""
@@ -99,14 +120,27 @@ class RecordingManager(Manager):
         self._timer_user = now
         self._timer_tts = now
 
+    def _init_on_audio(self):
+        """Initialize recording on first audio frame if not yet initialized."""
+        if not self._output_initialized:
+            self._init_file(None)
+        self._init_audio_timer()
+
     # ==================== Event handlers ====================
+
+    @Manager.event_handler(SessionConfigReceived, priority=100)
+    async def _on_session_config(self, event: SessionConfigReceived) -> None:
+        """Initialize recording with client-provided path."""
+        if not self._enabled or self._output_initialized:
+            return
+        self._init_file(event.recording_path)
 
     @Manager.event_handler(AudioFrameReceived, priority=50)
     async def _on_audio_frame(self, event: AudioFrameReceived) -> None:
         """Append raw user audio to the left channel."""
         if not self._enabled:
             return
-        self._init_audio_timer()
+        self._init_on_audio()
         try:
             pcm = event.audio_data or b""
             if not pcm:
@@ -122,7 +156,6 @@ class RecordingManager(Manager):
         """Clear pending TTS chunks when a new TTS generation starts. Because chunks played now will be from the new generation"""
         if not self._enabled:
             return
-        self._init_audio_timer()
         async with self._lock:
             self._pending_tts_chunks.clear()
 
@@ -146,6 +179,7 @@ class RecordingManager(Manager):
         """Pop one TTS chunk from queue and append to the right channel."""
         if not self._enabled:
             return
+        self._init_on_audio()
         try:
             async with self._lock:
                 if not self._pending_tts_chunks:
@@ -238,6 +272,8 @@ class RecordingManager(Manager):
 
     async def _flush_to_file(self) -> bool:
         """Flush aligned buffers to disk."""
+        if not self._output_initialized:
+            return False
         async with self._lock:
             n_write = min(self._samples_user, self._samples_tts)
             if n_write <= 0:
@@ -273,7 +309,7 @@ class RecordingManager(Manager):
 
     async def shutdown(self) -> None:
         """Finalize recording by flushing remaining buffers and closing the file."""
-        if not self._enabled:
+        if not self._enabled or not self._output_initialized:
             return
         # Stop periodic flush
         if self._flush_task and not self._flush_task.done():
