@@ -12,7 +12,7 @@ Usage:
 
 The input directory should contain audio files and a timestamp.txt file.
 Each line in timestamp.txt has the format: audio_file_name.suffix:<timestamp>
-where <timestamp> is either a float (seconds from start) or "on_response_finish".
+where <timestamp> is either a float (seconds from start) or "on_response_finish", which means replying on audio from server finishes.
 
 Example timestamp.txt:
     greeting.wav:0
