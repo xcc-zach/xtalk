@@ -29,7 +29,8 @@ from ..events import (
 )
 
 
-# TODO: refined time control by adding timestamps to user audio frames and TTS chunks; current implementation does not consider network latency and code execution time and may drift
+# TODO: refined time control by adding timestamps to user audio frames and TTS chunks; current implementation does not consider network latency and code execution time and may drift.
+# TODO: when interrupting during an audio chunk on frontend, that chunk's tts_chunk_played event will not be sent, and the played part of that chunk will not appear in the final recording; this will result in TTS early stops before user interruption in the recording
 class RecordingManager(Manager):
     """Record user and TTS audio streams for each session."""
 
@@ -198,7 +199,7 @@ class RecordingManager(Manager):
             self._samples_user += n
 
             # Update timer
-            self._timer_user = now + silence_duration + audio_duration
+            self._timer_user = self._timer_user + silence_duration + audio_duration
 
     async def _append_tts_audio(self, data_i16: np.ndarray) -> None:
         """Append TTS audio to right channel with time-based silence padding."""
@@ -220,7 +221,7 @@ class RecordingManager(Manager):
             self._samples_tts += n
 
             # Update timer
-            self._timer_tts = now + silence_duration + audio_duration
+            self._timer_tts = self._timer_tts + silence_duration + audio_duration
 
     # ==================== Periodic flushing ====================
 
