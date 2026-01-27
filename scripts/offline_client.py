@@ -2,28 +2,35 @@
 """
 Audio exchange test client for xtalk server.
 
-Usage:
-    # With client-side VAD signals (only send audio during speech)
-    python scripts/audio_exchange_client.py --with-vad \
-        --audio greeting.wav:0 \
-        --audio question.wav:on_response_finish
+Dependencies:
+    pip install websockets soundfile numpy soxr
 
-    # Without VAD signals (continuous silence + audio stream, server detects speech)
-    python scripts/audio_exchange_client.py \
-        --audio greeting.wav:0 \
-        --audio question.wav:5.0 \
-        --audio followup.wav:on_response_finish
+Usage:
+    python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir
+    python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir --with-vad
+
+The input directory should contain audio files and a timestamp.txt file.
+Each line in timestamp.txt has the format: audio_file_name.suffix:<timestamp>
+where <timestamp> is either a float (seconds from start) or "on_response_finish".
+
+Example timestamp.txt:
+    greeting.wav:0
+    question.wav:on_response_finish
+    followup.wav:5.0
 """
 
 import argparse
 import asyncio
 import json
+import os
 import time
-import wave
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+import soundfile as sf
+import soxr
 import websockets
 
 FRAME_SAMPLES = 512
@@ -75,7 +82,7 @@ class AudioExchangeClient:
         await self.ws.send(json.dumps(obj))
 
     async def _send_silence_loop(self):
-        """Continuously send silence frames when not in VAD mode."""
+        """Continuously send silence frames."""
         frame_sec = FRAME_SAMPLES / TARGET_SR
         while self._running:
             await self.ws.send(SILENCE_FRAME)
@@ -166,9 +173,8 @@ class AudioExchangeClient:
         # Start receive loop
         recv_task = asyncio.create_task(self.receive_loop())
 
-        # Start silence loop if not using client-side VAD
-        if not self.with_vad:
-            self._silence_task = asyncio.create_task(self._send_silence_loop())
+        # Start silence loop
+        self._silence_task = asyncio.create_task(self._send_silence_loop())
 
         self.state.start_time = asyncio.get_event_loop().time()
 
@@ -189,8 +195,8 @@ class AudioExchangeClient:
                         print(f"[Wait] {wait_time:.2f}s until timestamp {task.timing}")
                         await asyncio.sleep(wait_time)
 
-                # Pause silence sending while sending real audio (if applicable)
-                if self._silence_task and not self.with_vad:
+                # Pause silence sending while sending real audio
+                if self._silence_task:
                     self._silence_task.cancel()
                     try:
                         await self._silence_task
@@ -200,8 +206,7 @@ class AudioExchangeClient:
                 await self.send_audio_file(task.path)
 
                 # Resume silence sending after audio
-                if not self.with_vad:
-                    self._silence_task = asyncio.create_task(self._send_silence_loop())
+                self._silence_task = asyncio.create_task(self._send_silence_loop())
 
             # Wait for final response
             print("\n[Wait] Waiting for final response...")
@@ -217,33 +222,16 @@ class AudioExchangeClient:
 
     def _load_wav_as_frames(self, path: str) -> List[bytes]:
         """Load WAV and convert to PCM16 frames at 16kHz."""
-        with wave.open(path, "rb") as wf:
-            sr = wf.getframerate()
-            n_channels = wf.getnchannels()
-            sampwidth = wf.getsampwidth()
-            raw = wf.readframes(wf.getnframes())
+        # Read audio file using soundfile
+        audio, sr = sf.read(path, dtype="float32")
 
-        # Convert to float32
-        if sampwidth == 2:
-            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sampwidth == 1:
-            audio = (
-                np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128
-            ) / 128.0
-        else:
-            raise ValueError(f"Unsupported sample width: {sampwidth}")
+        # Convert to mono if stereo
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
 
-        # Mono
-        if n_channels > 1:
-            audio = audio.reshape(-1, n_channels).mean(axis=1)
-
-        # Resample to 16kHz
+        # Resample to 16kHz using soxr
         if sr != TARGET_SR:
-            ratio = TARGET_SR / sr
-            new_len = int(len(audio) * ratio)
-            audio = np.interp(
-                np.linspace(0, len(audio) - 1, new_len), np.arange(len(audio)), audio
-            )
+            audio = soxr.resample(audio, sr, TARGET_SR)
 
         # Convert to int16 frames
         audio = np.clip(audio, -1.0, 1.0)
@@ -258,12 +246,16 @@ class AudioExchangeClient:
         return frames
 
 
-def parse_audio_arg(arg: str) -> AudioTask:
+def parse_audio_arg(arg: str, base_dir: Optional[str] = None) -> AudioTask:
     """Parse 'file.wav:timing' format."""
     if ":" not in arg:
         raise ValueError(f"Invalid format '{arg}', expected 'file.wav:timing'")
 
     path, timing_str = arg.rsplit(":", 1)
+
+    # If base_dir is provided, resolve path relative to it
+    if base_dir:
+        path = os.path.join(base_dir, path)
 
     if timing_str == "on_response_finish":
         timing = "on_response_finish"
@@ -278,28 +270,57 @@ def parse_audio_arg(arg: str) -> AudioTask:
     return AudioTask(path=path, timing=timing)
 
 
+def load_tasks_from_directory(input_dir: str) -> List[AudioTask]:
+    """Load audio tasks from a directory containing audio files and timestamp.txt."""
+    input_path = Path(input_dir)
+
+    if not input_path.is_dir():
+        raise ValueError(f"Input directory does not exist: {input_dir}")
+
+    timestamp_file = input_path / "timestamp.txt"
+    if not timestamp_file.exists():
+        raise ValueError(f"timestamp.txt not found in {input_dir}")
+
+    tasks = []
+    with open(timestamp_file, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                task = parse_audio_arg(line, base_dir=input_dir)
+                # Verify the audio file exists
+                if not os.path.exists(task.path):
+                    raise ValueError(f"Audio file not found: {task.path}")
+                tasks.append(task)
+            except ValueError as e:
+                raise ValueError(f"Error on line {line_num} of timestamp.txt: {e}")
+
+    if not tasks:
+        raise ValueError(f"No valid audio tasks found in {timestamp_file}")
+
+    return tasks
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Audio exchange test client for xtalk server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # With client-side VAD (send vad_speech_start/end signals)
-  python %(prog)s --with-vad --audio greeting.wav:0 --audio question.wav:on_response_finish
+  # Using input directory with timestamp.txt
+  python %(prog)s --input /path/to/audio_dir
 
-  # Without VAD (continuous audio stream, server detects speech)
-  python %(prog)s --audio greeting.wav:0 --audio question.wav:5.0
-
-  # Mixed timing
-  python %(prog)s --audio intro.wav:0 --audio q1.wav:on_response_finish --audio q2.wav:30.0
+  # With client-side VAD
+  python %(prog)s --input /path/to/audio_dir --with-vad
         """,
     )
     parser.add_argument("--ws", default="ws://127.0.0.1:8000/ws", help="WebSocket URL")
+
     parser.add_argument(
-        "--audio",
-        nargs="+",
+        "--input",
         required=True,
-        help="Audio files with timing: 'file.wav:seconds' or 'file.wav:on_response_finish'",
+        help="Directory containing audio files and timestamp.txt",
     )
     parser.add_argument(
         "--with-vad",
@@ -308,7 +329,7 @@ Examples:
     )
     args = parser.parse_args()
 
-    audio_tasks = [parse_audio_arg(a) for a in args.audio]
+    audio_tasks = load_tasks_from_directory(args.input)
 
     client = AudioExchangeClient(
         ws_url=args.ws,
