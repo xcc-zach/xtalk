@@ -41,6 +41,8 @@ class ConsumerState:
     errors: int = 0
     # Prevent final chunks from processing twice
     final_started_process: bool = False
+    # Lock to protect state flags
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 # TODO: align sample rates
@@ -75,7 +77,8 @@ class ASRManager(Manager):
         self.chunk_count = 0
 
         # Whether a speech segment is active (driven by frontend VAD)
-        self.speech_active = False
+        self._speech_active = False
+        self._speech_active_lock = asyncio.Lock()
 
         # Optimized audio buffer to reduce copying
         self.audio_buffer = deque(maxlen=1000)  # Keep last 1000 audio chunks
@@ -91,6 +94,7 @@ class ASRManager(Manager):
         # Consumer state
         self.consumer_state = ConsumerState()
         self.consumer_task: Optional[asyncio.Task] = None
+        self._consumer_lock = asyncio.Lock()
 
         # Simultaneous generation segment tracking (sim_gen only)
         self._sim_gen: bool = bool(self.config.get("sim_gen", False))
@@ -112,7 +116,26 @@ class ASRManager(Manager):
         # Start timestamp for stable segment events
         self._seg_start_ts: float | None = None
 
+        # Flags to prevent duplicate event processing
+        self._ending_asr = False
+        self._starting_asr = False
+        self._resetting = False
+
+        # Error recovery configuration
+        self._max_consecutive_errors = 5
+        self._error_reset_threshold = 3
+
         # Speaker detection moved elsewhere; SpeakerManager writes to context.
+
+    @property
+    def speech_active(self) -> bool:
+        """Get speech active status (thread-safe read)."""
+        return self._speech_active
+
+    async def _set_speech_active(self, value: bool) -> None:
+        """Set speech active status with lock protection."""
+        async with self._speech_active_lock:
+            self._speech_active = value
 
     def _get_stream_chunk_hint(self) -> int | None:
         """Cache chunk-size hint provided by the model."""
@@ -133,6 +156,10 @@ class ASRManager(Manager):
     @Manager.event_handler(EnhancedAudioFrameReceived, priority=100)
     async def _handle_audio_frame(self, event: EnhancedAudioFrameReceived) -> None:
         """Handle enhanced audio frames."""
+        # Ignore frames during reset
+        if self._resetting:
+            return
+
         frame = {
             "data": event.audio_data,
             "timestamp": time.time(),
@@ -153,7 +180,6 @@ class ASRManager(Manager):
             self.audio_buffer.append(frame)
 
         # When is_final=True, drain accumulated audio (default False for safety)
-
         if getattr(event, "is_final", False):
             try:
                 # Safely drain buffer across async boundaries
@@ -184,23 +210,43 @@ class ASRManager(Manager):
     @Manager.event_handler(TurnASRStartRequested, priority=90)
     async def _handle_turn_asr_start(self, event) -> None:
         """Handle mediator request to start an ASR cycle."""
+        # Prevent duplicate start events
+        if self._starting_asr:
+            logger.warning(
+                "ASR start already in progress - session: %s, ignoring duplicate event",
+                self.session_id,
+            )
+            return
 
-        self.speech_active = True
-        # Start ASR processing
-        await self._start_consumer()
-        # Ensure state is reset after unexpected interruptions
-        self.consumer_state.final_started_process = False
+        # Check if already active
+        if self.speech_active and self.consumer_task and not self.consumer_task.done():
+            logger.warning(
+                "ASR already active - session: %s, ignoring duplicate start event",
+                self.session_id,
+            )
+            return
 
-        # Move pre-buffer frames into the main buffer as padding
-        async with self.buffer_lock:
-            prebuffer_frames = list(self.pre_buffer)
-            for item in prebuffer_frames:
-                self.audio_buffer.append(item)
-            # Clear once moved to avoid reusing old frames next turn
-            self.pre_buffer.clear()
+        self._starting_asr = True
+        try:
+            await self._set_speech_active(True)
+            # Start ASR processing
+            await self._start_consumer()
+            # Ensure state is reset after unexpected interruptions
+            async with self.consumer_state._lock:
+                self.consumer_state.final_started_process = False
 
-        # Increment turn id
-        self._turn_id += 1
+            # Move pre-buffer frames into the main buffer as padding
+            async with self.buffer_lock:
+                prebuffer_frames = list(self.pre_buffer)
+                for item in prebuffer_frames:
+                    self.audio_buffer.append(item)
+                # Clear once moved to avoid reusing old frames next turn
+                self.pre_buffer.clear()
+
+            # Increment turn id
+            self._turn_id += 1
+        finally:
+            self._starting_asr = False
 
     @Manager.event_handler(
         TurnASREndRequested,
@@ -209,9 +255,21 @@ class ASRManager(Manager):
     )
     async def _handle_turn_asr_end(self, event) -> None:
         """Handle request to end ASR and finalize."""
-        self.speech_active = False
-        await self._stop_consumer()
-        await self._finish_asr_processing()
+        # Prevent duplicate end events
+        if self._ending_asr:
+            logger.warning(
+                "ASR end already in progress - session: %s, ignoring duplicate event",
+                self.session_id,
+            )
+            return
+
+        self._ending_asr = True
+        try:
+            await self._set_speech_active(False)
+            await self._stop_consumer()
+            await self._finish_asr_processing()
+        finally:
+            self._ending_asr = False
 
     @Manager.event_handler(TurnASRResetRequested, priority=85)
     async def _handle_turn_asr_reset(self, event) -> None:
@@ -358,28 +416,51 @@ class ASRManager(Manager):
 
     async def _reset_asr(self) -> None:
         """Fully reset ASR state."""
+        if self._resetting:
+            logger.warning(
+                "ASR reset already in progress - session: %s", self.session_id
+            )
+            return
 
-        # Stop consumer
-        await self._stop_consumer()
+        self._resetting = True
+        try:
+            # Stop consumer
+            await self._stop_consumer()
 
-        # Reset state variables
-        self._reset_consumer_state()
-        self.accumulated_text = ""
-        self.chunk_count = 0
-        if self.asr_model:
-            self.asr_model.reset()
+            # Cancel semantic timeout
+            await self._cancel_semantic_timeout()
 
-        # Clear buffers
-        async with self.buffer_lock:
-            self.audio_buffer.clear()
-            self.pre_buffer.clear()
+            # Reset state variables
+            self._reset_consumer_state()
+            self.accumulated_text = ""
+            self.chunk_count = 0
+            self._text_to_send = ""
+            self._sim_transcription = ""
+            self._seg_start_ts = None
+
+            if self.asr_model:
+                self.asr_model.reset()
+
+            # Clear buffers
+            async with self.buffer_lock:
+                self.audio_buffer.clear()
+                self.pre_buffer.clear()
+        finally:
+            self._resetting = False
 
     async def _finish_asr_processing(self) -> None:
         """Finalize ASR processing."""
-        # Process remaining audio
-        if not self.consumer_state.final_started_process:
-            self.consumer_state.final_started_process = True
+        # Process remaining audio with duplicate protection
+        async with self.consumer_state._lock:
+            if not self.consumer_state.final_started_process:
+                self.consumer_state.final_started_process = True
+                should_process_audio = True
+            else:
+                should_process_audio = False
+
+        if should_process_audio:
             await self._process_accumulated_audio(is_final=True)
+
         # Placeholder confidence (model may override later)
         final_confidence = 0
         final_text = self.accumulated_text.strip()
@@ -422,22 +503,44 @@ class ASRManager(Manager):
 
     async def _start_consumer(self) -> None:
         """Start the audio consumer task."""
-        if self.consumer_task and not self.consumer_task.done():
-            return
+        async with self._consumer_lock:
+            if self.consumer_task and not self.consumer_task.done():
+                return
 
-        self.consumer_state.running = True
-        self.consumer_task = asyncio.create_task(self._asr_consumer())
+            self.consumer_state.running = True
+            self.consumer_task = asyncio.create_task(self._asr_consumer())
 
     async def _stop_consumer(self) -> None:
         """Stop the audio consumer task."""
-        # Signal loop to exit and wait for graceful shutdown
-        self.consumer_state.running = False
-        if self.consumer_task and not self.consumer_task.done():
-            try:
-                await self.consumer_task
-            except asyncio.CancelledError:
-                pass
-        self.consumer_task = None
+        async with self._consumer_lock:
+            # Signal loop to exit
+            self.consumer_state.running = False
+
+            if self.consumer_task and not self.consumer_task.done():
+                try:
+                    # Wait at most 2 seconds for graceful shutdown
+                    await asyncio.wait_for(self.consumer_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    # Force cancel after timeout
+                    logger.warning(
+                        "Consumer task did not stop gracefully, cancelling - session: %s",
+                        self.session_id,
+                    )
+                    self.consumer_task.cancel()
+                    try:
+                        await self.consumer_task
+                    except asyncio.CancelledError:
+                        pass
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.error(
+                        "Error stopping consumer - session: %s, error: %s",
+                        self.session_id,
+                        e,
+                    )
+
+            self.consumer_task = None
 
     def _reset_consumer_state(self):
         self.consumer_state = ConsumerState()
@@ -470,16 +573,16 @@ class ASRManager(Manager):
                 ):
                     should_process = True
 
-            if self.consumer_state.final_started_process:
-                should_process = False
+            # Check flag with lock protection
+            async with self.consumer_state._lock:
+                if self.consumer_state.final_started_process:
+                    should_process = False
+                elif should_process and is_final:
+                    self.consumer_state.final_started_process = True
 
             if should_process:
-                if is_final:
-                    self.consumer_state.final_started_process = True
                 # Process accumulated audio
-                await self._process_accumulated_audio(
-                    is_final,
-                )
+                await self._process_accumulated_audio(is_final)
         else:
             # No data; short sleep to avoid busy loop
             if should_sleep:
@@ -529,6 +632,16 @@ class ASRManager(Manager):
                 )
                 return
 
+            # Check consecutive errors
+            if self.consumer_state.errors >= self._max_consecutive_errors:
+                logger.error(
+                    "Too many consecutive errors, resetting ASR - session: %s, errors: %d",
+                    self.session_id,
+                    self.consumer_state.errors,
+                )
+                await self._reset_asr()
+                return
+
             # Slice off bytes to process
             if dynamic_chunk_bytes and not is_final:
                 audio_data = bytes(
@@ -555,6 +668,11 @@ class ASRManager(Manager):
             current_text: str = await self.asr_model.async_recognize_stream(
                 audio_data, is_final=is_final
             )
+
+            # Success - reduce error count
+            if self.consumer_state.errors > 0:
+                self.consumer_state.errors = max(0, self.consumer_state.errors - 1)
+
             self.consumer_state.last_activity = time.time()
             # Only accumulate processed seconds when actual audio arrives
             if audio_data:
@@ -607,10 +725,12 @@ class ASRManager(Manager):
                 )
 
         except Exception as e:
+            self.consumer_state.errors += 1
             logger.error(
-                "ASR failed to process accumulated audio - session: %s, error: %s",
+                "ASR failed to process accumulated audio - session: %s, error: %s, error_count: %d",
                 self.session_id,
                 e,
+                self.consumer_state.errors,
             )
             raise
         finally:
@@ -655,10 +775,23 @@ class ASRManager(Manager):
 
     async def _semantic_timeout_worker(self) -> None:
         """On timeout, emit an empty complete result to unblock downstream."""
+        # Capture current state at timeout start
+        timeout_turn_id = self._turn_id
+        timeout_text = self.accumulated_text
+
         try:
             await asyncio.sleep(self._semantic_timeout_seconds)
+
+            # Validate timeout is still relevant
+            if self._turn_id != timeout_turn_id:
+                return
+
+            # Check if speech is still active
+            if not self.speech_active:
+                return
+
             await self._publish_asr_result(
-                text=self.accumulated_text,
+                text=timeout_text,
                 is_final=True,
                 confidence=0.0,
                 display_text="",
