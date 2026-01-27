@@ -25,9 +25,11 @@ from ..events import (
     AudioFrameReceived,
     TTSChunkGenerated,
     TTSChunkPlayed,
+    TTSStarted,
 )
 
 
+# TODO: refined time control by adding timestamps to user audio frames and TTS chunks; current implementation does not consider network latency and code execution time and may drift
 class RecordingManager(Manager):
     """Record user and TTS audio streams for each session."""
 
@@ -58,9 +60,9 @@ class RecordingManager(Manager):
         self._pending_tts_chunks: list[tuple[bytes, int]] = []
 
         # Time-based padding: track when each channel ends (in seconds, using time.time())
-        _now = time.time()
-        self._timer_user: float = _now  # User channel end time
-        self._timer_tts: float = _now  # TTS channel end time
+        # Initialized lazily on first audio to avoid initial silence gap
+        self._timer_user: Optional[float] = None  # User channel end time
+        self._timer_tts: Optional[float] = None  # TTS channel end time
 
         # Output directory and file path
         self._out_dir = os.path.join("logs", "session_audio")
@@ -88,6 +90,14 @@ class RecordingManager(Manager):
         # Start periodic flush task
         self._flush_task = asyncio.create_task(self._periodic_flush_loop())
 
+    def _init_audio_timer(self):
+        """Initialize audio timers on first audio frame (user/tts)."""
+        if self._timer_user is not None and self._timer_tts is not None:
+            return
+        now = time.time()
+        self._timer_user = now
+        self._timer_tts = now
+
     # ==================== Event handlers ====================
 
     @Manager.event_handler(AudioFrameReceived, priority=50)
@@ -95,6 +105,7 @@ class RecordingManager(Manager):
         """Append raw user audio to the left channel."""
         if not self._enabled:
             return
+        self._init_audio_timer()
         try:
             pcm = event.audio_data or b""
             if not pcm:
@@ -104,6 +115,15 @@ class RecordingManager(Manager):
             await self._append_user_audio(data_i16)
         except Exception as e:
             logger.warning("RecordingManager: failed to handle audio frame: %s", e)
+
+    @Manager.event_handler(TTSStarted, priority=50)
+    async def _on_tts_started(self, event: TTSStarted) -> None:
+        """Clear pending TTS chunks when a new TTS generation starts. Because chunks played now will be from the new generation"""
+        if not self._enabled:
+            return
+        self._init_audio_timer()
+        async with self._lock:
+            self._pending_tts_chunks.clear()
 
     @Manager.event_handler(TTSChunkGenerated, priority=50)
     async def _on_tts_chunk_generated(self, event: TTSChunkGenerated) -> None:
@@ -163,10 +183,11 @@ class RecordingManager(Manager):
         n = data_i16.size
         if n <= 0:
             return
+        audio_duration = n / self.TARGET_SR
         async with self._lock:
             now = time.time()
-            # Pad silence for elapsed time since last audio
-            silence_duration = max(0.0, now - self._timer_user)
+            # Pad silence when elapsed time since last audio is larger than audio_duration
+            silence_duration = max(0.0, now - audio_duration - self._timer_user)
             silence_samples = int(silence_duration * self.TARGET_SR)
             if silence_samples > 0:
                 self._ch_user.extend(b"\x00" * (silence_samples * 2))
@@ -176,19 +197,19 @@ class RecordingManager(Manager):
             self._ch_user.extend(data_i16.tobytes())
             self._samples_user += n
 
-            # Update timer: current time + audio duration
-            audio_duration = n / self.TARGET_SR
-            self._timer_user = now + audio_duration
+            # Update timer
+            self._timer_user = now + silence_duration + audio_duration
 
     async def _append_tts_audio(self, data_i16: np.ndarray) -> None:
         """Append TTS audio to right channel with time-based silence padding."""
         n = data_i16.size
         if n <= 0:
             return
+        audio_duration = n / self.TARGET_SR
         async with self._lock:
             now = time.time()
-            # Pad silence for elapsed time since last audio
-            silence_duration = max(0.0, now - self._timer_tts)
+            # Pad silence when elapsed time since last audio is larger than audio_duration
+            silence_duration = max(0.0, now - audio_duration - self._timer_tts)
             silence_samples = int(silence_duration * self.TARGET_SR)
             if silence_samples > 0:
                 self._ch_tts.extend(b"\x00" * (silence_samples * 2))
@@ -198,9 +219,8 @@ class RecordingManager(Manager):
             self._ch_tts.extend(data_i16.tobytes())
             self._samples_tts += n
 
-            # Update timer: current time + audio duration
-            audio_duration = n / self.TARGET_SR
-            self._timer_tts = now + audio_duration
+            # Update timer
+            self._timer_tts = now + silence_duration + audio_duration
 
     # ==================== Periodic flushing ====================
 
@@ -296,8 +316,8 @@ class RecordingManager(Manager):
             self._samples_user = 0
             self._samples_tts = 0
             self._pending_tts_chunks.clear()
-            self._timer_user = 0.0
-            self._timer_tts = 0.0
+            self._timer_user = None
+            self._timer_tts = None
 
         # Close file handle
         try:
