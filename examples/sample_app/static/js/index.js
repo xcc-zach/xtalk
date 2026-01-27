@@ -321,7 +321,6 @@ function drawWaveform() {
 
     // Only draw one series: speaking for output; else for input
     let streamState = convo.state.streamState;
-    console.log('streamState:', streamState);
     if (outAnalyser && outDataArray && outBufferLength && streamState === 'speaking') {
         outAnalyser.getByteTimeDomainData(outDataArray);
         drawSeries(outDataArray, outBufferLength, getWaveformColor());

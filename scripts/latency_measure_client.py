@@ -264,9 +264,6 @@ async def latency_measure(
 
         recv_task = asyncio.create_task(recv_loop())
 
-        # Start conversation
-        await send_json(ws, {"action": "conversation_start", "timestamp": now_ms()})
-
         # Some deployments may queue you; wait briefly.
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(queue_granted.wait(), timeout=5.0)
@@ -319,9 +316,6 @@ async def latency_measure(
                 if last_latency
                 else "[Warn] latency_metrics received but parse failed"
             )
-
-        # End conversation (optional)
-        await send_json(ws, {"action": "conversation_end", "timestamp": now_ms()})
 
         # Clean shutdown of recv loop
         recv_task.cancel()

@@ -55,7 +55,9 @@ class ServiceManager:
 
             return True
 
-        logger.warning(f"Attempted to remove non-existent service - session_id: {session_id}")
+        logger.warning(
+            f"Attempted to remove non-existent service - session_id: {session_id}"
+        )
         return False
 
     def get_service(self, session_id: str) -> Optional[Service]:
@@ -86,7 +88,9 @@ class ServiceManager:
                 else:
                     failed_count += 1
             except Exception as e:
-                logger.error(f"Failed to stop service - session_id: {session_id}, error: {e}")
+                logger.error(
+                    f"Failed to stop service - session_id: {session_id}, error: {e}"
+                )
                 failed_count += 1
 
         return success_count
