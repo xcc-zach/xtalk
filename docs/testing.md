@@ -16,13 +16,13 @@ Create a transcription file with the format `<timestamp>:<text>` per line:
 ```plaintext
 # transcription.txt
 0:Hello, how are you today?
-on_response_finish:I have another question for you.
+ai_end:I have another question for you.
 5.0:This message will be sent at 5 seconds.
 ```
 
 Where `<timestamp>` is:
 - A float number: seconds from start (e.g., `0`, `5.0`, `10.5`)
-- `on_response_finish`: wait for previous response to finish before sending
+- `ai_end`: wait for previous response to finish before sending
 
 Then run the script to generate audio files:
 
@@ -53,7 +53,7 @@ pip install websockets soundfile numpy soxr
 
 timestamp.txt content:
 0:audio1.wav
-on_response_finish:audio2.wav
+ai_end:audio2.wav
 ```
 
 Then run the offline client with the WebSocket URL of the server and the input audio directory:

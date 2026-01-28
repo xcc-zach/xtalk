@@ -12,11 +12,11 @@ Usage:
 
 The input directory should contain audio files and a timestamp.txt file.
 Each line in timestamp.txt has the format: <timestamp>:<audio_file_name.suffix>
-where <timestamp> is either a float (seconds from start) or "on_response_finish", which means replying on audio from server finishes.
+where <timestamp> is either a float (seconds from start) or "ai_end", which means replying on audio from server finishes.
 
 Example timestamp.txt:
     0:greeting.wav
-    on_response_finish:question.wav
+    ai_end:question.wav
     5.0:followup.wav
 """
 
@@ -47,7 +47,7 @@ class AudioTask:
     """An audio file with its scheduled send time."""
 
     path: str
-    timing: Union[float, str]  # float = absolute seconds, "on_response_finish" = wait
+    timing: Union[float, str]  # float = absolute seconds, "ai_end" = wait
 
 
 @dataclass
@@ -195,7 +195,7 @@ class AudioExchangeClient:
             for i, task in enumerate(self.audio_tasks):
                 print(f"\n=== Audio {i + 1}/{len(self.audio_tasks)}: {task.path} ===")
 
-                if task.timing == "on_response_finish":
+                if task.timing == "ai_end":
                     # Wait for previous response to finish playing
                     if i > 0:  # Skip wait for first audio
                         await self.wait_for_response_playback()
@@ -270,14 +270,14 @@ def parse_audio_arg(arg: str, base_dir: Optional[str] = None) -> AudioTask:
     if base_dir:
         path = os.path.join(base_dir, path)
 
-    if timing_str == "on_response_finish":
-        timing = "on_response_finish"
+    if timing_str == "ai_end":
+        timing = "ai_end"
     else:
         try:
             timing = float(timing_str)
         except ValueError:
             raise ValueError(
-                f"Invalid timing '{timing_str}', expected number or 'on_response_finish'"
+                f"Invalid timing '{timing_str}', expected number or 'ai_end'"
             )
 
     return AudioTask(path=path, timing=timing)

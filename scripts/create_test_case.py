@@ -3,7 +3,7 @@
 Create test cases for offline_client.py from transcription text files.
 
 This script reads a transcription file with lines in the format:
-    <timestamp/on_response_finish>:<text_to_transcribe>
+    <timestamp/ai_end>:<text_to_transcribe>
 
 It uses DashScope TTS API to generate audio files and creates an output
 directory compatible with scripts/offline_client.py.
@@ -19,7 +19,7 @@ Environment:
 
 Example transcription.txt:
     0:Hello, how are you?
-    on_response_finish:I have another question.
+    ai_end:I have another question.
     5.0:This will be sent at 5 seconds.
 """
 
@@ -40,7 +40,7 @@ class TranscriptionEntry:
 
     timing: Union[
         float, str
-    ]  # float = seconds, "on_response_finish" = wait for response
+    ]  # float = seconds, "ai_end" = wait for response
     text: str
     audio_filename: str = ""
 
@@ -69,15 +69,15 @@ def parse_transcription_file(input_path: str) -> List[TranscriptionEntry]:
                 raise ValueError(f"Line {line_num}: Empty text content")
 
             # Parse timing
-            if timing_str == "on_response_finish":
-                timing = "on_response_finish"
+            if timing_str == "ai_end":
+                timing = "ai_end"
             else:
                 try:
                     timing = float(timing_str)
                 except ValueError:
                     raise ValueError(
                         f"Line {line_num}: Invalid timing '{timing_str}', "
-                        "expected number or 'on_response_finish'"
+                        "expected number or 'ai_end'"
                     )
 
             entries.append(TranscriptionEntry(timing=timing, text=text))
@@ -205,11 +205,11 @@ Transcription file format (one entry per line):
 
 Where <timing> is:
   - A float number: seconds from start (e.g., 0, 5.0, 10.5)
-  - "on_response_finish": wait for previous response to finish
+  - "ai_end": wait for previous response to finish
 
 Example transcription.txt:
   0:Hello, how are you?
-  on_response_finish:I have another question.
+  ai_end:I have another question.
   5.0:This will be sent at 5 seconds.
         """,
     )
