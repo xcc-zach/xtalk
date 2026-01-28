@@ -3,7 +3,7 @@
 Create test cases for offline_client.py from transcription text files.
 
 This script reads a transcription file with lines in the format:
-    <timestamp/ai_end>:<text_to_transcribe>
+    <timestamp>:<text_to_transcribe>
 
 It uses DashScope TTS API to generate audio files and creates an output
 directory compatible with scripts/offline_client.py.
@@ -17,32 +17,72 @@ Usage:
 Environment:
     DASHSCOPE_API_KEY: Required. Your DashScope API key.
 
+Timestamp formats:
+    - Float: absolute seconds from start (e.g., 0, 5.0, 10.5)
+    - ai_start: when first AI audio chunk starts playing
+    - ai_end: when AI response finishes playing
+    - user_start: when first user audio chunk is about to be sent
+    - user_end: when last user audio chunk is sent
+    - <label>+<offset>: seconds after the event (e.g., ai_end+2.5)
+
 Example transcription.txt:
     0:Hello, how are you?
     ai_end:I have another question.
-    5.0:This will be sent at 5 seconds.
+    ai_end+2.5:This will be sent 2.5 seconds after AI finishes.
 """
 
 import argparse
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Union
+from typing import List
 
 import requests
+
+# Valid timestamp labels
+TIMESTAMP_LABELS = {"ai_start", "ai_end", "user_start", "user_end"}
 
 
 @dataclass
 class TranscriptionEntry:
     """A transcription entry with timing and text."""
 
-    timing: Union[
-        float, str
-    ]  # float = seconds, "ai_end" = wait for response
+    timing_str: str  # Original timing string (e.g., "0", "ai_end", "ai_end+2.5")
     text: str
     audio_filename: str = ""
+
+
+def validate_timing(timing_str: str, line_num: int) -> str:
+    """Validate timing string format and return it unchanged."""
+    timing_str = timing_str.strip()
+
+    # Check for label with offset pattern: label+offset
+    match = re.match(r"^([a-z_]+)\+(\d+(?:\.\d+)?)$", timing_str)
+    if match:
+        label = match.group(1)
+        if label not in TIMESTAMP_LABELS:
+            raise ValueError(
+                f"Line {line_num}: Invalid label '{label}', "
+                f"expected one of: {', '.join(sorted(TIMESTAMP_LABELS))}"
+            )
+        return timing_str
+
+    # Check for plain label
+    if timing_str in TIMESTAMP_LABELS:
+        return timing_str
+
+    # Try parsing as absolute time
+    try:
+        float(timing_str)
+        return timing_str
+    except ValueError:
+        raise ValueError(
+            f"Line {line_num}: Invalid timing '{timing_str}', "
+            f"expected number, label ({', '.join(sorted(TIMESTAMP_LABELS))}), or label+offset"
+        )
 
 
 def parse_transcription_file(input_path: str) -> List[TranscriptionEntry]:
@@ -68,19 +108,10 @@ def parse_transcription_file(input_path: str) -> List[TranscriptionEntry]:
             if not text:
                 raise ValueError(f"Line {line_num}: Empty text content")
 
-            # Parse timing
-            if timing_str == "ai_end":
-                timing = "ai_end"
-            else:
-                try:
-                    timing = float(timing_str)
-                except ValueError:
-                    raise ValueError(
-                        f"Line {line_num}: Invalid timing '{timing_str}', "
-                        "expected number or 'ai_end'"
-                    )
+            # Validate timing format
+            timing_str = validate_timing(timing_str, line_num)
 
-            entries.append(TranscriptionEntry(timing=timing, text=text))
+            entries.append(TranscriptionEntry(timing_str=timing_str, text=text))
 
     return entries
 
@@ -150,7 +181,7 @@ def create_test_case(
         audio_path = output_path / audio_filename
 
         print(f"\n[{i + 1}/{len(entries)}] Processing entry:")
-        print(f"  Timing: {entry.timing}")
+        print(f"  Timing: {entry.timing_str}")
         print(f"  Text: {entry.text}")
 
         # Generate audio
@@ -168,8 +199,8 @@ def create_test_case(
 
             print(f"  Saved: {audio_path} ({len(audio_data)} bytes)")
 
-            # Add to timestamp file
-            timestamp_lines.append(f"{audio_filename}:{entry.timing}")
+            # Add to timestamp file (format: timing:filename)
+            timestamp_lines.append(f"{entry.timing_str}:{audio_filename}")
 
             # Small delay to avoid rate limiting
             time.sleep(0.5)
@@ -204,13 +235,17 @@ Transcription file format (one entry per line):
   <timing>:<text_to_transcribe>
 
 Where <timing> is:
-  - A float number: seconds from start (e.g., 0, 5.0, 10.5)
-  - "ai_end": wait for previous response to finish
+  - A float number: absolute seconds from start (e.g., 0, 5.0, 10.5)
+  - ai_start: when first AI audio chunk starts playing
+  - ai_end: when AI response finishes playing
+  - user_start: when first user audio chunk is about to be sent
+  - user_end: when last user audio chunk is sent
+  - <label>+<offset>: seconds after the event (e.g., ai_end+2.5)
 
 Example transcription.txt:
   0:Hello, how are you?
   ai_end:I have another question.
-  5.0:This will be sent at 5 seconds.
+  ai_end+2.5:This will be sent 2.5 seconds after AI finishes.
         """,
     )
 

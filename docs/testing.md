@@ -17,12 +17,16 @@ Create a transcription file with the format `<timestamp>:<text>` per line:
 # transcription.txt
 0:Hello, how are you today?
 ai_end:I have another question for you.
-5.0:This message will be sent at 5 seconds.
+ai_end+2.5:This will be sent 2.5 seconds after AI finishes.
 ```
 
 Where `<timestamp>` is:
-- A float number: seconds from start (e.g., `0`, `5.0`, `10.5`)
-- `ai_end`: wait for previous response to finish before sending
+- A float number: absolute seconds from start (e.g., `0`, `5.0`, `10.5`)
+- `ai_start`: when first AI audio chunk starts playing
+- `ai_end`: when AI response finishes playing
+- `user_start`: when first user audio chunk is about to be sent
+- `user_end`: when last user audio chunk is sent
+- `<label>+<offset>`: seconds after the event (e.g., `ai_end+2.5`)
 
 Then run the script to generate audio files:
 
@@ -54,6 +58,7 @@ pip install websockets soundfile numpy soxr
 timestamp.txt content:
 0:audio1.wav
 ai_end:audio2.wav
+ai_end+2.5:audio3.wav
 ```
 
 Then run the offline client with the WebSocket URL of the server and the input audio directory:
