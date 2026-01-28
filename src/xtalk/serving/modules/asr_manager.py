@@ -28,7 +28,7 @@ from ..events import (
 )
 from ..interfaces import Manager
 from ...pipelines import Pipeline
-from ...speech.interfaces import TurnType
+from ...speech.interfaces import TurnDetectionAction
 
 
 @dataclass
@@ -308,7 +308,7 @@ class ASRManager(Manager):
             # Remove last punctuation
             text = text[:-1] if unicodedata.category(text[-1]).startswith("P") else text
             detection_result = self.turn_detector_model.detect(audio=None, text=text)
-            if detection_result == TurnType.COMPLETE:
+            if detection_result == TurnDetectionAction.COMPLETE:
                 validation_result["is_valid"] = True
             return validation_result
 

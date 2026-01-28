@@ -4,6 +4,7 @@ import numpy as np
 import asyncio
 from functools import partial
 from enum import Enum
+from dataclasses import dataclass
 from .utils import MockStreamRecognizer
 
 
@@ -370,26 +371,40 @@ class SpeechSpeedController(ABC):
         )
 
 
-class TurnType(Enum):
-    COMPLETE = 1  # user finished speaking
-    INCOMPLETE = 2  # user not finished speaking
-    BACKCHANNEL = 3  # user is chiming in
+class TurnDetectionAction(Enum):
+    DO_NOTHING = 1
+    STOP_SPEAKING = 2
+    START_GENERATION = 3
+
+
+class TurnDetectionSemantic(Enum):
+    IDLE = "idle"
+    INCOMPLETE = "incomplete"
+    COMPLETE = "complete"
+    WAIT = "wait"
+    BACKCHANNEL = "backchannel"
+
+
+@dataclass(frozen=True)
+class TurnDetectionResult:
+    action: TurnDetectionAction
+    semantic: TurnDetectionSemantic
 
 
 class TurnDetector(ABC):
     @abstractmethod
     def detect(
         self, audio: Optional[bytes] = None, text: Optional[str] = None
-    ) -> TurnType:
+    ) -> TurnDetectionResult:
         """
         Detect turn with audio and/or text.
 
         Args:
-            audio (bytes): The audio data of the turn. PCM 16bit mono, 16000Hz bytes.
+            audio (bytes): Audio data frame at this instant. PCM 16bit mono, 16000Hz bytes.
             text: Text of the turn
 
         Returns:
-            TurnType
+            TurnDetectionResult
         """
         pass
 

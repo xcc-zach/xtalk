@@ -1,4 +1,4 @@
-from ..interfaces import TurnDetector, TurnType
+from ..interfaces import TurnDetector, TurnDetectionAction
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -39,7 +39,7 @@ User: "yes, exactly" *(no further action implied)* → backchannel
     def clone(self) -> "TurnDetector":
         return LLMTurnDetector(self._model)
 
-    def detect(self, audio=None, text=None) -> TurnType:
+    def detect(self, audio=None, text=None) -> TurnDetectionAction:
         if not text:
             raise RuntimeError("Text for LLMTurnDetector should not be empty")
         messages: List = [
@@ -48,8 +48,8 @@ User: "yes, exactly" *(no further action implied)* → backchannel
         ]
         response = self._model.invoke(messages).content
         if "backchannel" in response.lower():
-            return TurnType.BACKCHANNEL
+            return TurnDetectionAction.BACKCHANNEL
         elif "incomplete" in response.lower():
-            return TurnType.INCOMPLETE
+            return TurnDetectionAction.INCOMPLETE
         else:
-            return TurnType.COMPLETE
+            return TurnDetectionAction.COMPLETE
