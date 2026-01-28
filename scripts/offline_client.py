@@ -85,7 +85,6 @@ class ClientState:
     tts_bytes_received: int = 0
     tts_finished: bool = False
     ai_started: bool = False  # first audio chunk received
-    ai_end_fired: bool = False  # ai_end fired for current response
 
     # Event timestamps (monotonic time) - persisted across tasks
     event_times: Dict[str, float] = field(default_factory=dict)
@@ -118,7 +117,6 @@ class ClientState:
         self.tts_bytes_received = 0
         self.tts_finished = False
         self.ai_started = False
-        self.ai_end_fired = False
 
 
 class AudioExchangeClient:
@@ -274,12 +272,6 @@ class AudioExchangeClient:
                     await asyncio.sleep(chunk_duration)
                     # Notify server this chunk has been played
                     await self.send_json({"action": "tts_chunk_played"})
-
-                    # Record ai_end when this is the last chunk (tts_finished already received)
-                    # Use ai_end_fired flag to allow ai_end to fire once per response
-                    if self.state.tts_finished and not self.state.ai_end_fired:
-                        self.state.ai_end_fired = True
-                        self._record_event("ai_end")
                 else:
                     data = json.loads(msg)
                     action = data.get("action", "")
@@ -287,6 +279,9 @@ class AudioExchangeClient:
                     if action == "tts_finished":
                         self.state.tts_finished = True
                         print("[Server] TTS generation finished")
+                        # Record ai_end
+                        if self.state.ai_started:
+                            self._record_event("ai_end")
                     elif action == "finish_asr":
                         text = data.get("data", {}).get("text", "")
                         print(f"[ASR] {text}")
