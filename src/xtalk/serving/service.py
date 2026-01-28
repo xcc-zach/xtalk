@@ -23,6 +23,7 @@ from .modules.enhancer_manager import EnhancerManager
 from .modules.speaker_manager import SpeakerManager
 from .modules.embeddings_manager import EmbeddingsManager
 from .modules.recording_manager import RecordingManager
+from .modules.turn_detector_manager import TurnDetectorManager
 from .events import BaseEvent
 from ..pipelines import Pipeline
 from .interfaces import EventListenerMixin, EventOverrides
@@ -267,6 +268,7 @@ class DefaultService(Service):
         SpeakerManager,
         EmbeddingsManager,
         RecordingManager,
+        TurnDetectorManager,
     ]
 
     def __init__(

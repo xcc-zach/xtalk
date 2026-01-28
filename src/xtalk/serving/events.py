@@ -420,3 +420,22 @@ class SessionConfigReceived(BaseEvent):
 
     TYPE: ClassVar[str] = "session.config_received"
     recording_path: str | None = None
+
+
+# ==================== Turn Detection Events ====================
+
+
+@dataclass
+class TurnDetectorStopSpeaking(BaseEvent):
+    """Turn detector determined agent should stop speaking."""
+
+    TYPE: ClassVar[str] = "turn_detector.stop_speaking"
+    semantic: str = ""
+
+
+@dataclass
+class TurnDetectorStartGeneration(BaseEvent):
+    """Turn detector determined agent should start generation."""
+
+    TYPE: ClassVar[str] = "turn_detector.start_generation"
+    semantic: str = ""
