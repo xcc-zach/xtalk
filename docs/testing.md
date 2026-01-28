@@ -44,7 +44,14 @@ This will create:
 
 ## Running Tests with Offline Client
 
-First start an X-Talk server, remember the port, like 7634; then install dependencies for the offline client and prepare an audio directory with audio files and a `timestamp.txt` file for testing:
+First start an X-Talk server, remember the port, like 7634; in the server config file, add the snippet below to enable recording:
+```json
+"service_config": {
+    "recording": true
+}
+```
+
+Then install dependencies for the offline client and prepare an audio directory with audio files and a `timestamp.txt` file for testing:
 
 ```bash
 pip install websockets soundfile numpy soxr
