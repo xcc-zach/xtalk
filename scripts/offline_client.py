@@ -11,13 +11,13 @@ Usage:
     python scripts/offline_client.py --ws ws://127.0.0.1:8000/ws --input /path/to/audio_dir --output /path/to/recording.wav
 
 The input directory should contain audio files and a timestamp.txt file.
-Each line in timestamp.txt has the format: audio_file_name.suffix:<timestamp>
+Each line in timestamp.txt has the format: <timestamp>:<audio_file_name.suffix>
 where <timestamp> is either a float (seconds from start) or "on_response_finish", which means replying on audio from server finishes.
 
 Example timestamp.txt:
-    greeting.wav:0
-    question.wav:on_response_finish
-    followup.wav:5.0
+    0:greeting.wav
+    on_response_finish:question.wav
+    5.0:followup.wav
 """
 
 import argparse
@@ -260,11 +260,11 @@ class AudioExchangeClient:
 
 
 def parse_audio_arg(arg: str, base_dir: Optional[str] = None) -> AudioTask:
-    """Parse 'file.wav:timing' format."""
+    """Parse 'timing:file.wav' format."""
     if ":" not in arg:
-        raise ValueError(f"Invalid format '{arg}', expected 'file.wav:timing'")
+        raise ValueError(f"Invalid format '{arg}', expected 'timing:file.wav'")
 
-    path, timing_str = arg.rsplit(":", 1)
+    timing_str, path = arg.split(":", 1)
 
     # If base_dir is provided, resolve path relative to it
     if base_dir:

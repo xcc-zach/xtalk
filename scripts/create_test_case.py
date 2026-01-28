@@ -231,9 +231,21 @@ Example transcription.txt:
     )
     parser.add_argument(
         "--language",
-        default="Chinese",
-        choices=["Chinese", "English"],
-        help="Language type for TTS (default: Chinese)",
+        default="Auto",
+        choices=[
+            "Chinese",
+            "English",
+            "German",
+            "Italian",
+            "Portuguese",
+            "Spanish",
+            "Japanese",
+            "Korean",
+            "French",
+            "Russian",
+            "Auto",
+        ],
+        help="Language type for TTS (default: Auto)",
     )
 
     args = parser.parse_args()

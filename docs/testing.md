@@ -52,8 +52,8 @@ pip install websockets soundfile numpy soxr
 └── timestamp.txt
 
 timestamp.txt content:
-audio1.wav:0
-audio2.wav:on_response_finish
+0:audio1.wav
+on_response_finish:audio2.wav
 ```
 
 Then run the offline client with the WebSocket URL of the server and the input audio directory:
