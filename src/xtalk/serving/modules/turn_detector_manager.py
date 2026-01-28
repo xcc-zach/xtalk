@@ -28,7 +28,7 @@ from ..events import (
     TurnDetectorStartGeneration,
 )
 from ...pipelines import Pipeline
-from ...speech.interfaces import TurnDetectionAction
+from ...speech.interfaces import TurnDetectionAction, TurnDetectionResult
 
 
 class TurnDetectorManager(Manager):
@@ -84,9 +84,7 @@ class TurnDetectorManager(Manager):
             await self._handle_detection_result(result)
 
         except Exception as e:
-            logger.error(
-                "[TurnDetectorManager] ASR partial processing failed: %s", e
-            )
+            logger.error("[TurnDetectorManager] ASR partial processing failed: %s", e)
 
     @Manager.event_handler(ASRResultFinal)
     async def _on_asr_final(self, event: ASRResultFinal) -> None:
@@ -106,7 +104,7 @@ class TurnDetectorManager(Manager):
         except Exception as e:
             logger.error("[TurnDetectorManager] ASR final processing failed: %s", e)
 
-    async def _handle_detection_result(self, result) -> None:
+    async def _handle_detection_result(self, result: TurnDetectionResult) -> None:
         """Handle turn detection result and emit appropriate events."""
         if result.action == TurnDetectionAction.STOP_SPEAKING:
             evt = TurnDetectorStopSpeaking(
