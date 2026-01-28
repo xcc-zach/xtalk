@@ -446,19 +446,9 @@ class OutputGateway(EventListenerMixin):
 
     @EventListenerMixin.event_handler(TTSChunkGenerated, priority=5)
     async def _send_tts_chunk_signal(self, event: TTSChunkGenerated) -> None:
-        """Send TTS audio chunks (metadata + PCM bytes) to the frontend."""
+        """Send TTS audio chunks (PCM bytes) to the frontend."""
         try:
             if hasattr(event, "audio_chunk") and event.audio_chunk:
-                chunk_index = getattr(event, "chunk_index", 0)
-                # Send metadata separately then raw PCM as binary
-                await self.send_signal(
-                    {
-                        "action": "tts_chunk_meta",
-                        "data": {
-                            "chunk_index": chunk_index,
-                        },
-                    }
-                )
                 await self._send_binary(event.audio_chunk)
 
         except Exception as e:

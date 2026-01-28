@@ -86,9 +86,6 @@ class TTSManager(Manager):
         self.speed_controller = self.pipeline.get_speed_controller()
         self.current_speed: float = 1.0
 
-        # Track chunk indices so the frontend can confirm playback
-        self._chunk_index_counter: int = 0
-
         self._resume_event = asyncio.Event()
         self._resume_event.set()
         self._last_chunk_sent_for_tts = False
@@ -281,15 +278,10 @@ class TTSManager(Manager):
                                     )
                                 )
 
-                            # Generate chunk index for playback confirmation
-                            self._chunk_index_counter += 1
-                            chunk_index = self._chunk_index_counter
-
-                            # Publish to frontend with the chunk index
+                            # Publish to frontend (chunks processed in FIFO order)
                             event = TTSChunkGenerated(
                                 session_id=self.session_id,
                                 audio_chunk=processed_audio,
-                                chunk_index=chunk_index,
                             )
                             # Ensure ordering by waiting for completion
                             await self.event_bus.publish(

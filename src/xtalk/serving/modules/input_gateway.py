@@ -10,17 +10,17 @@ from ..events import (
     ErrorOccurred,
     WebSocketMessageReceived,
     AudioFrameReceived,
-    ConversationEnded,
     VADSpeechStart,
     VADSpeechEnd,
     TTSPlaybackFinished,
     TTSVoiceChange,
     TTSEmotionChange,
     TTSSpeedChange,
-    TTSChunkPlayedConfirm,
+    TTSChunkPlayed,
     TTSModelSwitchRequested,
     LLMModelSwitchRequested,
     ClockSyncReceived,
+    SessionConfigReceived,
 )
 from ..interfaces import EventListenerMixin
 from typing import Any
@@ -87,23 +87,6 @@ class TextMsgHandler(EventListenerMixin):
         except Exception as e:
             logger.error(
                 "Failed to process clock sync - session: %s, error: %s",
-                self.session_id,
-                e,
-            )
-
-    async def _handle_conversation_start(self, message_data: dict) -> None:
-        """Handle frontend conversation_start signal (currently placeholder)."""
-        pass
-
-    async def _handle_conversation_end(self, message_data: dict) -> None:
-        """Handle frontend conversation_end signal."""
-        try:
-            reason = message_data.get("reason", "")
-            event = ConversationEnded(session_id=self.session_id, reason=reason)
-            await self.event_bus.publish(event)
-        except Exception as e:
-            logger.error(
-                "Failed to process conversation_end - session: %s, error: %s",
                 self.session_id,
                 e,
             )
@@ -219,11 +202,14 @@ class TextMsgHandler(EventListenerMixin):
 
     async def _handle_tts_chunk_played(self, message_data: dict) -> None:
         """Handle frontend confirmation that a TTS chunk finished playback."""
-        chunk_index = message_data.get("chunk_index", 0)
+        event = TTSChunkPlayed(session_id=self.session_id)
+        await self.event_bus.publish(event)
 
-        event = TTSChunkPlayedConfirm(
+    async def _handle_session_config(self, message_data: dict) -> None:
+        """Handle per-session configuration from client."""
+        event = SessionConfigReceived(
             session_id=self.session_id,
-            chunk_index=chunk_index,
+            recording_path=message_data.get("recording_path"),
         )
         await self.event_bus.publish(event)
 
@@ -260,10 +246,6 @@ class TextMsgHandler(EventListenerMixin):
                         await self._handle_ping(message_data, server_recv_ts)
                     elif message_type == "clock_sync":
                         await self._handle_clock_sync(message_data)
-                    elif message_type == "conversation_start":
-                        await self._handle_conversation_start(message_data)
-                    elif message_type == "conversation_end":
-                        await self._handle_conversation_end(message_data)
                     elif message_type in ["vad_speech_start", "vad_speech_end"]:
                         await self._handle_vad_signal(message_type, message_data)
                     elif message_type == "tts_playback_finished":
@@ -280,6 +262,8 @@ class TextMsgHandler(EventListenerMixin):
                         await self._handle_change_tts_model(message_data)
                     elif message_type == "change_llm_model":
                         await self._handle_change_llm_model(message_data)
+                    elif message_type == "session_config":
+                        await self._handle_session_config(message_data)
                     else:
                         logger.warning(
                             "Unknown text signal: %s - session: %s",
@@ -346,7 +330,9 @@ class InputGateway:
                 await self.websocket.accept()
 
         except Exception as e:
-            logger.error(f"Failed to accept connection - session: {self.session_id}, error: {e}")
+            logger.error(
+                f"Failed to accept connection - session: {self.session_id}, error: {e}"
+            )
 
     async def handle_message_loop(self) -> None:
         """Main receive loop that dispatches WebSocket messages."""
@@ -365,9 +351,13 @@ class InputGateway:
         except Exception as e:
             error_msg = str(e).lower()
             if "disconnect" in error_msg or "closed" in error_msg:
-                logger.info(f"WebSocket already closed - session: {self.session_id}, detail: {e}")
+                logger.info(
+                    f"WebSocket already closed - session: {self.session_id}, detail: {e}"
+                )
             else:
-                logger.error(f"WebSocket message processing error - session: {self.session_id}, error: {e}")
+                logger.error(
+                    f"WebSocket message processing error - session: {self.session_id}, error: {e}"
+                )
 
     async def _process_message(self, data: dict) -> None:
         """Process a raw WebSocket receive payload and publish events."""

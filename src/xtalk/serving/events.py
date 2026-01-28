@@ -113,14 +113,6 @@ class LLMFirstSentence(BaseEvent):
 
 
 @dataclass
-class ConversationEnded(BaseEvent):
-    """Frontend conversation_end signal."""
-
-    TYPE: ClassVar[str] = "conversation.ended"
-    reason: str = ""
-
-
-@dataclass
 class TTSStarted(BaseEvent):
     TYPE: ClassVar[str] = "tts.started"
 
@@ -186,19 +178,18 @@ class TTSSpeedChange(BaseEvent):
 class TTSChunkGenerated(BaseEvent):
     TYPE: ClassVar[str] = "tts.chunk_generated"
     audio_chunk: bytes = b""
-    chunk_index: int = 0  # Frame index used by frontend confirmations
 
 
 @dataclass
-class TTSChunkPlayedConfirm(BaseEvent):
+class TTSChunkPlayed(BaseEvent):
     """Frontend confirmed playback completion for a TTS audio chunk.
 
     InputGateway publishes this after receiving tts_chunk_played.
     RecordingManager subscribes and writes the chunk into right-channel buffer.
+    Chunks are processed in FIFO order (no index needed).
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
-    chunk_index: int = 0
 
 
 @dataclass
@@ -421,3 +412,11 @@ class ClockSyncReceived(BaseEvent):
     client_send_ts: float = 0.0
     server_recv_ts: float = 0.0
     client_recv_ts: float = 0.0
+
+
+@dataclass
+class SessionConfigReceived(BaseEvent):
+    """Client sent per-session configuration (e.g., recording path)."""
+
+    TYPE: ClassVar[str] = "session.config_received"
+    recording_path: str | None = None
