@@ -30,7 +30,7 @@ class Qwen3ASRFlashConfig:
 
     enable_turn_detection: bool = True
 
-    stream_chunk_bytes_hint: int = 3200
+    stream_chunk_bytes_hint: int = 1600
 
     tail_silence_cycles: int = 30
     tail_silence_bytes_per_cycle: int = 1024

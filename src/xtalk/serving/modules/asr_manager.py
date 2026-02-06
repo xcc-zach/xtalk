@@ -126,7 +126,14 @@ class AudioConsumer:
             return
         self._paused = True
         await self._stop_consumer()
+        
+        # send all remaining audio to ASR
         audio = await self._audio_queue.get()
+        
+        # log remaining audio size for debugging
+        # if audio:
+        #     logger.warning(f"[ASRManager] Sending remaining {len(audio)} bytes to ASR before pause")
+        
         # Sentence end but not end of recognition
         await self._recognize_and_publish(audio, is_asr_end=False, is_final_chunk=True)
 
@@ -138,8 +145,15 @@ class AudioConsumer:
             return
         self._ended = True
         await self._stop_consumer()
-        audio = await self._audio_queue.get()
-        await self._recognize_and_publish(audio, is_asr_end=True, is_final_chunk=True)
+        
+        # send all remaining audio to ASR
+        remaining_audio = await self._audio_queue.get()  # 获取所有剩余数据
+        
+        # log remaining audio size for debugging
+        # if remaining_audio:
+        #     logger.warning(f"[ASRManager] Sending remaining {len(remaining_audio)} bytes to ASR before end")
+        
+        await self._recognize_and_publish(remaining_audio, is_asr_end=True, is_final_chunk=True)
         await self._reset_states()
         self._turn_id += 1
 
@@ -149,14 +163,31 @@ class AudioConsumer:
             if not self._consumer_running_event.is_set():
                 await self._consumer_running_event.wait()
             self._consumer_idle_event.clear()
-            # Publish audio on condition:
-            # Await until new bytes come
-            await self._audio_queue.wait_on_new_bytes()
-            # Accumulate to proper chunk bytes, send for recognition at least 1 bytes
+            
+            # wait for data in queue
+            current_size = await self._audio_queue.size()
+            if current_size == 0:
+                # wait for new data only when queue is empty
+                await self._audio_queue.wait_on_new_bytes()
+            
+            # check size again (may have new data during wait)
+            current_size = await self._audio_queue.size()
             least_bytes_to_send = self._asr_model.stream_chunk_bytes_hint() or 1
-            if await self._audio_queue.size() < least_bytes_to_send:
+            
+            # if consumer is about to stop and queue has data, send immediately without waiting threshold
+            if not self._consumer_running_event.is_set() and current_size > 0:
+                audio = await self._audio_queue.get()
+                if audio:
+                    await self._recognize_and_publish(audio)
                 continue
-            audio = await self._audio_queue.get()
+            
+            # if data is not enough, wait for more data to accumulate
+            if current_size < least_bytes_to_send:
+                await asyncio.sleep(0.05)  # wait for 50ms
+                continue
+                
+            # get specified size of data for recognition
+            audio = await self._audio_queue.get(max_bytes=least_bytes_to_send)
             await self._recognize_and_publish(audio)
 
     async def shutdown(self):
@@ -188,6 +219,15 @@ class AudioConsumer:
         # is_final_chunk means whether user has a pause on his speech, passed on to ASRResultPartial
         if is_asr_end and not is_final_chunk:
             raise ValueError("ASR ends but chunk is not final chunk")
+        
+        # log audio sending status for debugging
+        # if audio:
+        #     audio_duration_ms = len(audio) / (self.SAMPLE_RATE * 2) * 1000
+        #     logger.warning(
+        #         f"[ASR] Sending {len(audio)} bytes ({audio_duration_ms:.1f}ms) to ASR, "
+        #         f"is_final={is_final_chunk}, is_end={is_asr_end}"
+        #     )
+        
         recognized_text = self._recognized_text
         # Do not do recognition for empty audio
         if len(audio) > 0:
