@@ -43,6 +43,8 @@ class TTSManager(Manager):
 
     # Sentence delimiters for chunking
     SENTENCE_DELIMITERS = {"。", "，", "！", "!", "？", "?", ".", ",", "：", ":"}
+    # Sentinel for marking end of TTS stream
+    _FLUSH_SENTINEL = object()
 
     def __init__(
         self,
@@ -112,15 +114,14 @@ class TTSManager(Manager):
     async def _handle_turn_tts_append(self, event: TurnTTSTextAppendRequested) -> None:
         """Append text segments for TTS (both sim-gen and regular modes)."""
         text = event.text
-        reason = event.reason
         if not text:
             return
         await self._ensure_segments_queue().put(text)
 
     @Manager.event_handler(TurnTTSFlushRequested, priority=98)
     async def _handle_turn_tts_flush(self, event: TurnTTSFlushRequested) -> None:
-        # Empty string marks flush
-        await self._ensure_segments_queue().put("")
+        # Use sentinel object to mark flush
+        await self._ensure_segments_queue().put(self._FLUSH_SENTINEL)
 
     @Manager.event_handler(TurnTTSResumeRequested, priority=95)
     async def _handle_turn_tts_resume(self, event: TurnTTSResumeRequested) -> None:
@@ -167,31 +168,49 @@ class TTSManager(Manager):
 
     async def reset_tts(self) -> None:
         """Reset all TTS state and cancel consumers."""
-
+        
         # Reset state flags
         self._resume_event.set()
         self.pending_sentence_buffer = ""
         self._first_sentence_ready = False
         self._last_chunk_sent_for_tts = False
-
+        
         # Stop consumer
         await self._stop_consumer()
-
+        
+        # 【新增】取消 segments producer task
+        if self._segments_task and not self._segments_task.done():
+            self._segments_task.cancel()
+            try:
+                await self._segments_task
+            except asyncio.CancelledError:
+                pass
+        self._segments_task = None
+        
         # Drain queue
-        while not self.tts_queue.empty():
+        while True:
             try:
                 self.tts_queue.get_nowait()
                 self.tts_queue.task_done()
             except asyncio.QueueEmpty:
                 break
+        
+        # 【新增】清空 segments queue
+        if self._segments_queue:
+            while True:
+                try:
+                    self._segments_queue.get_nowait()
+                    self._segments_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
 
     async def _segments_producer_loop(self) -> None:
         segments_queue = self._ensure_segments_queue()
         try:
             while True:
                 seg = await segments_queue.get()
-                # Empty segment signals flush
-                if seg == "":
+                # Sentinel object signals flush
+                if seg is self._FLUSH_SENTINEL:
                     await self._add_text_for_tts("", final=True)
                     continue
                 await self._add_text_for_tts(seg, final=False)
@@ -237,58 +256,63 @@ class TTSManager(Manager):
 
     async def _tts_consumer(self) -> None:
         """Consume queued TTS output and publish audio events."""
-        last_sent_text = ""  # Track last text to avoid duplicates
-
+        
         try:
             while self._consumer_running:
                 # When paused, avoid consuming queue items or emitting events
                 if not self._resume_event.is_set():
                     await self._resume_event.wait()
                     continue
+                
+                item = None  # Track if we successfully got an item
                 try:
                     # Pull from the queue with a short timeout
                     item = await asyncio.wait_for(self.tts_queue.get(), timeout=0.1)
 
                     # Publish audio chunks (skip if paused)
                     if item and item.audio_chunk:
-                        try:
-                            # Apply speed control when enabled
-                            processed_audio = item.audio_chunk
-                            if (
-                                self.speed_controller is not None
-                                and self.current_speed != 1.0
-                            ):
-                                processed_audio = (
-                                    await self.speed_controller.async_process(
-                                        item.audio_chunk, self.current_speed
-                                    )
+                        # Apply speed control when enabled
+                        processed_audio = item.audio_chunk
+                        if (
+                            self.speed_controller is not None
+                            and self.current_speed != 1.0
+                        ):
+                            processed_audio = (
+                                await self.speed_controller.async_process(
+                                    item.audio_chunk, self.current_speed
                                 )
-
-                            # Publish to frontend (chunks processed in FIFO order)
-                            event = TTSChunkGenerated(
-                                session_id=self.session_id,
-                                audio_chunk=processed_audio,
                             )
-                            # Ensure ordering by waiting for completion
-                            await self.event_bus.publish(
-                                event, wait_for_completion=True
-                            )
-                            # Emit TTSFinished when the last chunk has drained
-                            if self._last_chunk_sent_for_tts and self.tts_queue.empty():
-                                await self.event_bus.publish(
-                                    TTSFinished(session_id=self.session_id),
-                                )
-                        except Exception as e:
-                            logger.error("Failed to publish TTS audio event: %s", e)
 
+                        # Publish to frontend (chunks processed in FIFO order)
+                        event = TTSChunkGenerated(
+                            session_id=self.session_id,
+                            audio_chunk=processed_audio,
+                        )
+                        # Ensure ordering by waiting for completion
+                        await self.event_bus.publish(
+                            event, wait_for_completion=True
+                        )
+                    
+                    # Mark task as done after processing
                     self.tts_queue.task_done()
+                    
+                    # Check if the last chunk has been sent and the queue is empty
+                    if self._last_chunk_sent_for_tts and self.tts_queue.empty():
+                        await self.event_bus.publish(
+                            TTSFinished(session_id=self.session_id),
+                        )
 
                 except asyncio.TimeoutError:
                     continue
                 except Exception as e:
                     logger.error("TTS consumer error while handling audio: %s", e)
-                    if not self.tts_queue.empty():
-                        self.tts_queue.task_done()
+                    # If the item is not None, call task_done()
+                    if item is not None:
+                        try:
+                            self.tts_queue.task_done()
+                        except ValueError:
+                            # task_done() called too many times
+                            logger.warning("task_done() called without matching get()")
 
         except asyncio.CancelledError:
             pass
@@ -332,7 +356,6 @@ class TTSManager(Manager):
 
     async def _add_text_for_tts(self, text: str, *, final: bool) -> None:
         """Generate TTS audio from text and enqueue sentence segments."""
-        text_len = len(text)
         self.pending_sentence_buffer += text
 
         sentences, remaining = self._split_text_by_delimiters(
@@ -438,24 +461,72 @@ class TTSManager(Manager):
 
     @Manager.event_handler(ToolCallOccurred, priority=100)
     async def _handle_tool_call_occurred(self, event: ToolCallOccurred):
+        """Handle tool call events for TTS control (speed, voice, emotion)."""
         name = event.name
         args = event.args
+        
+        # Add parameter validation
         if name == "set_speed":
-            speed = float(args["speed"])
-            await self.event_bus.publish(
-                TTSSpeedChange(session_id=self.session_id, speed=speed)
-            )
+            if "speed" not in args:
+                logger.warning(
+                    "set_speed missing 'speed' parameter - session: %s",
+                    self.session_id,
+                )
+                return
+            try:
+                speed = float(args["speed"])
+                # Validate speed range (0.5-2.0 is a common reasonable range)
+                if not 0.5 <= speed <= 2.0:
+                    logger.warning(
+                        "Speed %.2f out of valid range [0.5, 2.0] - session: %s",
+                        speed,
+                        self.session_id,
+                    )
+                    return
+                await self.event_bus.publish(
+                    TTSSpeedChange(session_id=self.session_id, speed=speed)
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    "Invalid speed value '%s': %s - session: %s",
+                    args.get("speed"),
+                    e,
+                    self.session_id,
+                )
+                
         elif name == "set_voice":
+            if "name" not in args:
+                logger.warning(
+                    "set_voice missing 'name' parameter - session: %s",
+                    self.session_id,
+                )
+                return
             voice_name = str(args["name"])
+            if not voice_name:
+                logger.warning(
+                    "set_voice received empty voice name - session: %s",
+                    self.session_id,
+                )
+                return
             await self.event_bus.publish(
                 TTSVoiceChange(session_id=self.session_id, voice_name=voice_name)
             )
+            
         elif name == "set_emotion":
             emotion_name = args.get("name", "")
+            emotion_vector = args.get("vector", None)
+            # Validate at least one parameter is valid
+            if not emotion_name and not emotion_vector:
+                logger.warning(
+                    "set_emotion received empty emotion_name and emotion_vector - session: %s",
+                    self.session_id,
+                )
+                return
             await self.event_bus.publish(
                 TTSEmotionChange(
                     session_id=self.session_id,
                     emotion_name=emotion_name,
+                    emotion_vector=emotion_vector,
                 )
             )
 
@@ -464,8 +535,17 @@ class TTSManager(Manager):
         """Handle requests to change the reference voice."""
         voice_name = event.voice_name
 
+        # Add None check
+        tts_model = self.pipeline.get_tts_model()
+        if not tts_model:
+            logger.error(
+                "TTS model not available for voice change - session: %s",
+                self.session_id,
+            )
+            return
+
         try:
-            self.pipeline.get_tts_model().set_voice(voice_names=[voice_name])
+            tts_model.set_voice(voice_names=[voice_name])
         except Exception as e:
             logger.error(
                 "Failed to change voice: %s - session: %s",
@@ -479,13 +559,31 @@ class TTSManager(Manager):
         emotion_name = event.emotion_name
         emotion_vector = event.emotion_vector
 
+        # Add None check
+        tts_model = self.pipeline.get_tts_model()
+        if not tts_model:
+            logger.error(
+                "TTS model not available for emotion change - session: %s",
+                self.session_id,
+            )
+            return
+
+        # Validate parameters
+        if not emotion_name and not emotion_vector:
+            logger.warning(
+                "Both emotion_name and emotion_vector are empty - session: %s",
+                self.session_id,
+            )
+            return
+
         try:
-            self.pipeline.get_tts_model().set_emotion(
+            tts_model.set_emotion(
                 emotion=emotion_name if emotion_name else emotion_vector
             )
         except Exception as e:
+            # Fix error message
             logger.error(
-                "Failed to change voice: %s - session: %s",
+                "Failed to change emotion: %s - session: %s",
                 e,
                 self.session_id,
             )
