@@ -81,7 +81,6 @@ class LLMAgentManager(Manager):
 
         await self._cancel_running_task()
         self._llm_task = asyncio.create_task(self._generate_response(text))
-        self._resume_event.set()
         self._turn_id += 1
 
     @Manager.event_handler(TurnLLMAgentResumeRequested, priority=95)
@@ -97,7 +96,10 @@ class LLMAgentManager(Manager):
                 TurnTTSResumeRequested(session_id=self.session_id)
             )
         else:
-            logger.warning(f"Try to resume not paused LLM generation")
+            logger.warning(
+                "Try to resume not paused LLM generation - session: %s",
+                self.session_id,
+            )
 
     @Manager.event_handler(TurnLLMAgentPauseRequested, priority=96)
     async def _handle_generation_pause(self, event: TurnLLMAgentPauseRequested) -> None:
@@ -105,7 +107,10 @@ class LLMAgentManager(Manager):
         if not self._llm_task or self._llm_task.done():
             return
         if not self._resume_event.is_set():
-            logger.warning(f"Try to pause paused LLM generation")
+            logger.warning(
+                "Try to pause paused LLM generation - session: %s",
+                self.session_id,
+            )
             return
         self._resume_event.clear()
         await self.event_bus.publish(
@@ -162,10 +167,7 @@ class LLMAgentManager(Manager):
         text_for_tts_started = False
         first_chunk_generated = False
         accumulated_text = ""
-        tool_call: ToolCall = None
-        seen_tool_events: set[str] = set()
-        ctx = self.pipeline.context
-        stop_reason = "llm_finished"
+        tool_call: Optional[ToolCall] = None
         stream = agent.async_generate_stream(llm_input)
         iterator = stream.__aiter__()
 
@@ -186,8 +188,15 @@ class LLMAgentManager(Manager):
                 chunk_text = ""
                 if isinstance(chunk, dict):
                     # Handle tool-call payloads emitted mid-stream
-                    tool_call = chunk
-                    await self._publish_tool_call(tool_call)
+                    # Verify it's actually a tool call by checking required fields
+                    if "name" in chunk:
+                        tool_call = chunk
+                        await self._publish_tool_call(tool_call)
+                    else:
+                        logger.warning(
+                            "Received dict chunk without 'name' field, skipping - session: %s",
+                            self.session_id,
+                        )
                 else:
                     chunk_text = str(chunk)
 
@@ -212,19 +221,33 @@ class LLMAgentManager(Manager):
                     ),
                 )
         except asyncio.CancelledError:
-            stop_reason = "llm_cancelled"
             raise
         except Exception as e:
-            stop_reason = "llm_stream_error"
             logger.error("LLM stream failed: %s - session: %s", e, self.session_id)
             await self._publish_error("llm_stream_error", str(e))
         finally:
-            if text_for_tts_started:
-                await self.event_bus.publish(
-                    TurnTTSFlushRequested(session_id=self.session_id)
+            try:
+                if text_for_tts_started:
+                    await self.event_bus.publish(
+                        TurnTTSFlushRequested(session_id=self.session_id)
+                    )
+                    await self._publish_llm_response_finish(accumulated_text)
+            except Exception as e:
+                logger.error(
+                    "Error in finally block cleanup: %s - session: %s",
+                    e,
+                    self.session_id,
                 )
-                await self._publish_llm_response_finish(accumulated_text)
-            await iterator.aclose()
+            finally:
+                # Ensure iterator is always closed
+                try:
+                    await iterator.aclose()
+                except Exception as e:
+                    logger.error(
+                        "Failed to close iterator: %s - session: %s",
+                        e,
+                        self.session_id,
+                    )
 
     async def _publish_llm_response_update(self, text: str) -> None:
         """Publish incremental LLM response updates."""
@@ -244,15 +267,40 @@ class LLMAgentManager(Manager):
 
     async def _publish_tool_call(self, tool_call: ToolCall) -> None:
         """Forward tool-call payloads to downstream consumers."""
-        name = tool_call["name"]
-        args = tool_call["args"]
-        await self.event_bus.publish(
-            ToolCallOccurred(
-                session_id=self.session_id,
-                name=str(name),
-                args=dict(args),
+        # Validate required fields exist
+        if "name" not in tool_call:
+            logger.warning(
+                "Tool call missing 'name' field - session: %s",
+                self.session_id,
             )
-        )
+            return
+        
+        name = tool_call["name"]
+        args = tool_call.get("args", {})
+        
+        # Validate name is not empty
+        if not name:
+            logger.warning(
+                "Tool call has empty 'name' field - session: %s",
+                self.session_id,
+            )
+            return
+        
+        try:
+            await self.event_bus.publish(
+                ToolCallOccurred(
+                    session_id=self.session_id,
+                    name=str(name),
+                    args=dict(args) if args else {},
+                )
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to publish tool call '%s': %s - session: %s",
+                name,
+                e,
+                self.session_id,
+            )
 
     async def _publish_error(self, error_type: str, message: str) -> None:
         await self.event_bus.publish(
