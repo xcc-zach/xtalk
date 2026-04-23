@@ -163,7 +163,7 @@ custom_service.subscribe_event(
 # Create Xtalk instance with the custom service and start the app
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, Form, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -172,7 +172,11 @@ xtalk_instance = Xtalk(service_prototype=custom_service, max_sessions=10)
 
 
 app = FastAPI(title="Xtalk Server")
-xtalk_instance.mount_routes(app)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await xtalk_instance.connect(websocket)
 
 
 # Serve static files
@@ -195,6 +199,25 @@ except:
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.post("/api/upload")
+async def upload_file(
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+):
+    # Check file type
+    content_type = (file.content_type or "").lower()
+    filename = (file.filename or "").lower()
+    is_text = content_type.startswith("text/") if content_type else False
+    if content_type and not is_text:
+        raise HTTPException(status_code=400, detail="Only text files are supported.")
+    # Read file content and embed
+    text = (await file.read()).decode("utf-8", errors="ignore")
+    await xtalk_instance.embed_text(session_id=session_id, text=text)
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     import uvicorn
 

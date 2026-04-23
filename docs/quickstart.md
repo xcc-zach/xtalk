@@ -2,25 +2,17 @@
 
 We will use APIs from AliCloud to demonstrate the basic capability of **X-Talk**.
 
-## Step 1. Install dependencies
-
-Install dependencies for AliCloud and server script:
+First, install dependencies for AliCloud and server script:
 ```bash
 pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"
 pip install jinja2 python-multipart 'uvicorn[standard]'
 ```
 
-> For developers, clone the repository, create a branch and use `pip install -e .` under the repository.
+Then, obtain an API key from [AliCloud Bailian Platform](https://bailian.console.aliyun.com/?tab=model#/api-key). We will be using free-tier service from AliCloud.
 
-## Step 2. Obtain an API key
+> Online service may be unstable and of high latency. We recommend using locally deployed models for better user experience. See [server config tutorial](tutorial/config_the_server.md) and [supported models](docs/supported_models.md) for details.
 
-Obtain an API key from [AliCloud Bailian Platform](https://bailian.console.aliyun.com/?tab=model#/api-key). We will be using free-tier service from AliCloud.
-
-> Online service may be unstable and of high latency. We recommend using locally deployed models for better user experience. We recommend ASR models from *SherpaOnnx* ([setup tutorial](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)) and *IndexTTS* ([setup tutorial](https://github.com/Ksuriuri/index-tts-vllm)).See [server config tutorial](tutorial/config_the_service.md) and [sample config for fully local deployment](tutorial/sample_config_for_fully_local_deployment.md) for details. 
-
-## Step 3. Create the config file
-
-Create a JSON config specifying the models to use, and **fill in <API_KEY>** with the key you obtained:
+After that, create a JSON config specifying the models to use, and **fill in <API_KEY>** with the key you obtained:
 
 ```json
 {
@@ -48,9 +40,19 @@ Create a JSON config specifying the models to use, and **fill in <API_KEY>** wit
     }
 }
 ```
-## Step 4. Start the server
 
-A sample server script is ready at `examples/sample_app/configurable_server.py`. We simply need to start the server with the config file (**fill in <PATH_TO_CONFIG>.json** with the path to the config file we just created) and a custom port:
+> If you find *Qwen3ASRFlashRealtime* not working properly, you can use `"asr": "SenseVoiceSmallLocal",` instead which is a ~1GB local model. Also, you can try to use local speech generation model *IndexTTS* ([setup tutorial](https://github.com/Ksuriuri/index-tts-vllm)):
+> ```json
+> "tts": {
+>     "type": "IndexTTS",
+>     "params": {
+>         "port": 6006
+>     }
+> },
+> ```
+> If you want all models deployed locally, see [here](tutorial/sample_config_for_fully_local_deployment.md).
+
+The next step is to compose the startup script. Since we also need to link frontend webpage and scripts to get the demo working, the startup script is ready at `examples/sample_app/configurable_server.py`. We simply need to start the server with the config file (**fill in <PATH_TO_CONFIG>.json** with the path to the config file we just created) and a custom port:
 ```bash
 git clone https://github.com/xcc-zach/xtalk.git
 cd xtalk

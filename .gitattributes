@@ -1,1 +1,17 @@
+# 首先定义 LFS 规则
 pysc/** filter=lfs diff=lfs merge=lfs -text
+
+# 然后定义明确的二进制文件规则
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+
+# 再定义明确的文本文件规则  
+*.js text
+*.html text
+*.css text
+*.md text
+
+# 最后处理其他未指定的文件，强制统一换行符避免重复差异
+* text=auto eol=lf

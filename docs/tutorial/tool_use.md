@@ -1,4 +1,4 @@
-> **Note**
+> [!NOTE]
 > See `examples/sample_app/mental_consultant_server.py` for details.
     
 X-Talk supports textual tool customization through `add_agent_tools`:
@@ -23,10 +23,10 @@ In order to maintain seperate states for a tool in echo agent, you can also use 
 
 ## Built-in Tools
     
-> **Note**
+> [!NOTE]
 > See source code under `src/xtalk/llm_agent/tools` for all built-in tools.
     
 Built-in tools include agent-scope ones like `web_search` and `get_time`, and pipeline control ones like emotion, timbre and speed of speech. `DefaultAgent` has built-in tools registered by default.
     
-> **Note**
+> [!NOTE]
 > In order to enable `web_search` tool, `SERPER_API_KEY` needs to be set. See [SerperDev](https://serper.dev/).

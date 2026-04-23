@@ -1,7 +1,7 @@
-> **Note**
+> [!NOTE]
 > See `examples/sample_app/custom_model.py` and `examples/sample_app/echo_agent.py` for details.
     
-> **Note**
+> [!NOTE]
 > See [Recipe](#recipe) for adding a model of existing types.
     
 You may want to introduce a new model of an existing type (e.g. text-to-speech), or add a model of new type (e.g. a model that handles backchannel). This can be achieved by `register_model_search_spec` before a `xtalk_instance` is created from config:
@@ -58,7 +58,7 @@ Then you can use the custom model in config file:
 
 Recipes for major model customization are listed below. You can read source code for interfaces of other model types. We will update these interfaces from time to time.
     
-> **Note**
+> [!NOTE]
 > See `src/xtalk/model_types.py` for all available model types.
     
 > [!IMPORTANT]
@@ -89,10 +89,10 @@ Methods below are optional:
 > [!IMPORTANT]
 > Input for `recognize` and `recognize_stream` is PCM 16-bit mono 16 kHz raw bytes. You may need to do conversion by yourself.
     
-> **Note**
+> [!NOTE]
 > X-Talk have default implementation for `recognize_stream` with a `MockStreamRecognizer`. Therefore, no worry for your non-streaming ASR models.
 
-> **Note**
+> [!NOTE]
 > You can refer to existing implementations (e.g., `src/xtalk/speech/asr/zipformer_local.py`) when building your own ASR class. We recommend deploying ASR as a separate service and invoking it via API calls within the ASR class, referencing the implementation of `src/xtalk/speech/asr/sherpa_onnx_asr.py`.
     
 ##### New TTS (text-to-speech) Model
@@ -109,17 +109,11 @@ Your new TTS class must inherit from `xtalk.speech.interfaces.TTS` and implement
 
   - Return a new TTS instance:
     - It should have isolated runtime state to avoid cross-session interference and it may share read-only resources if your backend supports that.
-
-> **Note**
-> Follow this integration contract for new TTS implementations:
-> - Non-streaming TTS: implement `synthesize`; optionally override `async_synthesize` for async efficiency.
-> - Streaming TTS: still implement `synthesize`, and additionally override `synthesize_stream`. You may also override `async_synthesize` and `async_synthesize_stream` for async efficiency.
-> - Do not override `synthesize_stream` for a non-streaming backend just to adapt signatures. The base-class default already wraps `synthesize` into one chunk for compatibility, and that inherited wrapper should not be treated as native streaming support.
-
+    
 **Optional methods**
 
 - **`synthesize_stream(self, text: str, **kwargs) -> Iterable[bytes]`**
-  - Override this method only if your backend supports true streaming synthesis.
+  - If your backend supports streaming synthesis, you can override this method.
 - **`set_voice(self, voice_names: list[str])`**
 
   - This method works with the `TTSVoiceChange` event in `TTSManager` to switch voices via language model tool calls.
@@ -131,9 +125,7 @@ Your new TTS class must inherit from `xtalk.speech.interfaces.TTS` and implement
   - Current tool call result only carries `emotion` as `str`. However, you may also want `list[float]` as emotion vector for future use.
     
 - **`async def async_synthesize(self, text: str, **kwargs: Any)`**
-  - Optional async optimization for both streaming and non-streaming backends.
 - **`async def async_synthesize_stream(
         self, text: str, **kwargs: Any
-    )`**
-  - Optional async optimization for streaming backends. If omitted, the base class asynchronously iterates over `synthesize_stream`.
+    )`**    
     

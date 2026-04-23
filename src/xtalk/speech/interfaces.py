@@ -13,12 +13,8 @@ class ASR(ABC):
     """Abstract interface for automatic speech recognition."""
 
     def _get_mock_recognizer(self) -> MockStreamRecognizer:
-        """Create the fallback streaming recognizer on first use.
-
-        Returns
-        -------
-        MockStreamRecognizer
-            Helper that adapts one-shot ASR implementations to streaming calls.
+        """
+        Lazily create a MockStreamRecognizer if not present.
         """
         recognizer = getattr(self, "_mock_recognizer", None)
         if recognizer is None:
@@ -31,46 +27,13 @@ class ASR(ABC):
 
     @abstractmethod
     def recognize(self, audio: bytes) -> str:
-        """Recognize a full audio buffer.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes.
-
-        Returns
-        -------
-        str
-            Recognized text.
-        """
+        """Recognize audio in a single pass."""
         pass
 
-    def recognize_stream(
-        self,
-        audio: bytes,
-        *,
-        is_final: bool = False,
-        chat_history: str | None = None,
-    ) -> str:
-        """Recognize audio incrementally in streaming mode.
-
-        Parameters
-        ----------
-        audio : bytes
-            Incremental PCM 16-bit mono audio bytes.
-        is_final : bool, optional
-            Whether the caller is forcing a final decode because the user paused
-            or the turn ended.
-        chat_history : str | None, optional
-            Serialized chat history for the current session, excluding the
-            in-progress turn when unavailable.
-
-        Returns
-        -------
-        str
-            Current recognition result.
+    def recognize_stream(self, audio: bytes, *, is_final: bool = False) -> str:
+        """Incremental streaming interface.
+        is_final indicates user pause or user turn end, meaning that ASR should forcefully do a recognition
         """
-        del chat_history
         recognizer = self._get_mock_recognizer()
 
         if not audio:
@@ -79,14 +42,7 @@ class ASR(ABC):
         return recognizer.recognize(audio, is_final=is_final)
 
     def stream_chunk_bytes_hint(self) -> int | None:
-        """Return the preferred streaming chunk size.
-
-        Returns
-        -------
-        int | None
-            Recommended byte count for streaming accumulation, or ``None`` when
-            no preference is provided.
-        """
+        """Optional hint for how many bytes to accumulate before decoding."""
         return None
 
     @abstractmethod
@@ -96,146 +52,58 @@ class ASR(ABC):
 
     @abstractmethod
     def clone(self) -> "ASR":
-        """Clone the ASR instance for a new session.
-
-        Returns
-        -------
-        ASR
-            Clone with shared weights and independent runtime state.
-        """
+        """Clone the ASR instance with shared weights and separate state."""
         pass
 
     async def async_recognize(self, audio: bytes) -> str:
-        """Asynchronously recognize a full audio buffer.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes.
-
-        Returns
-        -------
-        str
-            Recognized text.
-        """
+        """Async wrapper for one-shot recognition."""
         loop = asyncio.get_running_loop()
         result: str = await loop.run_in_executor(None, self.recognize, audio)
         return result
 
     async def async_recognize_stream(
-        self,
-        audio: bytes,
-        *,
-        is_final: bool = False,
-        chat_history: str | None = None,
+        self, audio: bytes, *, is_final: bool = False
     ) -> str:
-        """Asynchronously recognize incremental audio input.
-
-        Parameters
-        ----------
-        audio : bytes
-            Incremental PCM 16-bit mono audio bytes.
-        is_final : bool, optional
-            Whether the chunk should force a final decode.
-        chat_history : str | None, optional
-            Serialized chat history for the current session, excluding the
-            in-progress turn when unavailable.
-
-        Returns
-        -------
-        str
-            Current recognition result.
-        """
+        """Async wrapper for streaming recognition."""
         loop = asyncio.get_running_loop()
         result: str = await loop.run_in_executor(
-            None,
-            partial(
-                self.recognize_stream,
-                audio,
-                is_final=is_final,
-                chat_history=chat_history,
-            ),
+            None, partial(self.recognize_stream, audio, is_final=is_final)
         )
         return result
 
 
 class TTS(ABC):
-    """Abstract base class for text-to-speech engines.
-
-    Notes
-    -----
-    ``synthesize`` is the required baseline API for every implementation.
-    Streaming-capable engines should additionally override
-    ``synthesize_stream``; non-streaming engines should inherit the default
-    compatibility wrapper. The inherited streaming helpers do not by
-    themselves declare native streaming capability.
+    """
+    Abstract base class for Text-to-Speech (TTS) engines.
     """
 
     @abstractmethod
     def synthesize(self, text: str) -> bytes:
-        """Synthesize audio for a full text input.
+        """
+        Convert text to speech.
 
-        Parameters
-        ----------
-        text : str
-            Text to synthesize.
+        Args:
+            text (str): The text to convert to speech.
 
-        Returns
-        -------
-        bytes
-            PCM 16-bit mono audio bytes at 48 kHz.
-
-        Notes
-        -----
-        Every TTS implementation, including streaming backends, must provide
-        this method.
+        Returns:
+            bytes: The synthesized speech as audio data. PCM 16bit mono, 48000Hz bytes.
         """
         pass
 
     def synthesize_stream(self, text: str, **kwargs) -> Iterable[bytes]:
-        """Stream synthesized audio chunks for a text input.
+        """
+        Convert text to speech. Streaming mode.
 
-        Parameters
-        ----------
-        text : str
-            Text to synthesize.
-        **kwargs
-            Model-specific streaming options.
+        Args:
+            text (str): The text to convert to speech.
 
-        Yields
-        ------
-        bytes
-            PCM 16-bit mono audio bytes at 48 kHz.
-
-        Notes
-        -----
-        Override this method only when the backend supports native streaming
-        synthesis. The default implementation yields a single chunk produced
-        by ``synthesize`` for compatibility and should not be treated as a
-        declaration of streaming support.
+        Returns:
+            Iterable[bytes]: The synthesized speech as audio data. PCM 16bit mono, 48000Hz bytes.
         """
         yield self.synthesize(text)
 
     async def async_synthesize(self, text: str, **kwargs: Any) -> bytes:
-        """Asynchronously synthesize audio for text.
-
-        Parameters
-        ----------
-        text : str
-            Text to synthesize.
-        **kwargs
-            Model-specific synthesis options.
-
-        Returns
-        -------
-        bytes
-            Synthesized PCM audio bytes.
-
-        Notes
-        -----
-        This method is an optional async optimization. Implementations may
-        inherit the default executor-based wrapper.
-        """
+        """Async wrapper around the synchronous synthesize call."""
         loop = asyncio.get_running_loop()
         func = partial(self.synthesize, text, **kwargs)
         result: bytes = await loop.run_in_executor(None, func)
@@ -244,26 +112,7 @@ class TTS(ABC):
     async def async_synthesize_stream(
         self, text: str, **kwargs: Any
     ) -> AsyncIterator[bytes]:
-        """Asynchronously stream synthesized audio chunks.
-
-        Parameters
-        ----------
-        text : str
-            Text to synthesize.
-        **kwargs
-            Model-specific synthesis options.
-
-        Yields
-        ------
-        bytes
-            Streamed PCM audio chunks.
-
-        Notes
-        -----
-        This method is an optional async optimization for streaming-capable
-        backends. When not overridden, it asynchronously iterates over
-        ``synthesize_stream``.
-        """
+        """Async wrapper consuming the sync streaming generator."""
         loop = asyncio.get_running_loop()
         iterable = self.synthesize_stream(text, **kwargs)
         iterator = iter(iterable)
@@ -291,99 +140,68 @@ class TTS(ABC):
 
     @abstractmethod
     def clone(self) -> "TTS":
-        """Clone the TTS engine for a new session.
+        """
+        Create an original clone of the TTS engine.
 
-        Returns
-        -------
-        TTS
-            Session-safe clone.
+        Returns:
+            TTS: A clone of the TTS engine.
         """
         pass
 
     def set_voice(self, voice_names: list[str]) -> None:
-        """Update the active voice selection.
+        """
+        Set the voice or merge several voices for speech synthesis.
 
-        Parameters
-        ----------
-        voice_names : list[str]
-            One or more voice names understood by the implementation.
+        Args:
+            voice_names (list[str]): A list of voice names to set.
         """
         pass
 
     def set_emotion(self, emotion: str | list[float]) -> None:
-        """Update the active synthesis emotion.
+        """
+        Set the emotion for speech synthesis.
 
-        Parameters
-        ----------
-        emotion : str | list[float]
-            Emotion label or model-specific emotion vector.
+        Args:
+            emotion (str | list[float]): The emotion to set, either as a string label or a list of float values.
         """
         pass
 
 
 class Captioner(ABC):
-    """Abstract base class for audio captioning models."""
+    """
+    Abstract base class for Audio Captioning models.
+    """
 
     @abstractmethod
     def caption(self, audio: bytes) -> str:
-        """Generate a caption for audio.
+        """
+        Generate a caption for the given audio.
 
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Returns
-        -------
-        str
-            Generated caption text.
+        Args:
+            audio (bytes): The audio data to caption. PCM 16bit mono, 16000Hz bytes.
+        Returns:
+            str: The generated caption.
         """
 
     def caption_stream(self, audio: bytes) -> Iterable[str]:
-        """Stream caption text for audio input.
+        """
+        Generate a caption for the given audio. Streaming mode.
 
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Yields
-        ------
-        str
-            Streamed caption text.
+        Args:
+            audio (bytes): The audio data to caption. PCM 16bit mono, 16000Hz bytes.
+        Returns:
+            Iterable[str]: Streamed generated caption.
         """
         yield self.caption(audio)
 
     async def async_caption(self, audio: bytes) -> str:
-        """Asynchronously caption audio.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Returns
-        -------
-        str
-            Generated caption text.
-        """
+        """Async wrapper for caption()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.caption, audio)
 
     async def async_caption_stream(self, audio: bytes) -> AsyncIterator[str]:
-        """Asynchronously stream caption text.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Yields
-        ------
-        str
-            Streamed caption text.
-        """
+        """Async wrapper streaming caption text."""
 
         loop = asyncio.get_running_loop()
         iterator = iter(self.caption_stream(audio))
@@ -412,74 +230,44 @@ class Captioner(ABC):
 
 
 class PuntRestorer(ABC):
-    """Abstract base class for punctuation restoration models."""
+    """
+    Abstract base class for text punt restoration models.
+    """
 
     @abstractmethod
     def restore(self, text: str) -> str:
-        """Restore punctuation in text.
-
-        Parameters
-        ----------
-        text : str
-            Text without reliable punctuation.
-
-        Returns
-        -------
-        str
-            Text with restored punctuation.
+        """
+        Restore punt in the given text.
         """
         pass
 
     async def async_restore(self, text: str) -> str:
-        """Asynchronously restore punctuation in text.
-
-        Parameters
-        ----------
-        text : str
-            Text without reliable punctuation.
-
-        Returns
-        -------
-        str
-            Restored text.
-        """
+        """Async wrapper for restore()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.restore, text)
 
 
 class VAD(ABC):
-    """Abstract base class for voice activity detection engines."""
+    """
+    Abstract base class for Voice Activity Detection (VAD) engines.
+    """
 
     @abstractmethod
     def is_speech(self, frame: bytes) -> bool:
-        """Determine whether an audio frame contains speech.
+        """
+        Determine if the given audio frame contains speech.
 
-        Parameters
-        ----------
-        frame : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
+        Args:
+            frame (bytes): The audio frame to analyze. PCM 16bit mono, 16000Hz bytes.
 
-        Returns
-        -------
-        bool
-            ``True`` if speech is detected, otherwise ``False``.
+        Returns:
+            bool: True if the frame contains speech, False otherwise.
         """
         pass
 
     async def async_is_speech(self, frame: bytes) -> bool:
-        """Asynchronously determine whether an audio frame contains speech.
-
-        Parameters
-        ----------
-        frame : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Returns
-        -------
-        bool
-            ``True`` if speech is detected, otherwise ``False``.
-        """
+        """Async wrapper for is_speech()."""
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self.is_speech, frame)
@@ -487,136 +275,78 @@ class VAD(ABC):
 
 
 class SpeechEnhancer(ABC):
-    """Abstract base class for speech enhancement engines.
+    """
+    Abstract base class for Speech Enhancement engines.
 
-    Notes
-    -----
-    Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
+    Inputs/outputs are PCM 16bit mono 16000Hz raw bytes.
     """
 
     @abstractmethod
     def enhance(self, audio: bytes) -> bytes:
-        """Enhance an audio frame.
+        """
+        Enhance the given audio frame.
 
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
+        Args:
+            audio (bytes): The audio data to enhance. PCM 16bit mono, 16000Hz bytes.
 
-        Returns
-        -------
-        bytes
-            Enhanced PCM audio bytes.
+        Returns:
+            bytes: The enhanced audio data. PCM 16bit mono, 16000Hz bytes.
         """
         pass
 
     def flush(self) -> bytes:
-        """Flush any internally buffered audio.
+        """
+        Flush remaining buffered audio (call at end of audio stream).
 
-        Returns
-        -------
-        bytes
-            Remaining enhanced PCM audio bytes.
+        Some enhancers buffer audio internally for processing. This method
+        should be called when the audio stream ends to retrieve any remaining
+        enhanced audio.
+
+        Returns:
+            bytes: Remaining enhanced audio data. PCM 16bit mono, 16000Hz bytes.
         """
         return b""
 
     async def async_enhance(self, audio: bytes) -> bytes:
-        """Asynchronously enhance audio.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes at 16 kHz.
-
-        Returns
-        -------
-        bytes
-            Enhanced PCM audio bytes.
-        """
+        """Async wrapper for enhance()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.enhance, audio)
 
     async def async_flush(self) -> bytes:
-        """Asynchronously flush buffered audio.
-
-        Returns
-        -------
-        bytes
-            Remaining enhanced PCM audio bytes.
-        """
+        """Async wrapper for flush()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.flush)
 
     @abstractmethod
     def reset(self) -> None:
-        """Reset internal buffers and caches."""
+        """
+        Reset internal state (buffers, caches, etc.).
+        """
         pass
 
     @abstractmethod
     def clone(self) -> "SpeechEnhancer":
-        """Clone the speech enhancer for a new session.
-
-        Returns
-        -------
-        SpeechEnhancer
-            Clone with shared weights and isolated runtime state.
-        """
+        """Clone the speech enhancer with shared weights and isolated state."""
         pass
 
 
 class SpeakerEncoder(ABC):
-    """Abstract base class for speaker embedding models."""
 
     @abstractmethod
     def extract(self, audio: bytes) -> np.ndarray:
-        """Generate a speaker embedding vector.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes.
-
-        Returns
-        -------
-        np.ndarray
-            Speaker embedding vector.
-        """
+        """Generate a speaker embedding vector."""
         pass
 
     async def async_extract(self, audio: bytes) -> np.ndarray:
-        """Asynchronously extract a speaker embedding.
-
-        Parameters
-        ----------
-        audio : bytes
-            PCM 16-bit mono audio bytes.
-
-        Returns
-        -------
-        np.ndarray
-            Speaker embedding vector.
-        """
+        """Async wrapper for extract()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.extract, audio)
 
     def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Compute similarity between two speaker embeddings.
-
-        Parameters
-        ----------
-        embedding1 : np.ndarray
-            First speaker embedding.
-        embedding2 : np.ndarray
-            Second speaker embedding.
-
-        Returns
-        -------
-        float
-            Cosine similarity score.
-        """
+        """Compute similarity between embeddings (default cosine)."""
         # Default cosine similarity implementation
         e1 = embedding1.astype(np.float32, copy=False).ravel()
         e2 = embedding2.astype(np.float32, copy=False).ravel()
@@ -632,37 +362,11 @@ class SpeechSpeedController(ABC):
 
     @abstractmethod
     def process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes:
-        """Apply a speed adjustment to synthesized audio.
-
-        Parameters
-        ----------
-        audio_bytes : bytes
-            Synthesized audio bytes.
-        speed : float, optional
-            Speed multiplier.
-
-        Returns
-        -------
-        bytes
-            Processed audio bytes.
-        """
+        """Process audio and apply speed adjustments."""
         pass
 
     async def async_process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes:
-        """Asynchronously apply a speed adjustment to audio.
-
-        Parameters
-        ----------
-        audio_bytes : bytes
-            Synthesized audio bytes.
-        speed : float, optional
-            Speed multiplier.
-
-        Returns
-        -------
-        bytes
-            Processed audio bytes.
-        """
+        """Async wrapper around process()."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -686,23 +390,11 @@ class TurnDetectionSemantic(Enum):
 
 @dataclass(frozen=True)
 class TurnDetectionResult:
-    """Decision emitted by a turn detector.
-
-    Attributes
-    ----------
-    action : TurnDetectionAction
-        Immediate action the service should take.
-    semantic : TurnDetectionSemantic
-        Semantic interpretation of the current conversational state.
-    """
-
     action: TurnDetectionAction
     semantic: TurnDetectionSemantic
 
 
 class TurnDetector(ABC):
-    """Abstract interface for turn-taking detectors."""
-
     def __init__(self) -> None:
         self._listening = True
         self._listening_lock = threading.Lock()
@@ -710,39 +402,13 @@ class TurnDetector(ABC):
 
     @property
     def listening(self) -> bool:
-        """Return whether the detector is currently listening for user turns.
-
-        Returns
-        -------
-        bool
-            Current listening state.
-        """
         return self._listening
 
     @listening.setter
     def listening(self, value: bool) -> None:
-        """Update the listening state.
-
-        Parameters
-        ----------
-        value : bool
-            New listening state.
-        """
         self._listening = value
 
     def listening_lock(self, is_async: bool = True):
-        """Return the lock guarding listening state changes.
-
-        Parameters
-        ----------
-        is_async : bool, optional
-            Whether to return the async lock instead of the threading lock.
-
-        Returns
-        -------
-        asyncio.Lock | threading.Lock
-            Lock object matching the requested concurrency model.
-        """
         return self._listening_async_lock if is_async else self._listening_lock
 
     @abstractmethod
@@ -752,24 +418,18 @@ class TurnDetector(ABC):
         text: Optional[str] = None,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult | list[TurnDetectionResult]:
-        """Detect conversational turn state from audio and/or text.
+        """
+        Detect turn with audio and/or text.
 
-        Parameters
-        ----------
-        audio : bytes | None, optional
-            Current PCM 16-bit mono audio frame at 16 kHz.
-        text : str | None, optional
-            ASR text for the current turn.
-        speech_pause : bool | None, optional
-            Whether the user appears to have paused speaking. This is typically
-            provided together with ``text``.
+        Args:
+            audio (bytes): Audio data frame at this instant. PCM 16bit mono, 16000Hz bytes.
+            text: Text of the turn, from ASR result.
+            speech_pause: indicates whether user has a pause on his speech (often triggered by VAD end); only sent alongside text
 
-        Returns
-        -------
-        TurnDetectionResult | list[TurnDetectionResult]
-            One or more turn-detection decisions. When multiple results are
-            returned, ``STOP_SPEAKING`` should be processed before
-            ``START_GENERATION``.
+            Either audio or (text, speech_pause) will be present.
+
+        Returns:
+            TurnDetectionResult | list[TurnDetectionResult]; STOP_SPEAKING action will be processed before START_GENERATION
         """
         pass
 
@@ -779,22 +439,7 @@ class TurnDetector(ABC):
         text: Optional[str] = None,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult | list[TurnDetectionResult]:
-        """Asynchronously detect conversational turn state.
-
-        Parameters
-        ----------
-        audio : bytes | None, optional
-            Current PCM 16-bit mono audio frame at 16 kHz.
-        text : str | None, optional
-            ASR text for the current turn.
-        speech_pause : bool | None, optional
-            Whether the user appears to have paused speaking.
-
-        Returns
-        -------
-        TurnDetectionResult | list[TurnDetectionResult]
-            One or more turn-detection decisions.
-        """
+        """Async wrapper for detect()."""
         loop = asyncio.get_running_loop()
         func = partial(self.detect, audio=audio, text=text, speech_pause=speech_pause)
         result: TurnDetectionResult | list[TurnDetectionResult] = (
@@ -804,11 +449,4 @@ class TurnDetector(ABC):
 
     @abstractmethod
     def clone(self) -> "TurnDetector":
-        """Clone the turn detector for a new session.
-
-        Returns
-        -------
-        TurnDetector
-            Session-safe clone.
-        """
         pass

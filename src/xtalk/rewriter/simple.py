@@ -45,7 +45,7 @@ class SimpleRewriter(Rewriter):
         response = self._model.invoke(messages)
 
         # Usually AIMessage; just grab content
-        output = response.content
+        output = getattr(response, "content", "")
 
         if not isinstance(output, str):
             # Fallback to string to keep upstream typing expectations
@@ -68,7 +68,7 @@ class SimpleRewriter(Rewriter):
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, self._model.invoke, messages)
 
-        output = response.content
+        output = getattr(response, "content", "")
         if not isinstance(output, str):
             logger.warning("Model response content is not str; coercing to str")
             output = str(output)

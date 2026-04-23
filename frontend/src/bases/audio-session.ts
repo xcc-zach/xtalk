@@ -48,12 +48,6 @@ abstract class BaseOutputAudioSession {
     abstract resume(): Promise<void>;
     abstract stop(): Promise<void>;
     abstract pushAudioChunk(pcmChunkInt16: ArrayBuffer): Promise<void>;
-    /**
-     * Marks that the server has finished producing TTS audio for the current turn.
-     * Implementations should combine this signal with local playback state before
-     * reporting that playback is fully finished.
-     */
-    abstract notifyTTSFinished(): Promise<void> | void;
 
     onChunkStarted(callback: (pcmChunkInt16: ArrayBuffer) => void | Promise<void>) {
         this.chunkStartedCallback = callback;

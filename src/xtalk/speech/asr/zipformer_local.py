@@ -191,13 +191,7 @@ class ZipformerLocal(ASR):
         except Exception as e:
             raise RuntimeError(f"ZipformerLocal recognize failed: {e}")
 
-    def recognize_stream(
-        self,
-        audio: bytes,
-        *,
-        is_final: bool = False,
-        chat_history: str | None = None,
-    ) -> str:
+    def recognize_stream(self, audio: bytes, *, is_final: bool = False) -> str:
         """
         Streaming recognition interface (incremental input).
 
@@ -210,7 +204,6 @@ class ZipformerLocal(ASR):
         Note: is_final=True does not automatically reset the instance; call reset()
         externally before starting a new session.
         """
-        del chat_history
         try:
             speech = _pcm_to_float(audio)
 

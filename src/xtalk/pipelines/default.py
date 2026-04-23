@@ -35,47 +35,7 @@ def _maybe_clone(obj: Any) -> Any:
 
 @dataclass(init=False)
 class DefaultPipeline(Pipeline):
-    """Store the standard Xtalk model bundle for a session.
-
-    Parameters
-    ----------
-    asr : ASR
-        Speech recognition model.
-    llm_agent : Agent
-        Agent used to generate text responses and tool calls.
-    tts : TTS
-        Text-to-speech model.
-    default_response : str, optional
-        Fallback text returned when no better response is available.
-    use_streaming_tts : bool, optional
-        Whether service managers should prefer streaming TTS when supported.
-    captioner : Captioner | None, optional
-        Optional audio captioning model.
-    punt_restorer_model : PuntRestorer | None, optional
-        Optional punctuation restoration model.
-    caption_rewriter : Rewriter | BaseChatModel | None, optional
-        Optional caption rewriter or chat model to wrap as a rewriter.
-    thought_rewriter : Rewriter | BaseChatModel | None, optional
-        Optional thought rewriter or chat model to wrap as a rewriter.
-    vad : VAD | None, optional
-        Optional voice activity detector.
-    speech_enhancer : SpeechEnhancer | None, optional
-        Optional speech enhancement model.
-    speaker_encoder : SpeakerEncoder | None, optional
-        Optional speaker embedding model.
-    speech_speed_controller : SpeechSpeedController | None, optional
-        Optional post-processing speed controller for synthesized audio.
-    embeddings : Embeddings | None, optional
-        Optional embeddings backend for retrieval features.
-    turn_detector : TurnDetector | None, optional
-        Optional turn detector that coordinates interruption and generation.
-
-    Notes
-    -----
-    The dataclass field metadata controls how instances are cloned for each
-    session. Subclasses can add new fields as long as they expose an
-    ``init_key`` metadata entry.
-    """
+    """Lightweight pipeline: just a container for models/configs via dataclass."""
 
     # ---- core models ----
     asr_model: ASR = field(metadata={"init_key": "asr", "clone": True})
@@ -144,41 +104,6 @@ class DefaultPipeline(Pipeline):
         embeddings: Optional[Embeddings] = None,
         turn_detector: Optional[TurnDetector] = None,
     ):
-        """Initialize the default pipeline.
-
-        Parameters
-        ----------
-        asr : ASR
-            Speech recognition model.
-        llm_agent : Agent
-            Agent used for response generation.
-        tts : TTS
-            Text-to-speech model.
-        default_response : str, optional
-            Fallback response text.
-        use_streaming_tts : bool, optional
-            Whether to prefer streaming TTS paths.
-        captioner : Captioner | None, optional
-            Optional audio captioning model.
-        punt_restorer_model : PuntRestorer | None, optional
-            Optional punctuation restoration model.
-        caption_rewriter : Rewriter | BaseChatModel | None, optional
-            Optional caption rewriter or chat model.
-        thought_rewriter : Rewriter | BaseChatModel | None, optional
-            Optional thought rewriter or chat model.
-        vad : VAD | None, optional
-            Optional voice activity detector.
-        speech_enhancer : SpeechEnhancer | None, optional
-            Optional speech enhancer.
-        speaker_encoder : SpeakerEncoder | None, optional
-            Optional speaker encoder.
-        speech_speed_controller : SpeechSpeedController | None, optional
-            Optional speed controller for TTS output.
-        embeddings : Embeddings | None, optional
-            Optional embeddings backend.
-        turn_detector : TurnDetector | None, optional
-            Optional turn detector.
-        """
         # Assign directly to dataclass fields
         self.asr_model = asr
         self.llm_agent = llm_agent
@@ -209,17 +134,11 @@ class DefaultPipeline(Pipeline):
     # clone (declarative, extensible, and inheritance-friendly)
     # --------------------------
     def clone(self):
-        """Clone the pipeline according to field metadata.
+        """Clone a new pipeline instance.
 
-        Returns
-        -------
-        DefaultPipeline
-            New pipeline instance of the same concrete type.
-
-        Notes
-        -----
-        Fields marked with ``clone=True`` call their own ``clone()`` method when
-        available. Remaining fields are shared by reference.
+        - Call .clone() for fields marked with clone=True
+        - Share references for the rest (suitable for stateless/read-only configs)
+        - Automatically include subclass dataclass fields with metadata.init_key
         """
         kwargs: dict[str, Any] = {}
 
@@ -282,21 +201,7 @@ class DefaultPipeline(Pipeline):
     # runtime switchers (retain original logic)
     # --------------------------
     def set_tts_model(self, model_type: str, config: dict) -> None:
-        """Switch the active TTS model at runtime.
-
-        Parameters
-        ----------
-        model_type : str
-            Supported model family name, currently ``"IndexTTS"`` or
-            ``"IndexTTS2"``.
-        config : dict
-            Runtime configuration passed to the new TTS model constructor.
-
-        Raises
-        ------
-        ValueError
-            Raised if ``model_type`` is not supported.
-        """
+        """Dynamically switch between IndexTTS and IndexTTS2 models."""
         from ..speech.tts import IndexTTS, IndexTTS2
 
         current_ref_paths = []
@@ -340,20 +245,7 @@ class DefaultPipeline(Pipeline):
         api_key: str = "",
         extra_body: dict | None = None,
     ) -> None:
-        """Replace the current agent LLM with a ``ChatOpenAI`` instance.
-
-        Parameters
-        ----------
-        model : str
-            Target model name passed to ``ChatOpenAI``.
-        base_url : str, optional
-            Override for the OpenAI-compatible API base URL.
-        api_key : str, optional
-            API key used for the replacement model. Falls back to
-            ``OPENAI_API_KEY`` when omitted.
-        extra_body : dict | None, optional
-            Additional request payload fields forwarded to ``ChatOpenAI``.
-        """
+        """Dynamically switch ChatOpenAI configuration."""
         from langchain_openai import ChatOpenAI
         import os
 

@@ -124,10 +124,14 @@ class TurnDetectorManager(Manager):
             result = [result]
         for item in result:
             if item.action == TurnDetectionAction.STOP_SPEAKING:
-                evt = TurnDetectorStopSpeaking(session_id=self.session_id)
+                evt = TurnDetectorStopSpeaking(
+                    session_id=self.session_id, semantic=item.semantic.value
+                )
                 await self.event_bus.publish(evt)
             elif item.action == TurnDetectionAction.START_GENERATION:
-                evt = TurnDetectorStartGeneration(session_id=self.session_id)
+                evt = TurnDetectorStartGeneration(
+                    session_id=self.session_id, semantic=item.semantic.value
+                )
                 await self.event_bus.publish(evt)
         # DO_NOTHING requires no action
 

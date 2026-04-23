@@ -7,22 +7,7 @@ from ..pipelines.context import PipelineContext
 
 @dataclass
 class BaseEvent:
-    """Base dataclass for all Xtalk events.
-
-    Parameters
-    ----------
-    session_id : str
-        Session identifier associated with the event.
-
-    Attributes
-    ----------
-    timestamp : float
-        Unix timestamp recorded when the event instance is created.
-    session_id : str
-        Session identifier associated with the event.
-    TYPE : str
-        Stable event type string used by the event bus.
-    """
+    """Base dataclass for all xtalk events."""
 
     timestamp: float = field(init=False)
     session_id: str
@@ -39,30 +24,7 @@ class BaseEvent:
 def create_event_class(
     *, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None
 ) -> Type[BaseEvent]:
-    """Create a ``BaseEvent`` subclass dynamically.
-
-    Parameters
-    ----------
-    name : str
-        Dataclass name for the generated event type.
-    fields : dict[str, Any] | None, optional
-        Mapping of field names to default values. Value types are inferred from
-        the defaults.
-    type_name : str | None, optional
-        Event bus type string. Defaults to ``name.lower()`` when omitted.
-
-    Returns
-    -------
-    Type[BaseEvent]
-        Generated dataclass type inheriting from ``BaseEvent``.
-
-    Examples
-    --------
-    >>> CustomEvent = create_event_class(
-    ...     name="CustomEvent",
-    ...     fields={"text": "", "turn_id": 0},
-    ... )
-    """
+    """Dynamically create a BaseEvent subclass with the given field defaults."""
     fields = fields or {}
     dataclass_fields = []
     for key, default in fields.items():
@@ -84,6 +46,7 @@ class AudioFrameReceived(BaseEvent):
     TYPE: ClassVar[str] = "audio.frame_received"
     audio_data: bytes
     sample_rate: int = 16000
+    is_final: bool = False
 
 
 @dataclass
@@ -173,16 +136,6 @@ class LLMAgentResponseUpdate(BaseEvent):
 
 @dataclass
 class LLMAgentResponseFinish(BaseEvent):
-    """Final text emitted by the agent for a turn.
-
-    Attributes
-    ----------
-    text : str
-        Final response text.
-    turn_id : int
-        Turn identifier associated with the response.
-    """
-
     TYPE: ClassVar[str] = "llm_agent.response_finish"
     text: str = ""
     turn_id: int = 0
@@ -216,15 +169,15 @@ class TTSSpeedChange(BaseEvent):
 class TTSChunkGenerated(BaseEvent):
     TYPE: ClassVar[str] = "tts.chunk_generated"
     audio_chunk: bytes = b""
-    sample_rate: int = 48000
 
 
 @dataclass
 class TTSChunkPlayed(BaseEvent):
     """Frontend confirmed playback completion for a TTS audio chunk.
 
-    InputGateway publishes this after receiving tts_chunk_played so downstream
-    listeners can observe frontend playback completion in FIFO order.
+    InputGateway publishes this after receiving tts_chunk_played.
+    RecordingManager subscribes and writes the chunk into right-channel buffer.
+    Chunks are processed in FIFO order (no index needed).
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
@@ -384,6 +337,7 @@ class TurnTTSTextAppendRequested(BaseEvent):
 
     TYPE: ClassVar[str] = "turn.tts_text_append_requested"
     text: str = ""
+    reason: str = "asr_partial"
 
 
 # ==================== Speaker Notification (Frontend) ====================
@@ -447,6 +401,7 @@ class TurnDetectorStopSpeaking(BaseEvent):
     """Turn detector determined ai should stop speaking."""
 
     TYPE: ClassVar[str] = "turn_detector.stop_speaking"
+    semantic: str = ""
 
 
 @dataclass
@@ -454,3 +409,4 @@ class TurnDetectorStartGeneration(BaseEvent):
     """Turn detector determined ai should start generation."""
 
     TYPE: ClassVar[str] = "turn_detector.start_generation"
+    semantic: str = ""

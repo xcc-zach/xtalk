@@ -1,4 +1,4 @@
-> **Note**
+> [!NOTE]
 > 详情请参阅 `examples/sample_app/mental_consultant_server.py`。
 
 X-Talk 支持通过 `add_agent_tools` 自定义文本工具：
@@ -23,10 +23,10 @@ def search_database(query: str, limit: int = 10) -> str:
 
 ## 内置工具
 
-> **Note**
+> [!NOTE]
 > 所有内置工具请参阅 `src/xtalk/llm_agent/tools` 下的源码。
 
 内置工具包括作用于 agent 级别的工具，例如 `web_search` 和 `get_time`，也包括用于控制流水线的工具，例如情绪、音色和语速。`DefaultAgent` 默认已经注册了这些内置工具。
 
-> **Note**
+> [!NOTE]
 > 要启用 `web_search` 工具，需要设置 `SERPER_API_KEY`。详见 [SerperDev](https://serper.dev/)。

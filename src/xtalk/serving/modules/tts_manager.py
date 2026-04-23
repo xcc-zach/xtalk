@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import asyncio
-from collections import deque
 from typing import Optional, NamedTuple, Any
 
 from ...log_utils import logger
@@ -14,7 +13,6 @@ from ..events import (
     TTSResumed,
     TTSFinished,
     TTSChunkGenerated,
-    TTSChunkPlayed,
     ErrorOccurred,
     TTSVoiceChange,
     TTSEmotionChange,
@@ -38,7 +36,6 @@ class TTSQueueItem(NamedTuple):
     """Data model for queued TTS audio chunks."""
 
     audio_chunk: bytes
-    sample_rate: int
 
 
 class TTSManager(Manager):
@@ -46,10 +43,6 @@ class TTSManager(Manager):
 
     # Sentence delimiters for chunking
     SENTENCE_DELIMITERS = {"。", "，", "！", "!", "？", "?", ".", ",", "：", ":"}
-    # Maximum duration of each outbound PCM chunk in milliseconds.
-    TTS_CHUNK_MS = 100
-    # Maximum unacknowledged outbound audio budget in milliseconds.
-    MAX_OUTSTANDING_MS = 300
     # Sentinel for marking end of TTS stream
     _FLUSH_SENTINEL = object()
 
@@ -95,9 +88,6 @@ class TTSManager(Manager):
         self._resume_event = asyncio.Event()
         self._resume_event.set()
         self._last_chunk_sent_for_tts = False
-        self._outstanding_chunk_ms: deque[float] = deque()
-        self._outstanding_total_ms = 0.0
-        self._outstanding_condition = asyncio.Condition()
 
     def _ensure_segments_queue(self) -> asyncio.Queue:
         """Ensure a queue exists for sentence segments."""
@@ -178,7 +168,6 @@ class TTSManager(Manager):
 
         # Stop consumer
         await self._stop_consumer()
-        await self._reset_outstanding_audio()
 
         # Cancel segments producer task
         if self._segments_task and not self._segments_task.done():
@@ -256,47 +245,6 @@ class TTSManager(Manager):
 
         self._resume_event.set()
 
-    async def _reset_outstanding_audio(self) -> None:
-        """Clear all unacknowledged outbound audio tracking state."""
-        async with self._outstanding_condition:
-            self._outstanding_chunk_ms.clear()
-            self._outstanding_total_ms = 0.0
-            self._outstanding_condition.notify_all()
-
-    async def _wait_for_outstanding_budget(self) -> None:
-        """Wait until enough outbound audio budget is available."""
-        async with self._outstanding_condition:
-            while (
-                self._consumer_running
-                and self._outstanding_total_ms >= self.MAX_OUTSTANDING_MS
-            ):
-                await self._outstanding_condition.wait()
-
-    async def _track_outstanding_chunk(self, chunk_ms: float) -> None:
-        """Record a just-sent outbound chunk in the outstanding budget."""
-        async with self._outstanding_condition:
-            self._outstanding_chunk_ms.append(chunk_ms)
-            self._outstanding_total_ms += chunk_ms
-
-    def _chunk_duration_ms(self, audio_chunk: bytes, sample_rate: int) -> float:
-        """Return the PCM chunk duration in milliseconds."""
-        if not audio_chunk or sample_rate <= 0:
-            return 0.0
-        sample_count = len(audio_chunk) / 2
-        return sample_count * 1000.0 / sample_rate
-
-    def _split_audio_chunk(self, audio_chunk: bytes, sample_rate: int) -> list[bytes]:
-        """Split PCM audio into fixed-size chunks for outbound transport."""
-        if not audio_chunk or sample_rate <= 0:
-            return []
-        samples_per_chunk = max(1, round(sample_rate * self.TTS_CHUNK_MS / 1000))
-        bytes_per_chunk = samples_per_chunk * 2
-        return [
-            audio_chunk[offset : offset + bytes_per_chunk]
-            for offset in range(0, len(audio_chunk), bytes_per_chunk)
-            if audio_chunk[offset : offset + bytes_per_chunk]
-        ]
-
     async def _tts_consumer(self) -> None:
         """Consume queued TTS output and publish audio events."""
 
@@ -324,24 +272,13 @@ class TTSManager(Manager):
                                 item.audio_chunk, self.current_speed
                             )
 
-                        for chunk in self._split_audio_chunk(
-                            processed_audio, item.sample_rate
-                        ):
-                            await self._wait_for_outstanding_budget()
-                            if not self._consumer_running:
-                                break
-
-                            event = TTSChunkGenerated(
-                                session_id=self.session_id,
-                                audio_chunk=chunk,
-                                sample_rate=item.sample_rate,
-                            )
-                            await self.event_bus.publish(
-                                event, wait_for_completion=True
-                            )
-                            await self._track_outstanding_chunk(
-                                self._chunk_duration_ms(chunk, item.sample_rate)
-                            )
+                        # Publish to frontend (chunks processed in FIFO order)
+                        event = TTSChunkGenerated(
+                            session_id=self.session_id,
+                            audio_chunk=processed_audio,
+                        )
+                        # Ensure ordering by waiting for completion
+                        await self.event_bus.publish(event, wait_for_completion=True)
 
                     # Mark task as done after processing
                     self.tts_queue.task_done()
@@ -382,17 +319,6 @@ class TTSManager(Manager):
             await self._publish_error("tts_consumer_error", str(e))
         finally:
             self._consumer_running = False
-
-    @Manager.event_handler(TTSChunkPlayed, priority=100)
-    async def _handle_tts_chunk_played(self, event: TTSChunkPlayed) -> None:
-        """Release outstanding outbound budget after frontend playback confirmation."""
-        async with self._outstanding_condition:
-            if self._outstanding_chunk_ms:
-                self._outstanding_total_ms = max(
-                    0.0,
-                    self._outstanding_total_ms - self._outstanding_chunk_ms.popleft(),
-                )
-            self._outstanding_condition.notify_all()
 
     async def _publish_tts_started(self) -> None:
         """Publish TTSStarted event."""
@@ -460,9 +386,8 @@ class TTSManager(Manager):
             return
 
         try:
-            sample_rate = int(getattr(tts_model, "sample_rate", 48000) or 48000)
             async for ch in self._synthesize_stream_with_fallback(tts_model, sentence):
-                await self.tts_queue.put(TTSQueueItem(ch, sample_rate))
+                await self.tts_queue.put(TTSQueueItem(ch))
 
         except asyncio.CancelledError:
             raise

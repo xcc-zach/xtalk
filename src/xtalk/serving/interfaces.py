@@ -113,24 +113,6 @@ class EventListenerMixin(metaclass=EventListenerMeta):
         priority: int = 0,
         enabled_if: Callable[["EventListenerMixin"], bool] | None = None,
     ):
-        """Declare an event handler on a listener method.
-
-        Parameters
-        ----------
-        event_type : Type[BaseEvent]
-            Event class handled by the decorated method.
-        priority : int, optional
-            Execution priority for the handler. Higher values run first.
-        enabled_if : Callable[[EventListenerMixin], bool] | None, optional
-            Predicate evaluated against the listener instance to decide whether
-            the handler should be registered.
-
-        Returns
-        -------
-        Callable
-            Decorator that annotates the target method for automatic event-bus
-            registration.
-        """
         def decorator(func: Callable[[BaseEvent], Any]):
             meta_list = getattr(func, "__event_handlers__", [])
             meta_list.append(
@@ -152,46 +134,5 @@ class ShutdownMixin(ABC):
         pass
 
 
-class TurnStateRestorable(ABC):
-    @abstractmethod
-    def restore_turn_state(self, *, last_turn_id: int) -> None:
-        """Restore manager turn counters from persisted session state."""
-        pass
-
-
 class Manager(EventListenerMixin, ShutdownMixin):
-    """Base class for Xtalk managers.
-
-    Notes
-    -----
-    Subclasses typically accept ``event_bus``, ``session_id``, ``pipeline``, and
-    ``config`` arguments, then register handlers with ``@Manager.event_handler``.
-    """
-
-    @staticmethod
-    def event_handler(
-        event_type: Type[BaseEvent],
-        *,
-        priority: int = 0,
-        enabled_if: Callable[["EventListenerMixin"], bool] | None = None,
-    ):
-        """Declare a manager event handler.
-
-        Parameters
-        ----------
-        event_type : Type[BaseEvent]
-            Event class handled by the decorated method.
-        priority : int, optional
-            Execution priority for the handler. Higher values run first.
-        enabled_if : Callable[[EventListenerMixin], bool] | None, optional
-            Predicate evaluated against the manager instance before the handler
-            is registered.
-
-        Returns
-        -------
-        Callable
-            Decorator that marks the method for automatic subscription.
-        """
-        return EventListenerMixin.event_handler(
-            event_type, priority=priority, enabled_if=enabled_if
-        )
+    """Base class for xtalk managers that subscribe to events and clean up resources."""

@@ -135,17 +135,10 @@ class SenseVoiceSmallLocal(ASR):
         except Exception as e:
             raise RuntimeError(f"SenseVoiceSmall recognize failed: {e}")
 
-    def recognize_stream(
-        self,
-        audio: bytes,
-        *,
-        is_final: bool = False,
-        chat_history: str | None = None,
-    ) -> str:
+    def recognize_stream(self, audio: bytes, *, is_final: bool = False) -> str:
         """
         Pseudo streaming: each call runs one-shot recognition on buffered audio.
         """
-        del chat_history
         if not audio:
             return self._mock_recognizer.recognized_text
         return self._mock_recognizer.recognize(audio, is_final=is_final)

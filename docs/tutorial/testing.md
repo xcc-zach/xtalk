@@ -23,15 +23,11 @@ ai_end+2.5:This will be sent 2.5 seconds after AI finishes.
 Where `<timestamp>` is:
 
 - A float number: absolute seconds from start (e.g., `0`, `5.0`, `10.5`)
-- `ai_start`: when the next AI response after the previous user clip starts playing
-- `ai_end`: when the next AI response after the previous user clip finishes playing
-- `user_start`: when the previous user clip starts sending
-- `user_end`: when the previous user clip finishes sending
-- `<label>+<offset>`: seconds after that matching event (e.g., `ai_end+2.5`)
-
-Relative timestamps are resolved in file order. Each line waits for the first
-matching anchor event associated with the immediately preceding scheduled user
-clip.
+- `ai_start`: when first AI audio chunk starts playing
+- `ai_end`: when AI response finishes playing
+- `user_start`: when first user audio chunk is about to be sent
+- `user_end`: when last user audio chunk is sent
+- `<label>+<offset>`: seconds after the event (e.g., `ai_end+2.5`)
 
 Then run the script to generate audio files:
 

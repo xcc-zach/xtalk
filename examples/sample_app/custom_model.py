@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -32,7 +32,12 @@ Xtalk.register_model_search_spec(
 # Instantiate Xtalk from config
 # config can be passed as a path to json file or a dict
 xtalk_instance = Xtalk.from_config(args.config)
-xtalk_instance.mount_routes(app)
+
+
+# Mount WebSocket endpoint
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await xtalk_instance.connect(websocket)
 
 
 # Serve static files

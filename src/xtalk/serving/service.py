@@ -24,29 +24,13 @@ from .modules.speaker_manager import SpeakerManager
 from .modules.embeddings_manager import EmbeddingsManager
 from .modules.recording_manager import RecordingManager
 from .modules.turn_detector_manager import TurnDetectorManager
-from .modules.persistence_manager import PersistenceManager
 from .events import BaseEvent
 from ..pipelines import Pipeline
-from .interfaces import EventListenerMixin, EventOverrides, TurnStateRestorable
+from .interfaces import EventListenerMixin, EventOverrides
 
 
 class Service:
-    """Orchestrate a session-scoped pipeline and manager stack.
-
-    Parameters
-    ----------
-    pipeline : Pipeline
-        Pipeline prototype that will be cloned for the session.
-    service_config : dict[str, Any] | None, optional
-        Session configuration shared with managers and gateways.
-    manager_classes : list[Type[Manager]] | None, optional
-        Manager classes to instantiate for live sessions.
-    _websocket : WebSocket | None, optional
-        Internal WebSocket handle for live sessions. ``None`` means the instance
-        acts as a prototype only.
-    _event_overrides : dict[Type[EventListenerMixin], EventOverrides] | None, optional
-        Internal event subscription overrides copied into cloned sessions.
-    """
+    """Session-scoped orchestrator wiring pipeline managers to a WebSocket connection."""
 
     def __init__(
         self,
@@ -55,10 +39,9 @@ class Service:
         service_config: dict[str, Any] | None = None,
         manager_classes: list[Type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
-        _session_id: str | None = None,
         _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
     ):
-        self.session_id = _session_id or str(uuid.uuid4())
+        self.session_id = str(uuid.uuid4())
         pipeline = pipeline.clone()
         self.pipeline = pipeline  # Keep pipeline reference for later model switches
         # Per-session config (shared with managers/gateways)
@@ -71,9 +54,6 @@ class Service:
         self.event_bus = EventBus(enable_history=False, max_history=0)
 
         self._manager_classes: list[Type[Manager]] = list(manager_classes or [])
-        if self._should_enable_persistence_manager():
-            if PersistenceManager not in self._manager_classes:
-                self._manager_classes.append(PersistenceManager)
         self._managers: list[Manager] = []
         self._event_overrides: dict[Type[EventListenerMixin], EventOverrides] = (
             self._clone_event_overrides(_event_overrides)
@@ -86,10 +66,7 @@ class Service:
             manager = self._instantiate_manager(manager_cls)
             self._managers.append(manager)
         self.input_gateway = InputGateway(
-            self.event_bus,
-            self.session_id,
-            _websocket,
-            config=self.service_config,
+            self.event_bus, self.session_id, _websocket
         )
         self.output_gateway = OutputGateway(
             self.event_bus,
@@ -117,17 +94,12 @@ class Service:
         event_type: Type[BaseEvent],
         method_name: str | None = None,
     ) -> None:
-        """Disable an automatic event subscription for a listener class.
+        """
+        Remove automatic event subscription for an EventListener.
 
-        Parameters
-        ----------
-        event_listener_cls : Type[EventListenerMixin]
-            Listener class whose subscription should be disabled.
-        event_type : Type[BaseEvent]
-            Event type to unsubscribe.
-        method_name : str | None, optional
-            Specific method name to disable. If omitted, every handler for the
-            event is disabled for the listener class.
+        - method_name None: disable every handler for that event (including ones
+          added via @event_handler or overrides)
+        - method_name str: disable only that specific handler
         """
         overrides = self._get_or_create_overrides(event_listener_cls)
 
@@ -151,22 +123,13 @@ class Service:
         priority: int = 0,
         enabled_if: Callable[[EventListenerMixin], bool] | None = None,
     ) -> None:
-        """Register an additional event subscription override.
+        """
+        Add extra event subscriptions for an EventListener.
 
-        Parameters
-        ----------
-        event_listener_cls : Type[EventListenerMixin]
-            Listener class that should receive the event.
-        event_type : Type[BaseEvent]
-            Event type to subscribe to.
-        method_or_handler : str | Callable
-            Method name on the listener instance or an external sync/async
-            handler accepting ``event`` or ``(listener, event)``.
-        priority : int, optional
-            Subscription priority. Higher values run first.
-        enabled_if : Callable[[EventListenerMixin], bool] | None, optional
-            Predicate used to decide whether the subscription should be
-            installed for a concrete listener instance.
+        - method_or_handler str: treat as method name; resolved via getattr on the
+          listener instance.
+        - method_or_handler callable: external handler supporting signatures
+          h(event) / async h(event) or h(listener, event) / async variant.
         """
         overrides = self._get_or_create_overrides(event_listener_cls)
 
@@ -222,26 +185,12 @@ class Service:
         return manager
 
     def register_manager(self, manager_cls: Type[Manager]):
-        """Register a manager class on the service.
-
-        Parameters
-        ----------
-        manager_cls : Type[Manager]
-            Manager class to add to the service prototype or live session.
-        """
         self._manager_classes.append(manager_cls)
         # Instantiate immediately when running in a live session
         if hasattr(self, "input_gateway"):
             self._managers.append(self._instantiate_manager(manager_cls))
 
     def unregister_manager(self, manager_cls: Type[Manager]):
-        """Remove a manager class from the service.
-
-        Parameters
-        ----------
-        manager_cls : Type[Manager]
-            Manager class to remove.
-        """
         self._manager_classes.remove(manager_cls)
         # Remove concrete manager if already active and unsubscribe its handlers
         if hasattr(self, "input_gateway"):
@@ -265,50 +214,18 @@ class Service:
                     self.event_bus.unsubscribe(ev_type, method)
 
     async def handle_message_loop(self, already_accepted: bool = False) -> None:
-        """Run the full WebSocket message loop for a live session.
-
-        Parameters
-        ----------
-        already_accepted : bool, optional
-            Whether the WebSocket has already been accepted by an upstream
-            limiter or caller.
-
-        Raises
-        ------
-        RuntimeError
-            Raised if the service instance is still a prototype without runtime
-            gateways.
-        """
+        """Process the WebSocket message loop."""
         if not hasattr(self, "input_gateway") or not hasattr(self, "output_gateway"):
             raise RuntimeError(
                 "This Service instance is a prototype and cannot handle messages."
             )
         await self.input_gateway.handle_connection(already_accepted=already_accepted)
+        # Send session_id to frontend immediately for tracking uploads, etc.
+        await self.output_gateway.send_session_info()
         await self.input_gateway.handle_message_loop()
 
-    def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None:
-        """Restore persisted conversation history into the session agent."""
-        agent = self.pipeline.get_agent()
-        if agent is None:
-            return
-        agent.restore_history(messages)
-
-    def restore_turn_state(self, *, last_turn_id: int) -> None:
-        """Restore per-manager turn counters from persisted state."""
-        for manager in self._managers:
-            if isinstance(manager, TurnStateRestorable):
-                manager.restore_turn_state(last_turn_id=last_turn_id)
-
-    async def send_session_attached(self) -> None:
-        """Notify the client that the session is attached."""
-        if not hasattr(self, "output_gateway"):
-            raise RuntimeError(
-                "This Service instance is a prototype and cannot send session events."
-            )
-        await self.output_gateway.send_session_attached()
-
     async def stop(self) -> None:
-        """Stop the service and shut down all managers."""
+        """Stop the service and shut down managers."""
         try:
             for manager in self._managers:
                 await manager.shutdown()
@@ -321,42 +238,15 @@ class Service:
                 e,
             )
 
-    def clone(
-        self,
-        new_websocket: WebSocket,
-        *,
-        session_id: str | None = None,
-        service_config_overrides: dict[str, Any] | None = None,
-    ) -> "Service":
-        """Clone the service prototype for a new WebSocket session.
-
-        Parameters
-        ----------
-        new_websocket : WebSocket
-            WebSocket assigned to the new live session.
-
-        Returns
-        -------
-        Service
-            Cloned service instance of the same concrete type.
-        """
-        cloned_service_config = dict(self.service_config)
-        if service_config_overrides:
-            cloned_service_config.update(service_config_overrides)
+    def clone(self, new_websocket: WebSocket) -> "Service":
         new_service = type(self)(
             pipeline=self.pipeline,
-            service_config=cloned_service_config,
+            service_config=self.service_config,
             manager_classes=self._manager_classes,
             _websocket=new_websocket,
-            _session_id=session_id,
             _event_overrides=self._event_overrides,
         )
         return new_service
-
-    def _should_enable_persistence_manager(self) -> bool:
-        persistence_store = self.service_config.get("persistence_store")
-        user_id = self.service_config.get("user_id")
-        return persistence_store is not None and isinstance(user_id, str) and bool(user_id)
 
     @staticmethod
     def _clone_event_overrides(
@@ -377,13 +267,7 @@ class Service:
 
 
 class DefaultService(Service):
-    """Convenience ``Service`` with the standard Xtalk manager stack.
-
-    Notes
-    -----
-    Sample applications usually instantiate ``DefaultService`` directly and then
-    register or override managers for custom behavior.
-    """
+    """Convenience Service pre-configured with the default manager stack."""
 
     MANAGER_CLASSES: list[Type[Manager]] = [
         ASRManager,
@@ -409,7 +293,6 @@ class DefaultService(Service):
         service_config: dict[str, Any] | None = None,
         manager_classes: list[Type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
-        _session_id: str | None = None,
         _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
     ):
         super().__init__(
@@ -419,6 +302,5 @@ class DefaultService(Service):
                 self.MANAGER_CLASSES if manager_classes is None else manager_classes
             ),
             _websocket=_websocket,
-            _session_id=_session_id,
             _event_overrides=_event_overrides,
         )

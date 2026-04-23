@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import asyncio
 import json
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -38,22 +37,6 @@ def _require(data: dict, key: str, session_id: str, context: str) -> bool:
         logger.warning("%s: %s is required - session: %s", context, key, session_id)
         return False
     return True
-
-
-def _resolve_input_sample_rate(config: dict[str, Any] | None) -> int:
-    """Resolve the configured input sample rate with a safe default."""
-    if config is None:
-        return 16000
-
-    configured_sample_rate = config.get("input_sample_rate", 16000)
-    try:
-        return int(configured_sample_rate)
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid input_sample_rate %r; falling back to 16000",
-            configured_sample_rate,
-        )
-        return 16000
 
 
 class TextMsgHandler(EventListenerMixin):
@@ -256,7 +239,6 @@ class InputGateway(EventListenerMixin):
         event_bus: EventBus,
         session_id: str,
         websocket: WebSocket,
-        config: dict[str, Any] | None = None,
     ):
         """
         Initialize WebSocket input gateway.
@@ -265,14 +247,10 @@ class InputGateway(EventListenerMixin):
             event_bus: shared event bus instance
             session_id: unique session identifier
             websocket: active WebSocket connection
-            config: service configuration shared with the session
         """
         self.event_bus = event_bus
         self.session_id = session_id
         self.websocket = websocket
-        self.config: dict[str, Any] = config or {}
-        self.input_sample_rate = _resolve_input_sample_rate(self.config)
-        self._pending_text_tasks: set[asyncio.Task[None]] = set()
 
         self.text_msg_handler = TextMsgHandler(event_bus, session_id, websocket)
 
@@ -300,16 +278,14 @@ class InputGateway(EventListenerMixin):
                 data = await self.websocket.receive()
                 if data.get("type") == "websocket.disconnect":
                     break
-                if data.get("type") == "websocket.receive" and "text" in data:
-                    self._schedule_text_message(data["text"])
-                    continue
+
                 await self._process_message(data)
         except WebSocketDisconnect as e:
             logger.info(
                 "WebSocket disconnected - session: %s, code: %s, reason: %s",
                 self.session_id,
-                e.code,
-                e.reason,
+                getattr(e, "code", "N/A"),
+                getattr(e, "reason", "N/A"),
             )
         except Exception as e:
             error_msg = str(e).lower()
@@ -325,40 +301,6 @@ class InputGateway(EventListenerMixin):
                     self.session_id,
                     e,
                 )
-        finally:
-            await self._wait_for_pending_text_tasks()
-
-    def _schedule_text_message(self, text_message: str) -> None:
-        """Run text message handling without blocking binary frame reception."""
-        task = asyncio.create_task(self._run_text_message_task(text_message))
-        self._pending_text_tasks.add(task)
-        task.add_done_callback(self._pending_text_tasks.discard)
-
-    async def _run_text_message_task(self, text_message: str) -> None:
-        """Handle one text message and surface task failures through logging."""
-        try:
-            await self._handle_text_message(text_message)
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "disconnect" in error_msg or "closed" in error_msg:
-                logger.info(
-                    "WebSocket text message task stopped after disconnect - session: %s, detail: %s",
-                    self.session_id,
-                    e,
-                )
-            else:
-                logger.error(
-                    "WebSocket text message task failed - session: %s, error: %s",
-                    self.session_id,
-                    e,
-                )
-
-    async def _wait_for_pending_text_tasks(self) -> None:
-        """Await all in-flight text message tasks before shutting down the loop."""
-        if not self._pending_text_tasks:
-            return
-        pending = tuple(self._pending_text_tasks)
-        await asyncio.gather(*pending, return_exceptions=True)
 
     async def _process_message(self, data: dict) -> None:
         """Process a raw WebSocket receive payload and publish events."""
@@ -382,7 +324,8 @@ class InputGateway(EventListenerMixin):
             AudioFrameReceived(
                 session_id=self.session_id,
                 audio_data=audio_data,
-                sample_rate=self.input_sample_rate,
+                is_final=False,
+                sample_rate=16000,
             )
         )
 

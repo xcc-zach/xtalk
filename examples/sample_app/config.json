@@ -1,0 +1,24 @@
+{
+    "asr": {
+        "type": "Qwen3ASRFlashRealtime",
+        "params": {
+            "api_key": "sk-5b848b4e4dca4299b570939338314bc8"
+        }
+    },
+    "llm_agent": {
+        "type": "DefaultAgent",
+        "params": {
+            "model": {
+                "api_key": "sk-5b848b4e4dca4299b570939338314bc8",
+                "model": "qwen3-max-2026-01-23",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            }
+        }
+    },
+    "tts": {
+        "type": "CosyVoice",
+        "params": {
+            "api_key": "sk-5b848b4e4dca4299b570939338314bc8"
+        }
+    }
+}

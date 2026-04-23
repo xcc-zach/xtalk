@@ -31,7 +31,7 @@ class EmbeddingsManager(Manager):
     @Manager.event_handler(TextForEmbeddingReady, priority=70)
     async def _on_text_for_embedding_ready(self, event: TextForEmbeddingReady) -> None:
         """Handle text that needs to be embedded."""
-        text = event.text or ""
+        text = getattr(event, "text", "") or ""
         if not text.strip():
             return
         # Update pipeline context so agent knows embedding is needed

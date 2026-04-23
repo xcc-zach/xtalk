@@ -1,291 +1,81 @@
 import { BaseWebSocket } from "../bases/websocket";
-import type { BaseWebSocketCloseEvent, BaseWebSocketMessageEvent } from "../bases/websocket";
 import { BaseInputAudioSession, BaseOutputAudioSession } from "../bases/audio-session";
 import type { InputAudioSessionConfig, OutputAudioSessionConfig } from "../bases/audio-session";
-import { BaseHTTPClient, HTTPRequestError } from "../bases/http";
-import type { ResolvableURL, SessionServiceURLConfig, SessionServiceURLs } from "../bases/http";
-import { BaseEncoding } from "../bases/encoding";
-import { BasePersistenceStore } from "../bases/persistence";
-import { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 
-import vadProcessorUrl from "../../worklets/vad-processor.worklet.js";
-import fastEnhancerOnnxUrl from "../../models/fastenhancer_s.onnx";
-export {
-    WebDeferredTaskScheduler,
-    WebWebSocket,
-    WebInputAudioSession,
-    WebOutputAudioSession,
-    WebHTTPClient,
-    WebEncoding,
-    WebPersistenceStore,
-    resolveWebServiceURLs,
-    buildWebSocketURLWithAccessToken,
-};
+import vadProcessorUrl from "~/worklets/vad-processor.worklet.js";
+import fastEnhancerOnnxUrl from "~/models/fastenhancer_s.onnx";
+export { WebWebSocket, WebInputAudioSession, WebOutputAudioSession };
 
-/**
- * Web implementation of deferred task scheduling for non-blocking callbacks.
- */
-class WebDeferredTaskScheduler extends BaseDeferredTaskScheduler {
-    private readonly taskQueue: Array<() => void> = [];
-    private readonly messageChannel: MessageChannel | null;
-    private timeoutId: number | null = null;
-    private scheduled = false;
-    private disposed = false;
-
-    constructor() {
-        super();
-        this.messageChannel = typeof MessageChannel === "function" ? new MessageChannel() : null;
-        if (this.messageChannel) {
-            this.messageChannel.port1.onmessage = () => {
-                this.flush();
-            };
-        }
-    }
-
-    schedule(task: () => void): void {
-        if (this.disposed) {
-            return;
-        }
-        this.taskQueue.push(task);
-        if (this.scheduled) {
-            return;
-        }
-        this.scheduled = true;
-        if (this.messageChannel) {
-            this.messageChannel.port2.postMessage(null);
-            return;
-        }
-        this.timeoutId = window.setTimeout(() => {
-            this.timeoutId = null;
-            this.flush();
-        }, 0);
-    }
-
-    dispose(): void {
-        this.disposed = true;
-        this.taskQueue.length = 0;
-        this.scheduled = false;
-        if (this.timeoutId !== null) {
-            window.clearTimeout(this.timeoutId);
-            this.timeoutId = null;
-        }
-        if (this.messageChannel) {
-            this.messageChannel.port1.onmessage = null;
-            this.messageChannel.port1.close();
-            this.messageChannel.port2.close();
-        }
-    }
-
-    private flush(): void {
-        if (this.disposed) {
-            return;
-        }
-        this.scheduled = false;
-        const queuedTasks = this.taskQueue.splice(0, this.taskQueue.length);
-        for (const task of queuedTasks) {
-            task();
-        }
-    }
-}
+declare const uni: any;
 
 class WebWebSocket extends BaseWebSocket {
-    private instance: WebSocket;
+    private instance: any;
+    private opened = false;
     constructor(url: string | URL, protocols?: string | string[]) {
         super();
-        this.instance = new WebSocket(url, protocols);
-        this.instance.binaryType = 'arraybuffer';
+        const urlText = typeof url === 'string' ? url : url.toString();
+        const uniApi = typeof uni !== 'undefined' ? uni : undefined;
+        if (!uniApi || typeof uniApi.connectSocket !== 'function') {
+            throw new Error('uni.connectSocket is not available in current environment');
+        }
+
+        const protocolList = typeof protocols === 'string' ? [protocols] : protocols;
+        this.instance = uniApi.connectSocket({
+            url: urlText,
+            protocols: protocolList,
+            complete: () => {}
+        });
+
+        if (!this.instance
+            || typeof this.instance.onOpen !== 'function'
+            || typeof this.instance.onMessage !== 'function'
+            || typeof this.instance.onClose !== 'function'
+            || typeof this.instance.onError !== 'function') {
+            throw new Error('uni.connectSocket did not return a valid SocketTask');
+        }
+
+        this.instance.onOpen(() => {
+            this.opened = true;
+        });
+        this.instance.onClose(() => {
+            this.opened = false;
+        });
+        this.instance.onError(() => {
+            this.opened = false;
+        });
     }
     ready(): boolean {
-        return this.instance.readyState === WebSocket.OPEN;
+        return this.opened;
     }
     send(data: string | ArrayBuffer): void {
-        this.instance.send(data);
+        this.instance.send({ data });
     }
     close(): void {
-        this.instance.close();
+        this.opened = false;
+        this.instance.close({});
     }
-    addEventListener(type: "open" | "error", listener: () => any): void;
-    addEventListener(type: "message", listener: (evt: BaseWebSocketMessageEvent) => any): void;
-    addEventListener(type: "close", listener: (evt: BaseWebSocketCloseEvent) => any): void;
-    addEventListener(
-        type: "open" | "message" | "close" | "error",
-        listener: (() => any) | ((evt: BaseWebSocketMessageEvent) => any) | ((evt: BaseWebSocketCloseEvent) => any),
-    ): void {
-        if (type === "message") {
-            this.instance.addEventListener("message", (event: MessageEvent<string | ArrayBuffer>) => {
-                (listener as (evt: BaseWebSocketMessageEvent) => any)({
-                    data: event.data,
-                });
-            });
-            return;
-        }
-        if (type === "close") {
-            this.instance.addEventListener("close", (event: CloseEvent) => {
-                (listener as (evt: BaseWebSocketCloseEvent) => any)({
-                    code: event.code,
-                    reason: event.reason,
-                    wasClean: event.wasClean,
-                });
-            });
-            return;
-        }
-        this.instance.addEventListener(type, () => {
-            (listener as () => any)();
-        });
-    }
-}
-
-function resolveBaseURL(rawURL: ResolvableURL): URL {
-    return new URL(rawURL.toString(), window.location.href);
-}
-
-function createAuthorizedHeaders(accessToken: string | null): Headers {
-    const headers = new Headers();
-    if (accessToken) {
-        headers.set("Authorization", `Bearer ${accessToken}`);
-    }
-    return headers;
-}
-
-class WebHTTPClient extends BaseHTTPClient {
-    async postJSON<T>(url: ResolvableURL, accessToken: string | null): Promise<T> {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: createAuthorizedHeaders(accessToken),
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
-        }
-        return await response.json() as T;
-    }
-
-    async getJSON<T>(url: ResolvableURL, accessToken: string): Promise<T> {
-        const response = await fetch(url, {
-            method: "GET",
-            headers: createAuthorizedHeaders(accessToken),
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
-        }
-        return await response.json() as T;
-    }
-
-    async postFile(
-        url: ResolvableURL,
-        accessToken: string,
-        sessionId: string,
-        file: Blob,
-    ): Promise<void> {
-        const formData = new FormData();
-        formData.append("session_id", sessionId);
-        formData.append("file", file);
-        const response = await fetch(url, {
-            method: "POST",
-            headers: createAuthorizedHeaders(accessToken),
-            body: formData,
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
+    addEventListener(type: "open" | "message" | "close" | "error", listener: (evt?: any) => any): void {
+        switch (type) {
+            case 'open':
+                this.instance.onOpen((evt: any) => listener(evt));
+                break;
+            case 'message':
+                this.instance.onMessage((evt: any) => listener(evt));
+                break;
+            case 'close':
+                this.instance.onClose((evt: any) => listener(evt));
+                break;
+            case 'error':
+                this.instance.onError((evt: any) => listener(evt));
+                break;
         }
     }
-}
-
-class WebEncoding extends BaseEncoding {
-    decodeBase64(base64: string): ArrayBuffer {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-        }
-        return bytes.buffer;
-    }
-}
-
-class WebPersistenceStore extends BasePersistenceStore {
-    private supportsStorage(): boolean {
-        return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-    }
-
-    resolveKey(websocketURL: ResolvableURL): string | null {
-        if (!this.supportsStorage()) {
-            return null;
-        }
-        const resolvedURL = new URL(websocketURL.toString(), window.location.href);
-        return `xtalk:session:${resolvedURL.toString()}`;
-    }
-
-    load(key: string | null): string | null {
-        if (!key || !this.supportsStorage()) {
-            return null;
-        }
-        try {
-            return window.localStorage.getItem(key);
-        } catch {
-            return null;
-        }
-    }
-
-    save(key: string | null, value: string): void {
-        if (!key || !this.supportsStorage()) {
-            return;
-        }
-        try {
-            window.localStorage.setItem(key, value);
-        } catch {
-            // Ignore storage failures so realtime usage continues normally.
-        }
-    }
-
-    clear(key: string | null): void {
-        if (!key || !this.supportsStorage()) {
-            return;
-        }
-        try {
-            window.localStorage.removeItem(key);
-        } catch {
-            // Ignore storage failures so realtime usage continues normally.
-        }
-    }
-}
-
-function resolveWebServiceURLs(
-    websocketURL: ResolvableURL,
-    config?: SessionServiceURLConfig,
-): SessionServiceURLs {
-    const httpURL = resolveBaseURL(websocketURL);
-    if (httpURL.protocol === "ws:") {
-        httpURL.protocol = "http:";
-    } else if (httpURL.protocol === "wss:") {
-        httpURL.protocol = "https:";
-    }
-
-    const defaultSessionDetail = (sessionId: string) =>
-        new URL(`./api/sessions/${encodeURIComponent(sessionId)}`, httpURL);
-    const configuredSessionDetail = config?.sessionDetail;
-
-    return {
-        login: config?.login ?? new URL("./api/auth/login", httpURL),
-        sessions: config?.sessions ?? new URL("./api/sessions", httpURL),
-        sessionDetail: typeof configuredSessionDetail === "function"
-            ? configuredSessionDetail
-            : (sessionId: string) => configuredSessionDetail ?? defaultSessionDetail(sessionId),
-        upload: config?.upload ?? new URL("./api/upload", httpURL),
-    };
-}
-
-function buildWebSocketURLWithAccessToken(
-    websocketURL: ResolvableURL,
-    accessToken: string,
-): URL {
-    const url = resolveBaseURL(websocketURL);
-    url.searchParams.set("access_token", accessToken);
-    return url;
 }
 
 interface WebInputAudioSessionConfig extends InputAudioSessionConfig {
     // Whether to enable VAD on client. Defaults to true.
     enableVAD?: boolean;
-    // Whether to enable enhancer on client. Defaults to true.
+    // Whether to enable enhancer on client. Defaults to true if enhancer model is available.
     enableEnhancer?: boolean;
     // VAD redemption window in milliseconds.
     vadRedemptionMs?: number;
@@ -309,7 +99,6 @@ class WebInputAudioSession extends BaseInputAudioSession {
             submitUserSpeechOnPause: false
         }
     }
-    readonly MAX_VAD_QUEUE_FRAMES = 8;
     readonly ENHANCER_PARAMS = {
         hopSize: 256,
         nFFT: 512,
@@ -420,6 +209,7 @@ class WebInputAudioSession extends BaseInputAudioSession {
         const onFrameProcessorEvent = (ev: { msg: any; frame: Float32Array; probs: { notSpeech: number; }; }) => {
             switch (ev.msg) {
                 case window.vad.Message.FrameProcessed:
+                    const frame = ev.frame;
                     if (vadHelpers.negEndCounterEnabled) {
                         const ns = Number(ev?.probs?.notSpeech ?? 0);
                         const nsHigh = ns > (1 - this.VAD_PARAMS.vadConfig.negativeSpeechThreshold);
@@ -429,6 +219,9 @@ class WebInputAudioSession extends BaseInputAudioSession {
                             vadHelpers.negEndCounterEnabled = false;
                             vadHelpers.negEndCounter = 0;
                         }
+                    }
+                    if (!this.muted) {
+                        this.frameCallback(this.float32ToInt16(frame));
                     }
                     break;
 
@@ -450,26 +243,14 @@ class WebInputAudioSession extends BaseInputAudioSession {
         frameProcessNode.port.onmessage = async (event) => {
             if (event.data.type === 'audioFrame') {
                 if (this.muted) return;
-                const frame = event.data.frame as Float32Array;
-                // Keep microphone upload real-time; VAD must not be allowed to stall ASR input.
-                this.frameCallback(this.float32ToInt16(frame));
-                if (frameQueue.length >= this.MAX_VAD_QUEUE_FRAMES) {
-                    frameQueue.splice(0, frameQueue.length - this.MAX_VAD_QUEUE_FRAMES + 1);
-                }
-                frameQueue.push(frame);
+                frameQueue.push(event.data.frame);
                 if (isProcessingFrameQueue) return;
                 isProcessingFrameQueue = true;
-                try {
-                    while (frameQueue.length > 0) {
-                        const queuedFrame = frameQueue.shift();
-                        if (!queuedFrame) {
-                            continue;
-                        }
-                        await frameProcessor.process(queuedFrame, onFrameProcessorEvent);
-                    }
-                } finally {
-                    isProcessingFrameQueue = false;
+                while (frameQueue.length > 0) {
+                    const frame = frameQueue.shift();
+                    await frameProcessor.process(frame, onFrameProcessorEvent);
                 }
+                isProcessingFrameQueue = false;
             }
         };
         frameProcessor.resume();
@@ -479,15 +260,12 @@ class WebInputAudioSession extends BaseInputAudioSession {
         audioContext: AudioContext;
         frameProcessNode: AudioWorkletNode;
     }> {
-        const audioContext = new window.AudioContext({ sampleRate: this.config.sampleRate });
-        const inputStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                channelCount: 1,
-                echoCancellation: true,
-                autoGainControl: true,
-                noiseSuppression: false
-            }
-        });
+        const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContextCtor) {
+            throw new Error('AudioContext is not supported in current browser');
+        }
+        const audioContext = new AudioContextCtor({ sampleRate: this.config.sampleRate }) as AudioContext;
+        const inputStream = await this.requestMicrophoneStream();
         const sourceNode = audioContext.createMediaStreamSource(inputStream);
         await audioContext.audioWorklet.addModule(vadProcessorUrl);
         const frameProcessNode = new AudioWorkletNode(audioContext, 'vad-processor', {
@@ -502,6 +280,36 @@ class WebInputAudioSession extends BaseInputAudioSession {
         frameProcessNode.connect(silentGainNode);
         silentGainNode.connect(audioContext.destination);
         return { audioContext, frameProcessNode };
+    }
+
+    private async requestMicrophoneStream(): Promise<MediaStream> {
+        const constraints: MediaStreamConstraints = {
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                autoGainControl: true,
+                noiseSuppression: false
+            }
+        };
+
+        const isLocalhost = /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+        if (!window.isSecureContext && !isLocalhost) {
+            throw new Error('Microphone access requires HTTPS (or localhost). Please use https:// on mobile browsers.');
+        }
+
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+            return navigator.mediaDevices.getUserMedia(constraints);
+        }
+
+        const nav = navigator as any;
+        const legacyGetUserMedia = nav.getUserMedia || nav.webkitGetUserMedia || nav.mozGetUserMedia || nav.msGetUserMedia;
+        if (typeof legacyGetUserMedia === 'function') {
+            return new Promise<MediaStream>((resolve, reject) => {
+                legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+            });
+        }
+
+        throw new Error('getUserMedia is not supported in this browser');
     }
 
     private async setupEnhancer(): Promise<{
@@ -679,7 +487,6 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
     private audioTimeToPlay = 0;
     private audioChunkStartedTimeouts: ReturnType<typeof createPausableTimeout>[] = [];
     private audioChunksPaused: ArrayBuffer[] = [];
-    private serverTtsFinished = false;
     constructor(private config: OutputAudioSessionConfig) {
         super();
     }
@@ -740,20 +547,8 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         this.audioBufferSources.length = 0;
         this.audioTimeToPlay = 0;
         this.audioChunksPaused.length = 0;
-        this.serverTtsFinished = false;
         // DO NOT suspend to avoid pop sounds after restart
         // await this.audioContext?.suspend();
-    }
-    async notifyTTSFinished(): Promise<void> {
-        this.serverTtsFinished = true;
-        await this.maybeNotifyPlaybackFinished();
-    }
-    private async maybeNotifyPlaybackFinished(): Promise<void> {
-        if (!this.serverTtsFinished || this.audioBufferSources.length !== 0) {
-            return;
-        }
-        this.serverTtsFinished = false;
-        await this.allChunksPlayedCallback();
     }
     async pushAudioChunk(pcm_chunk_int16: ArrayBuffer): Promise<void> {
         if (!this.audioContext) {
@@ -784,7 +579,10 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             // Remove this source from the list
             const idx = this.audioBufferSources.indexOf(source);
             if (idx !== -1) this.audioBufferSources.splice(idx, 1);
-            void this.maybeNotifyPlaybackFinished();
+            // If this is the last scheduled chunk, trigger onAllChunksPlayed
+            if (this.audioBufferSources.length === 0) {
+                this.allChunksPlayedCallback();
+            }
         };
 
         // Add to buffer sources list before starting

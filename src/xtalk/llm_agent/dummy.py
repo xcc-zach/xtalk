@@ -1,4 +1,4 @@
-from typing import Union, Any
+from typing import Union
 from .interfaces import Agent, AgentInput
 
 
@@ -34,9 +34,6 @@ class DummyAgent(Agent):
             str: The predefined test response
         """
         return self.default_response
-
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        return None
 
     def clone(self) -> "Agent":
         return DummyAgent(self.default_response)

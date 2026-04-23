@@ -1,4 +1,4 @@
-> **Note**
+> [!NOTE]
 > See `examples/sample_app/configurable_server.py` and `frontend/src/js/index.js` for details.
     
 X-Talk can understand documents uploaded through embedding search. To enable embedding, you need `langchain_openai.OpenAIEmbeddings` in the config:

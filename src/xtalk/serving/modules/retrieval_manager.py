@@ -33,11 +33,11 @@ class RetrievalManager(Manager):
         retrieval tools, which are rebroadcast as RetrievalUpdated events.
         """
         try:
-            name = event.name or ""
+            name = getattr(event, "name", "") or ""
             if name != "tool_call_result":
                 return
 
-            args = event.args or {}
+            args = getattr(event, "args", {}) or {}
             orig_tool = str(args.get("name", "") or "")
             content = str(args.get("content", "") or "")
             if orig_tool not in [WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL]:

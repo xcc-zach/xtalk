@@ -3,37 +3,13 @@ from abc import ABC, abstractmethod
 
 
 class Rewriter(ABC):
-    """Abstract interface for text rewriting helpers."""
-
     @abstractmethod
     def rewrite(self, input: str) -> str:
-        """Rewrite input text.
-
-        Parameters
-        ----------
-        input : str
-            Source text to rewrite.
-
-        Returns
-        -------
-        str
-            Rewritten text.
-        """
+        """Rewrite input text."""
         pass
 
     async def async_rewrite(self, input: str) -> str:
-        """Asynchronously rewrite input text.
-
-        Parameters
-        ----------
-        input : str
-            Source text to rewrite.
-
-        Returns
-        -------
-        str
-            Rewritten text.
-        """
+        """Async wrapper running the sync rewrite in a thread pool."""
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.rewrite, input)

@@ -36,61 +36,47 @@
             </div>
         </div>
     </header>
-    <main class="container app-shell">
-        <aside class="sidebar card">
-            <div class="sidebar-header">
-                <div>
-                    <div class="sidebar-eyebrow">History</div>
-                    <h2>Sessions</h2>
-                </div>
-                <button id="btn-refresh-sessions" class="sidebar-action">Refresh</button>
+    <main class="container">
+        <div id="latency-bar" class="latency-bar">
+            <span class="latency-item">Network: <span id="latency-network">--</span>ms</span>
+            <span class="latency-item">ASR: <span id="latency-asr">--</span>ms</span>
+            <span class="latency-item">LLM First Token: <span id="latency-llm-first">--</span>ms</span>
+            <span class="latency-item">LLM Sentence: <span id="latency-llm-sentence">--</span>ms</span>
+            <span class="latency-item">TTS First Chunk: <span id="latency-tts">--</span>ms</span>
+            <span class="latency-item latency-e2e">E2E: <span id="latency-e2e">--</span>ms</span>
+        </div>
+        <div id="recent-audio-card" class="card recent-audio-card is-hidden" aria-hidden="true">
+            <div class="recent-audio-header">
+                <span id="recent-audio-status" class="recent-audio-status">Waiting for server full audio stream</span>
             </div>
-            <button id="btn-new-session" class="new-session-btn">New Session</button>
-            <div id="session-list-empty" class="sidebar-empty">No sessions yet.</div>
-            <div id="session-list" class="session-list" role="list"></div>
-        </aside>
-        <section class="content-area">
-            <div id="latency-bar" class="latency-bar">
-                <span class="latency-item">Network: <span id="latency-network">--</span>ms</span>
-                <span class="latency-item">ASR: <span id="latency-asr">--</span>ms</span>
-                <span class="latency-item">LLM First Token: <span id="latency-llm-first">--</span>ms</span>
-                <span class="latency-item">LLM Sentence: <span id="latency-llm-sentence">--</span>ms</span>
-                <span class="latency-item">TTS First Chunk: <span id="latency-tts">--</span>ms</span>
-                <span class="latency-item latency-e2e">E2E: <span id="latency-e2e">--</span>ms</span>
+            <div id="recent-audio-panel" class="recent-audio-panel">
+                <audio id="recent-audio-player" class="recent-audio-player" controls preload="metadata"></audio>
+                <div class="recent-audio-hint">Shows a snapshot of the latest 60 seconds of server full audio.</div>
             </div>
-            <div id="recent-audio-card" class="card recent-audio-card is-hidden" aria-hidden="true">
-                <div class="recent-audio-header">
-                    <span id="recent-audio-status" class="recent-audio-status">Waiting for server full audio stream</span>
-                </div>
-                <div id="recent-audio-panel" class="recent-audio-panel">
-                    <audio id="recent-audio-player" class="recent-audio-player" controls preload="metadata"></audio>
-                    <div class="recent-audio-hint">Shows a snapshot of the latest 60 seconds of server full audio.</div>
-                </div>
-            </div>
-            <div class="card">
-                <canvas id="waveform"></canvas>
-            </div>
-            <div class="card">
-                <div id="messages"></div>
-            </div>
-            <div class="toggle-bar">
-                <button id="btn-toggle-thought" class="toggle-btn active">Thought</button>
-                <button id="btn-toggle-caption" class="toggle-btn active">Caption</button>
-                <button id="btn-toggle-retrieval" class="toggle-btn active">Retrieval</button>
-            </div>
-            <div id="panel-thought" class="card panel">
-                <div class="panel-label">Thought</div>
-                <div id="thought-content" class="panel-content"></div>
-            </div>
-            <div id="panel-caption" class="card panel">
-                <div class="panel-label">Caption</div>
-                <div id="caption-content" class="panel-content"></div>
-            </div>
-            <div id="panel-retrieval" class="card panel">
-                <div class="panel-label">Retrieval</div>
-                <div id="retrieval-content" class="panel-content"></div>
-            </div>
-        </section>
+        </div>
+        <div class="card">
+            <canvas id="waveform"></canvas>
+        </div>
+        <div class="card">
+            <div id="messages"></div>
+        </div>
+        <div class="toggle-bar">
+            <button id="btn-toggle-thought" class="toggle-btn active">Thought</button>
+            <button id="btn-toggle-caption" class="toggle-btn active">Caption</button>
+            <button id="btn-toggle-retrieval" class="toggle-btn active">Retrieval</button>
+        </div>
+        <div id="panel-thought" class="card panel">
+            <div class="panel-label">Thought</div>
+            <div id="thought-content" class="panel-content"></div>
+        </div>
+        <div id="panel-caption" class="card panel">
+            <div class="panel-label">Caption</div>
+            <div id="caption-content" class="panel-content"></div>
+        </div>
+        <div id="panel-retrieval" class="card panel">
+            <div class="panel-label">Retrieval</div>
+            <div id="retrieval-content" class="panel-content"></div>
+        </div>
     </main>
     <footer>
         Xtalk Dev

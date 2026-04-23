@@ -25,15 +25,7 @@ class EventHandler:
 
 
 class EventBus:
-    """Publish and subscribe session events with async dispatch support.
-
-    Parameters
-    ----------
-    enable_history : bool, optional
-        Whether to store published events in memory for later inspection.
-    max_history : int, optional
-        Maximum number of events kept when history is enabled.
-    """
+    """Event bus abstraction with recursion protection."""
 
     # Max error event recursion depth
     MAX_ERROR_EVENT_DEPTH = 3
@@ -43,14 +35,12 @@ class EventBus:
     ERROR_EVENT_RATE_LIMIT = 10
 
     def __init__(self, enable_history: bool = False, max_history: int = 1000):
-        """Initialize the event bus.
+        """
+        Initialize the event bus.
 
-        Parameters
-        ----------
-        enable_history : bool, optional
-            Whether to record published events in the in-memory history buffer.
-        max_history : int, optional
-            Maximum number of events retained in history.
+        Args:
+            enable_history: whether to track event history
+            max_history: max number of history entries
         """
         # Map of event type string to handlers
         # {event_type(str): [EventHandler]}
@@ -91,7 +81,7 @@ class EventBus:
             return event_identifier
         # Prefer TYPE attribute on event class
         try:
-            evt_type = event_identifier.TYPE
+            evt_type = getattr(event_identifier, "TYPE", None)
             if isinstance(evt_type, str) and evt_type:
                 return evt_type
         except Exception:
@@ -108,16 +98,13 @@ class EventBus:
         handler: Callable[[BaseEvent], Any],
         priority: int = 0,
     ) -> None:
-        """Subscribe a handler to an event type.
+        """
+        Subscribe to an event.
 
-        Parameters
-        ----------
-        event_class : Type[BaseEvent] | str
-            Event class or event type string such as ``"tts.started"``.
-        handler : Callable[[BaseEvent], Any]
-            Sync or async callable invoked for matching events.
-        priority : int, optional
-            Higher values run earlier.
+        Args:
+            event_class: event class or type string (e.g., "tts.started")
+            handler: callable invoked for the event
+            priority: higher numbers run earlier
         """
         event_handler = EventHandler(handler=handler, priority=priority)
 
@@ -132,19 +119,15 @@ class EventBus:
     def unsubscribe(
         self, event_class: Union[Type[BaseEvent], str], handler: Callable
     ) -> bool:
-        """Unsubscribe a handler from an event type.
+        """
+        Unsubscribe a handler from an event.
 
-        Parameters
-        ----------
-        event_class : Type[BaseEvent] | str
-            Event class or event type string.
-        handler : Callable
-            Previously subscribed handler to remove.
+        Args:
+            event_class: event class or type string
+            handler: callable to remove
 
-        Returns
-        -------
-        bool
-            ``True`` if the handler was removed, otherwise ``False``.
+        Returns:
+            True if removed, False otherwise
         """
         key = self._get_event_key(event_class)
         handlers = self._handlers.get(key, [])
@@ -159,19 +142,15 @@ class EventBus:
     async def publish(
         self, event: BaseEvent, wait_for_completion: bool = False
     ) -> bool:
-        """Publish an event to all matching handlers.
+        """
+        Publish an event.
 
-        Parameters
-        ----------
-        event : BaseEvent
-            Event instance to dispatch.
-        wait_for_completion : bool, optional
-            Whether to await handler completion before returning.
+        Args:
+            event: event object
+            wait_for_completion: whether to await all handlers
 
-        Returns
-        -------
-        bool
-            ``True`` on success, otherwise ``False``.
+        Returns:
+            True on success, False otherwise
         """
         try:
             self._stats["events_published"] += 1
@@ -252,10 +231,7 @@ class EventBus:
                 )
 
     async def _publish_error_event_safe(
-        self,
-        session_id: str,
-        error_type: str,
-        error_message: str,
+        self, session_id: str, error_type: str, error_message: str, component: str
     ) -> None:
         """
         Safely publish an error event with recursion protection.
@@ -270,6 +246,7 @@ class EventBus:
             session_id: session identifier
             error_type: type of error
             error_message: error message
+            component: component that raised the error
         """
         # Check recursion depth
         if self._error_event_depth >= self.MAX_ERROR_EVENT_DEPTH:
@@ -313,6 +290,7 @@ class EventBus:
                     session_id=session_id,
                     error_type=error_type,
                     error_message=error_message,
+                    component=component,
                 )
 
                 # Publish error event (fire-and-forget to avoid blocking)

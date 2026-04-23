@@ -1,18 +1,17 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Iterable, Union, TypedDict, List, AsyncIterator, Callable, Any
+from typing import Iterable, Union, TypedDict, List, AsyncIterator, Callable
+from langchain.chat_models.base import BaseChatModel
 from ..pipelines.context import PipelineContext
 from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 
 
 class AgentInput(TypedDict):
-    """Structured payload for agent generation input.
+    """Structured payload for LLM generation input.
 
-    Notes
-    -----
-    ``content`` stores the raw user text and ``context`` carries the current
-    ``PipelineContext``.
+    - content: raw user text
+    - context: pipeline context (PipelineContext)
     """
 
     content: str
@@ -20,44 +19,30 @@ class AgentInput(TypedDict):
 
 
 class Agent(ABC):
-    """Abstract interface for conversational agents used by Xtalk."""
-
     @abstractmethod
     def generate(
         self, input: Union[str, AgentInput]
     ) -> Union[str, tuple[str, List[ToolCall]]]:
-        """Generate a complete response for the input.
+        """
+        Generate a full reply for the input.
 
-        Parameters
-        ----------
-        input : str | AgentInput
-            Raw user text or a structured payload containing both text and
-            pipeline context.
+        Input formats:
+        - str: just raw text (no context)
+        - dict: {"content": raw text, "context": PipelineContext}
 
-        Returns
-        -------
-        str | tuple[str, List[ToolCall]]
-            Plain response text, or a ``(text, tool_calls)`` tuple when tool
-            calls should be surfaced alongside the final text.
+        Return format (backward compatible):
+        - plain `str` reply, or
+        - `(text, tool_calls)` tuple when tool invocations exist, where
+          text is the reply and tool_calls is a List[ToolCall]
         """
         pass
 
     def generate_stream(
         self, input: Union[str, AgentInput]
-    ) -> Iterable[Union[str, ToolCall, dict[str, Any]]]:
-        """Stream response chunks for the input.
+    ) -> Iterable[Union[str, ToolCall]]:
+        """Stream responses for the input (same format as `generate`).
 
-        Parameters
-        ----------
-        input : str | AgentInput
-            Raw user text or structured agent input.
-
-        Yields
-        ------
-        str | ToolCall | dict[str, Any]
-            Tool calls, tool-result payloads, followed by text chunks. The
-            default implementation delegates to ``generate()`` and yields its
-            result in streaming form.
+        Default implementation runs `generate` first, then yields text/tool_calls.
         """
         result = self.generate(input)
         if isinstance(result, tuple):
@@ -72,18 +57,7 @@ class Agent(ABC):
     async def async_generate(
         self, input: Union[str, AgentInput]
     ) -> Union[str, tuple[str, List[ToolCall]]]:
-        """Asynchronously generate a complete response.
-
-        Parameters
-        ----------
-        input : str | AgentInput
-            Raw user text or structured agent input.
-
-        Returns
-        -------
-        str | tuple[str, List[ToolCall]]
-            Same result contract as ``generate()``.
-        """
+        """Async wrapper around `generate`, running sync logic in an executor."""
 
         loop = asyncio.get_running_loop()
 
@@ -94,19 +68,8 @@ class Agent(ABC):
 
     async def async_generate_stream(
         self, input: Union[str, AgentInput]
-    ) -> AsyncIterator[Union[str, ToolCall, dict[str, Any]]]:
-        """Asynchronously stream agent outputs.
-
-        Parameters
-        ----------
-        input : str | AgentInput
-            Raw user text or structured agent input.
-
-        Yields
-        ------
-        str | ToolCall | dict[str, Any]
-            Streamed outputs from ``generate_stream()``.
-        """
+    ) -> AsyncIterator[Union[str, ToolCall]]:
+        """Async streaming wrapper pulling from the sync generator in executor."""
 
         loop = asyncio.get_running_loop()
         iterator = iter(self.generate_stream(input))
@@ -135,42 +98,15 @@ class Agent(ABC):
 
     @abstractmethod
     def clone(self) -> "Agent":
-        """Clone the agent for a new session.
-
-        Returns
-        -------
-        Agent
-            Session-safe agent instance.
-        """
         pass
 
-    @abstractmethod
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Restore persisted conversation messages into the agent state.
-
-        Parameters
-        ----------
-        messages : list[dict[str, Any]]
-            Persisted chat messages ordered by session history.
-        """
-        pass
+    def get_llm(self) -> BaseChatModel | None:
+        """Return the underlying LLM instance if available."""
+        return None
 
     def get_chat_history(self) -> str | None:
-        """Return the serialized conversation history when available.
-
-        Returns
-        -------
-        str | None
-            Conversation history or ``None``.
-        """
+        """Return textual conversation history if available."""
         return None
 
     def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]):
-        """Attach tools to the agent.
-
-        Parameters
-        ----------
-        tools : list[BaseTool | Callable[[], BaseTool]]
-            Tool instances or factories that produce tool instances.
-        """
         pass

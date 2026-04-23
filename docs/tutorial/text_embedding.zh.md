@@ -1,4 +1,4 @@
-> **Note**
+> [!NOTE]
 > 详情请参阅 `examples/sample_app/configurable_server.py` 和 `frontend/src/js/index.js`。
 
 X-Talk 可以通过嵌入检索来理解用户上传的文档。要启用嵌入功能，您需要在配置中使用 `langchain_openai.OpenAIEmbeddings`：

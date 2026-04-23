@@ -3,10 +3,10 @@ Silero VAD wrapper that mimics webrtcvad.Vad API (`is_speech`).
 It keeps an internal VADIterator so it can be called chunk-by-chunk.
 """
 
+
 from pathlib import Path
 import shutil
 import tempfile
-import threading
 from urllib.request import urlopen
 import zipfile
 
@@ -67,7 +67,6 @@ class SileroVAD(VAD):
 
         self.threshold = threshold
         self.window_samples = 512
-        self._inference_lock = threading.Lock()
 
     def is_speech(self, frame: bytes) -> bool:
         # int16 PCM ➜ float32 tensor
@@ -79,14 +78,12 @@ class SileroVAD(VAD):
         prob: float = 0.0  # probability of the last processed chunk
 
         # Iterate over the waveform using fixed windows
-        # TODO: Parallelize Silero VAD safely without sharing one JIT model instance across concurrent calls.
-        with self._inference_lock:
-            for start in range(0, wav.shape[1], num_samples):
-                chunk = wav[:, start : start + num_samples]
-                if chunk.shape[1] < num_samples:
-                    break
-                # VADIterator returns speech probability for this chunk
-                prob = float(self._model(chunk.squeeze(0), 16000).item())
+        for start in range(0, wav.shape[1], num_samples):
+            chunk = wav[:, start : start + num_samples]
+            if chunk.shape[1] < num_samples:
+                break
+            # VADIterator returns speech probability for this chunk
+            prob = float(self._model(chunk.squeeze(0), 16000).item())
 
         # Use the probability of the last full chunk as the speech decision
         return prob >= self.threshold

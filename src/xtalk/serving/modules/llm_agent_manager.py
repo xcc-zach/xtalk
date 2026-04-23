@@ -22,13 +22,13 @@ from ..events import (
     LLMModelSwitchRequested,
     LLMFirstChunk,
 )
-from ..interfaces import Manager, TurnStateRestorable
+from ..interfaces import Manager
 from ...pipelines import Pipeline
 from ...pipelines.context import PipelineContext
 from ...llm_agent import Agent
 
 
-class LLMAgentManager(Manager, TurnStateRestorable):
+class LLMAgentManager(Manager):
     """Drive LLM agent generation and coordinate TTS streaming."""
 
     def __init__(
@@ -230,6 +230,7 @@ class LLMAgentManager(Manager, TurnStateRestorable):
                     TurnTTSTextAppendRequested(
                         session_id=self.session_id,
                         text=chunk_text,
+                        reason="llm_stream",
                     ),
                 )
         except asyncio.CancelledError:
@@ -317,6 +318,3 @@ class LLMAgentManager(Manager, TurnStateRestorable):
 
     async def shutdown(self) -> None:
         await self._cancel_running_task()
-
-    def restore_turn_state(self, *, last_turn_id: int) -> None:
-        self._turn_id = last_turn_id

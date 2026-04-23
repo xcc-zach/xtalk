@@ -22,14 +22,6 @@ dynamic         = ["version"]
 
 [project.optional-dependencies]
 dev  = ["pytest", "pytest-cov"]
-testing = [
-  "requests",
-  "soundfile",
-  "websockets",
-  "uvicorn[standard]",
-  "soxr",
-  "torch",
-]
 ali = [
   "dashscope >=1.25.3"
 ]
@@ -130,8 +122,7 @@ soulx-duplug = [
   "websockets",
 ]
 example = [
-  "pypdf",
-  "fastapi==0.128.0"
+  "pypdf"
 ]
 [tool.setuptools]
 package-dir = {"" = "src"}

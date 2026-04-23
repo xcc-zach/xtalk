@@ -109,7 +109,7 @@ class SpeakerManager(Manager):
             self.audio_buffer.append(
                 {
                     "data": event.audio_data,
-                    "sample_rate": event.sample_rate,
+                    "sample_rate": getattr(event, "sample_rate", 16000),
                 }
             )
 

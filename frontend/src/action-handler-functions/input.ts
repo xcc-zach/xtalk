@@ -1,8 +1,14 @@
 import type { ActionToFunctionMap } from "./types";
 import { onVadSpeechStart, onVadSpeechEnd } from "./utils";
-import { createEncoding } from "../encoding";
 
-const encoding = createEncoding();
+function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
 
 const inputMap: ActionToFunctionMap = {
     "vad_speech_start": async (data, websocket, conversation, outputAudioSession) => {
@@ -17,7 +23,7 @@ const inputMap: ActionToFunctionMap = {
             return;
         }
         const sampleRate = typeof data?.sample_rate === "number" ? data.sample_rate : 48000;
-        const pcmChunkInt16 = encoding.decodeBase64(audioBase64);
+        const pcmChunkInt16 = decodeBase64ToArrayBuffer(audioBase64);
         conversation.emitFullAudioChunk(pcmChunkInt16, sampleRate);
     }
 };
