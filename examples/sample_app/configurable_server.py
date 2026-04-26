@@ -19,7 +19,25 @@ mute_other_logging()
 parser = argparse.ArgumentParser(description="Xtalk Dev Server")
 parser.add_argument("--config", type=str, help="Path to the server configuration file")
 parser.add_argument("--port", type=int, help="Port number for the server to listen on")
+parser.add_argument(
+    "--ssl-certfile",
+    type=str,
+    help="Path to the SSL certificate file for HTTPS",
+)
+parser.add_argument(
+    "--ssl-keyfile",
+    type=str,
+    help="Path to the SSL private key file for HTTPS",
+)
+parser.add_argument(
+    "--ssl-keyfile-password",
+    type=str,
+    help="Password for the SSL private key file, if required",
+)
 args = parser.parse_args()
+
+if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
+    parser.error("--ssl-certfile and --ssl-keyfile must be provided together")
 
 app = FastAPI(title="Xtalk Dev Server")
 
@@ -79,4 +97,11 @@ async def read_root(request: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=args.port or 11995)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=args.port or 11995,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_keyfile_password=args.ssl_keyfile_password,
+    )
