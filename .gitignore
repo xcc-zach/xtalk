@@ -185,3 +185,5 @@ examples/sample_server/node_modules/
 /logs/
 server_configs/
 /data/
+wx_and_web/node_modules/
+wx_and_web/dist/

@@ -1,0 +1,249 @@
+page,
+view,
+text,
+scroll-view,
+image,
+button,
+input {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #0f172a;
+    color: #e5e7eb;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem;
+    width: 100%;
+}
+
+.page-header {
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    padding: 1rem 0;
+}
+
+.page-title {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.status {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+.value-text {
+    color: #60a5fa;
+    font-weight: 600;
+}
+
+.controls {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+button {
+    padding: 0.5rem 1rem;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+button:hover:not(:disabled) {
+    background: #2563eb;
+}
+
+button:disabled {
+    background: #475569;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.page-main {
+    flex: 1;
+    padding: 2rem 1rem;
+}
+
+.latency-bar {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding: 0.5rem 0.75rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.latency-e2e {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.is-hidden {
+    display: none !important;
+}
+
+#waveform {
+    width: 100%;
+    height: 200px;
+    display: block;
+    background: #0f172a;
+    border-radius: 0.375rem;
+}
+
+.recent-audio-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+}
+
+.recent-audio-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.recent-audio-toggle {
+    background: #0f766e;
+}
+
+.recent-audio-toggle:hover:not(:disabled) {
+    background: #0d9488;
+}
+
+.recent-audio-status {
+    font-size: 0.8125rem;
+    color: #94a3b8;
+}
+
+.recent-audio-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.875rem;
+    border-radius: 0.5rem;
+    background: #0f172a;
+    border: 1px solid #334155;
+}
+
+.recent-audio-player {
+    width: 100%;
+}
+
+.recent-audio-hint {
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+#messages {
+    max-height: 400px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.message {
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    max-width: 80%;
+    word-wrap: break-word;
+}
+
+.message-user {
+    background: #334155;
+    align-self: flex-end;
+}
+
+.message-assistant {
+    background: #1e3a5f;
+    align-self: flex-start;
+}
+
+.message-info {
+    background: #374151;
+    align-self: center;
+    font-style: italic;
+    color: #94a3b8;
+}
+
+.toggle-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.toggle-btn {
+    background: #475569;
+    font-size: 0.75rem;
+    padding: 0.375rem 0.75rem;
+}
+
+.toggle-btn.active {
+    background: #3b82f6;
+}
+
+.panel .panel-label {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.panel .panel-content {
+    font-size: 0.875rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.page-footer {
+    background: #1e293b;
+    border-top: 1px solid #334155;
+    padding: 1rem;
+    text-align: center;
+    font-size: 0.875rem;
+    color: #94a3b8;
+}
+
+@media (max-width: 640px) {
+    .recent-audio-header {
+        align-items: flex-start;
+    }
+}

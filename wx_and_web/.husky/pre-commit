@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+echo "Running ESLint..."
+pnpm run lint:fix
+echo "ESLint completed."

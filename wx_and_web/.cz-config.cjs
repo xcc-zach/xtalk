@@ -1,0 +1,38 @@
+module.exports = {
+  types: [
+    { value: 'feat', name: '✨ feat:   新功能' },
+    { value: 'fix', name: '🐛 fix:   修复BUG' },
+    { value: 'docs', name: '📝 docs:   文档变更' },
+    { value: 'style', name: '🎨 style:  代码样式优化' },
+    { value: 'perf', name: '⚡️ perf:   性能优化' },
+    { value: 'refactor', name: '♻️  refactor: 重构' },
+    { value: 'chore', name: '🔧 chore:   构建或辅助工具更新' },
+  ],
+  scopes: [
+    ['components', '组件相关修改'],
+    ['hooks', '自定义 Hook 修改'],
+    ['utils', '工具函数/类库修改'],
+    ['styles', '全局样式/主题修改'],
+    ['deps', '依赖包更新/管理'],
+    ['config', '构建配置/环境变量'],
+    ['router', '路由配置/导航守卫'],
+    ['store', '状态管理（Pinia）'],
+    ['api', '接口/API 层修改'],
+    ['i18n', '国际化/多语言'],
+    ['assets', '静态资源管理'],
+    ['layout', '全局布局调整'],
+    ['auth', '权限系统相关'],
+  ].map(([value, description]) => ({
+    value,
+    name: `${value.padEnd(20)} (${description})`,
+  })),
+  messages: {
+    type: '选择提交类型:',
+    scope: '影响范围(可选):',
+    subject: '简短说明(必填):',
+    body: '详细说明(换行使用|):',
+    confirmCommit: '确认提交？',
+  },
+  allowCustomScopes: false,
+  subjectLimit: 100,
+}
