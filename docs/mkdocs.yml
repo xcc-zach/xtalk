@@ -53,8 +53,14 @@ plugins:
             'Customize the Pipeline': 定制X-Talk逻辑
             Testing: 测试
             # Tabs under Docs
+            'Overall Architecture': 整体架构
             'Supported Models': 支持的模型
             'Service Configuration': 服务配置项
+            'ASR Design': ASR设计
+            'TTS Design': TTS设计
+            'VAD Design': VAD设计
+            'Turn Detector Design': Turn Detector设计
+            'Model clone() and reset()': 模型对象的clone()与reset()语义
             # Tabs under API
             'Client': 客户端
             'Server': 服务端
@@ -74,8 +80,14 @@ nav:
       - 'Customize the Pipeline': tutorial/customize_the_pipeline.md
       - Testing: tutorial/testing.md
   - Docs:
+      - 'Overall Architecture': docs/system_design.md
       - 'Supported Models': docs/supported_models.md
       - 'Service Configuration': docs/service_config.md
+      - 'ASR Design': docs/asr_design.md
+      - 'TTS Design': docs/tts_design.md
+      - 'VAD Design': docs/vad_design.md
+      - 'Turn Detector Design': docs/turn_detector_design.md
+      - 'Model clone() and reset()': docs/model_clone_reset.md
   - API:
       - 'Client': api/client/globals.md
       - 'Server': api/server/index.md
