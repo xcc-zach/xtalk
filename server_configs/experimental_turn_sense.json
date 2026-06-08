@@ -1,0 +1,42 @@
+{
+    "asr": {
+        "type": "Qwen3ASRFlashRealtime",
+        "params": {
+            "api_key": "sk-f6ce958fa01d4f0583ca27c7e66b96ff"
+        }
+    },
+    "llm_agent": {
+        "type": "ExperimentalAgent",
+        "params": {
+            "model": {
+                "api_key": "sk-f6ce958fa01d4f0583ca27c7e66b96ff",
+                "model": "qwen3.6-plus",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "extra_body": {
+                    "chat_template_kwargs": {
+                        "enable_thinking": false
+                    }
+                }
+            }
+        }
+    },
+    "tts": {
+        "type": "CosyVoice",
+        "params": {
+            "api_key": "sk-f6ce958fa01d4f0583ca27c7e66b96ff"
+        }
+    },
+    "vad": {
+        "type": "SileroVAD",
+        "params": {}
+    },
+    "turn_detector": {
+        "type": "TurnSense",
+        "params": {
+            "base_url": "http://127.0.0.1:8321"
+        }
+    },
+    "service_config": {
+        "recording": true
+    }
+}
