@@ -137,6 +137,12 @@ class AudioConsumer:
             logger.warning(f"AudioConsumer ended repeatedly; do early return")
             return
         self._ended = True
+        if self._paused:
+            # Reuse the pause-time recognition result to avoid re-entering ASR
+            # during the pause->finalize handoff.
+            await self._publish_final_from_cached_text()
+            await self._reset_states()
+            return
         await self._stop_consumer()
         audio = await self._audio_queue.get()
         await self._recognize_and_publish(audio, is_asr_end=True, is_final_chunk=True)
@@ -198,13 +204,7 @@ class AudioConsumer:
             return
         if is_asr_end:
             self._recognized_text = recognized_text
-            await self._publish_event(
-                ASRResultFinal(
-                    session_id=self._session_id,
-                    text=recognized_text,
-                    display_text=recognized_text,
-                )
-            )
+            await self._publish_final_text(recognized_text)
         else:
             if recognized_text == self._recognized_text and not is_final_chunk:
                 return
@@ -225,6 +225,22 @@ class AudioConsumer:
 
     async def _publish_event(self, event: BaseEvent):
         await self._event_bus.publish(event)
+
+    async def _publish_final_text(self, text: str) -> None:
+        """Publish one final ASR result."""
+        await self._publish_event(
+            ASRResultFinal(
+                session_id=self._session_id,
+                text=text,
+                display_text=text,
+            )
+        )
+
+    async def _publish_final_from_cached_text(self) -> None:
+        """Publish the cached recognition result as the final ASR result."""
+        if self._is_blank_text(self._recognized_text):
+            return
+        await self._publish_final_text(self._recognized_text)
 
     async def _reset_states(self):
         self._recognized_text = ""
