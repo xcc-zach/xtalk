@@ -145,6 +145,19 @@ Turn detectors decide when the user has finished speaking and the system should 
 
 </details>
 
+<details markdown="1">
+<summary>TurnSense</summary>
+
+**Dependency:** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**Path:** `src/xtalk/speech/turn_detector/turn_sense.py`
+
+[Original Repo](https://github.com/Bairong-Xdynamics/TurnSense)
+
+[X-Talk-adapted service deployment reference](https://github.com/xcc-zach/TurnSense-server)
+
+</details>
+
 ### Speech Enhancement
     
 **Name in config**: `speech_enhancer`

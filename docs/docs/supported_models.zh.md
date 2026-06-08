@@ -145,6 +145,19 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 
 </details>
 
+<details markdown="1">
+<summary>TurnSense</summary>
+
+**依赖：** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**路径：** `src/xtalk/speech/turn_detector/turn_sense.py`
+
+[原仓库](https://github.com/Bairong-Xdynamics/TurnSense)
+
+[适配 X-Talk 的服务部署参考](https://github.com/xcc-zach/TurnSense-server)
+
+</details>
+
 ### 语音增强
 
 **配置中的名称**：`speech_enhancer`
