@@ -131,6 +131,9 @@ pyannote = ["pyannote.audio","torchvision"]
 soulx-duplug = [
   "websockets",
 ]
+turn-sense = [
+  "aiohttp",
+]
 example = [
   "pypdf",
   "fastapi==0.128.0",
