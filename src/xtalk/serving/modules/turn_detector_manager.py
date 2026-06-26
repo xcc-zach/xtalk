@@ -35,7 +35,7 @@ from ..events import (
     TurnDetectorStartGeneration,
 )
 from ...pipelines import Pipeline
-from ...speech.interfaces import (
+from ...models.turn_detector.interfaces import (
     TurnDetectionAction,
     TurnDetectionResult,
     TurnVADResult,

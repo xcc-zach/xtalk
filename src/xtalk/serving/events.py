@@ -2,7 +2,7 @@
 import time
 from dataclasses import dataclass, field, make_dataclass
 from typing import AsyncIterator, ClassVar, Dict, Any, Type
-from ..llm_agent.interfaces import AgentOutput
+from ..models.agents.interfaces import AgentOutput
 
 
 @dataclass

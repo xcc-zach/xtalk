@@ -6,20 +6,18 @@ from typing import Optional, Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 
-from ..llm_agent import Agent
-from ..rewriter.interfaces import Rewriter
-from ..rewriter.simple import DefaultCaptionRewriter
-from ..speech.interfaces import (
-    ASR,
-    TTS,
-    Captioner,
-    PuntRestorer,
-    VAD,
-    SpeechEnhancer,
-    SpeechSpeedController,
-    SpeakerEncoder,
-    TurnDetector,
-)
+from ..models.agents.interfaces import Agent
+from ..models.asr.interfaces import ASR
+from ..models.captioner.interfaces import Captioner
+from ..models.punt_restorer.interfaces import PuntRestorer
+from ..models.rewriters.interfaces import Rewriter
+from ..models.rewriters.simple import DefaultCaptionRewriter
+from ..models.speaker_encoder.interfaces import SpeakerEncoder
+from ..models.speech_enhancer.interfaces import SpeechEnhancer
+from ..models.speech_speed_controller.interfaces import SpeechSpeedController
+from ..models.tts.interfaces import TTS
+from ..models.turn_detector.interfaces import TurnDetector
+from ..models.vad.interfaces import VAD
 from .interfaces import Pipeline
 
 
@@ -280,7 +278,8 @@ class DefaultPipeline(Pipeline):
         ValueError
             Raised if ``model_type`` is not supported.
         """
-        from ..speech.tts import IndexTTS, IndexTTS2
+        from ..models.tts.index_tts import IndexTTS
+        from ..models.tts.index_tts2 import IndexTTS2
 
         current_ref_paths = []
         if self.tts_model and hasattr(self.tts_model, "audio_paths"):

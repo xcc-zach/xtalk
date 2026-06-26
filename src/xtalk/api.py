@@ -1,5 +1,6 @@
 import json
 import uuid
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Callable, Type, Any
 from fastapi import (
@@ -22,10 +23,10 @@ from .serving.session_limiter import SessionLimiter
 from .serving.events import TextForEmbeddingReady
 from .serving.service import Service, DefaultService
 from .model_loader import (
-    ImportSpec,
-    MODEL_REGISTRY as SHARED_MODEL_REGISTRY,
-    init_model,
-    register_model_search_spec as register_model_search_spec_helper,
+    ensure_model_types_registered,
+    init_configured_model,
+    is_registered_model_slot,
+    _registered_model_slots,
 )
 
 
@@ -38,9 +39,6 @@ class Xtalk:
     It builds pipelines from configuration, stores a prototype service, and
     accepts WebSocket sessions on demand.
     """
-
-    MODEL_REGISTRY: dict[str, list[ImportSpec]] = SHARED_MODEL_REGISTRY
-
     def __init__(self, *, service_prototype: Service, max_sessions: int | None = None):
         """Initialize an ``Xtalk`` application wrapper.
 
@@ -71,45 +69,6 @@ class Xtalk:
         self._session_limiter = (
             SessionLimiter(max_sessions) if max_sessions is not None else None
         )
-
-    # -------------------------
-    # Public registry APIs
-    # -------------------------
-    @classmethod
-    def register_model_search_spec(
-        cls,
-        *,
-        slot: str,
-        spec: ImportSpec,
-        prepend: bool = True,
-    ) -> None:
-        """Register an additional model lookup location for a slot.
-
-        Parameters
-        ----------
-        slot : str
-            Registry slot name such as ``"llm_agent"`` or ``"tts"``.
-        spec : ImportSpec
-            Import target to try when loading that slot. Supported forms include
-            module paths, ``"module:attribute"`` references, and Python file
-            paths.
-        prepend : bool, default=True
-            Whether to try the new spec before existing registered specs.
-
-        Notes
-        -----
-        Common ``spec`` forms include ``"my_pkg.custom_tts"``,
-        ``"my_pkg.custom_tts:registry"``, ``"/abs/path/custom_tts.py"``, and
-        ``Path("./custom_tts.py")``.
-
-        Examples
-        --------
-        >>> Xtalk.register_model_search_spec(
-        ...     slot="llm_agent",
-        ...     spec="./echo_agent.py",
-        ... )
-        """
-        register_model_search_spec_helper(slot=slot, spec=spec, prepend=prepend)
 
     # -------------------------
     # Config / construction
@@ -433,13 +392,33 @@ class Xtalk:
         additional_model_registry: dict | None = None,
     ):
         model_map: dict[str, Any] = {}
-        for slot, specs in cls.MODEL_REGISTRY.items():
-            model_map[slot] = init_model(
-                model_config=config.get(slot, {}),
-                import_specs=specs,
+        for slot in cls._pipeline_model_init_keys(pipeline_cls):
+            model_map[slot] = init_configured_model(
+                slot=slot,
+                config=config,
             )
 
         if additional_model_registry:
             model_map = model_map | additional_model_registry
 
         return pipeline_cls(**model_map)
+
+    @staticmethod
+    def _pipeline_model_init_keys(pipeline_cls: Type[Pipeline]) -> list[str]:
+        """Return pipeline constructor keys that correspond to model types."""
+        if not is_dataclass(pipeline_cls):
+            ensure_model_types_registered()
+            return [
+                slot
+                for slot in _registered_model_slots()
+                if is_registered_model_slot(slot)
+            ]
+
+        init_keys: list[str] = []
+        for dataclass_field in fields(pipeline_cls):
+            init_key = dataclass_field.metadata.get("init_key")
+            if not isinstance(init_key, str):
+                continue
+            if is_registered_model_slot(init_key):
+                init_keys.append(init_key)
+        return init_keys

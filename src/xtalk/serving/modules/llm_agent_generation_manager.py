@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncIterator
 
-from ...llm_agent import AgentOutput
+from ...models.agents import AgentOutput
 from ...log_utils import logger
 from ...pipelines import Pipeline
 from ..event_bus import EventBus

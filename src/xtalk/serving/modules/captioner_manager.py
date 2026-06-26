@@ -41,7 +41,7 @@ from ..events import (
 )
 from ..interfaces import Manager
 from ...pipelines import Pipeline
-from ...rewriter.interfaces import Rewriter
+from ...models.rewriters.interfaces import Rewriter
 
 
 class CaptionerManager(Manager):
