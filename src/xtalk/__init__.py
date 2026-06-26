@@ -8,6 +8,7 @@ from .serving import (
     Manager,
     EventBus,
 )
+from .models.registry import model, model_type
 
 __all__ = [
     "Xtalk",
@@ -19,4 +20,6 @@ __all__ = [
     "create_event_class",
     "Manager",
     "EventBus",
+    "model",
+    "model_type",
 ]

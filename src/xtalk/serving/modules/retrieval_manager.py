@@ -8,7 +8,7 @@ from ..events import (
     ToolCallOccurred,
     RetrievalUpdated,
 )
-from ...llm_agent.tools.retrievers import WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL
+from ...models.agents.tools.retrievers import WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL
 
 
 class RetrievalManager(Manager):

@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import fields
 from typing import Any
 
-from ...llm_agent import AgentContext
+from ...models.agents import AgentContext
 from ...log_utils import logger
 from ...pipelines import Pipeline
 from ..event_bus import EventBus

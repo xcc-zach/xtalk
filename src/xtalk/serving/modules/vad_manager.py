@@ -13,7 +13,7 @@ Backend VAD manager used when the frontend cannot run VAD. It mimics the logic i
 
 Notes:
 - Relies on `VAD` interface (`is_speech(frame: bytes) -> bool`) from
-  `src/xtalk/speech/interfaces.py`.
+  `src/xtalk/models/*/interfaces.py`.
 - Uses duration smoothing on boolean outputs instead of probability thresholds.
 """
 

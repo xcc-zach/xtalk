@@ -1,5 +1,8 @@
 import argparse
+import asyncio
+import json
 from pathlib import Path
+from typing import Any, AsyncIterator, Iterable
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -10,8 +13,10 @@ import mimetypes
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
-from xtalk import Xtalk
+from xtalk import Xtalk, model
 from xtalk.log_utils import mute_other_logging
+from xtalk.model_types import Agent
+from xtalk.models.agents import AgentContext, AgentOutput
 
 mute_other_logging()
 
@@ -24,14 +29,92 @@ args = parser.parse_args()
 
 app = FastAPI(title="Xtalk Server")
 
-# Register an Agent implemented in an external Python file
-Xtalk.register_model_search_spec(
-    slot="llm_agent",
-    spec=Path(__file__).parent / "echo_agent.py",
-)
+
+@model
+class EchoAgent(Agent):
+    """A simple agent that echoes finalized ASR text."""
+
+    def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
+        """Synchronously bridge ``async_accept()`` for compatibility."""
+
+        yield from self._sync_iter_from_async(self.async_accept(context))
+
+    async def async_accept(
+        self,
+        context: AgentContext,
+    ) -> AsyncIterator[AgentOutput]:
+        """Emit the finalized ASR text for ``asr_final`` contexts."""
+
+        if str(context.get("type", "") or "") != "asr_final":
+            return
+        payload = context.get("data") or {}
+        if not isinstance(payload, dict):
+            return
+        text = str(payload.get("text", ""))
+        if text:
+            yield text
+
+    def restore_history(self, messages: list[dict[str, Any]]) -> None:
+        """Ignore persisted history for the stateless echo agent."""
+
+        del messages
+        return None
+
+    def clone(self) -> "EchoAgent":
+        """Create a fresh stateless echo agent."""
+
+        return EchoAgent()
+
+    def _sync_iter_from_async(
+        self,
+        async_iter: AsyncIterator[AgentOutput],
+    ) -> Iterable[AgentOutput]:
+        """Convert an async iterator into a synchronous generator."""
+
+        loop = asyncio.new_event_loop()
+        try:
+            while True:
+                try:
+                    item = loop.run_until_complete(async_iter.__anext__())
+                except StopAsyncIteration:
+                    break
+                yield item
+        finally:
+            aclose = getattr(async_iter, "aclose", None)
+            if callable(aclose):
+                try:
+                    loop.run_until_complete(aclose())
+                except Exception:
+                    pass
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            loop.close()
+
+
+def build_echo_agent_config(config: dict) -> dict:
+    """Return a config copy that uses the sample echo agent."""
+
+    updated_config = dict(config)
+    llm_agent_config = updated_config.get("llm_agent")
+    llm_agent_params = (
+        llm_agent_config.get("params", {})
+        if isinstance(llm_agent_config, dict)
+        else {}
+    )
+    updated_config["llm_agent"] = {
+        "type": "EchoAgent",
+        "params": dict(llm_agent_params) if isinstance(llm_agent_params, dict) else {},
+    }
+    return updated_config
+
+
 # Instantiate Xtalk from config
 # config can be passed as a path to json file or a dict
-xtalk_instance = Xtalk.from_config(args.config)
+with open(args.config, "r", encoding="utf-8") as f:
+    config = json.load(f)
+xtalk_instance = Xtalk.from_config(build_echo_agent_config(config))
 xtalk_instance.mount_routes(app)
 
 
