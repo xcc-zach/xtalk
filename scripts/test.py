@@ -52,6 +52,8 @@ DEFAULT_TEST_CONFIG = {
     "judge_llm": None,
 }
 DEFAULT_SETTLE_SECONDS = 1.5
+RECORDING_STABLE_SECONDS = 1.0
+RECORDING_STABLE_TIMEOUT_SECONDS = 10.0
 EMBEDDED_SERVER_HOST = "127.0.0.1"
 EMBEDDED_SERVER_PORT = 0
 SERVICE_CONFIG_PATCH = {
@@ -1351,6 +1353,7 @@ class CaseRunner:
             await self._send_scheduled_inputs(websocket, self._scheduled_inputs)
             self._scheduler_done.set()
             await self._wait_until_idle(websocket)
+            await self._wait_for_recording_stable()
         finally:
             await websocket.close()
             if self._receiver_task is not None:
@@ -1615,6 +1618,28 @@ class CaseRunner:
             if self._ws_closed.is_set():
                 return
             await asyncio.sleep(0.1)
+
+    async def _wait_for_recording_stable(self) -> None:
+        """Wait briefly for server-side recording writes to settle."""
+        if not self._temp_recording_path.exists():
+            return
+
+        deadline = time.monotonic() + RECORDING_STABLE_TIMEOUT_SECONDS
+        stable_since = time.monotonic()
+        last_size = self._temp_recording_path.stat().st_size
+
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+            try:
+                current_size = self._temp_recording_path.stat().st_size
+            except OSError:
+                return
+            if current_size != last_size:
+                last_size = current_size
+                stable_since = time.monotonic()
+                continue
+            if time.monotonic() - stable_since >= RECORDING_STABLE_SECONDS:
+                return
 
     async def _touch_activity(self) -> None:
         async with self._activity_lock:
