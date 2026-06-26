@@ -1516,9 +1516,11 @@ class CaseRunner:
             else None
         )
         audio_frame_count = int(math.ceil(len(pcm_bytes) / frame_bytes))
-        trailing_frames = (
-            vad_controller.trailing_silence_frames() if vad_controller else 0
-        )
+        if vad_controller is not None:
+            trailing_frames = vad_controller.trailing_silence_frames()
+        else:
+            frame_ms = ClientVADController.FRAME_SAMPLES * 1000.0 / 16000.0
+            trailing_frames = max(1, int(round(self._vad_redemption_ms / frame_ms)) + 1)
         total_frames = audio_frame_count + trailing_frames
         stream_started = asyncio.get_running_loop().time()
         await self._anchors.set("last_user_start", stream_started)
