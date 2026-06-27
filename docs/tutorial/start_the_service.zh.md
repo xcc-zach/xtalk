@@ -69,6 +69,8 @@ xtalk_instance = Xtalk.from_config("path/to/config.json")
 xtalk_instance.mount_routes(app)
 ```
 
+关于 `config.json`，参考[配置服务](config_the_service.zh.md)。
+
 这会挂载前端默认使用的这些接口：
 
 - `POST /api/auth/login`

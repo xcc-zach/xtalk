@@ -1,5 +1,5 @@
 > **Note**
-> See `examples/sample_app/mental_consultant_agent.py` for details.
+> See `examples/sample_app/mental_consultant_server.py` for details.
     
 X-Talk supports textual tool customization through `add_agent_tools`:
 ```python
@@ -23,12 +23,12 @@ def search_database(query: str, limit: int = 10) -> str:
     return f"Found {limit} results for '{query}'"
 ```
 
-If you want each session to keep an independent internal tool state, you can also use a tool factory (see `build_mental_questionnaire_tool` in `examples/sample_app/mental_consultant_agent.py`).
+If you want each session to keep an independent internal tool state, you can also use a tool factory (see `build_mental_questionnaire_tool` in `examples/sample_app/mental_consultant_server.py`).
 
 ## Built-in Tools
     
 > **Note**
-> See source code under `src/xtalk/llm_agent/tools` for all built-in tools.
+> See source code under `src/xtalk/models/agents/tools` for all built-in tools.
     
 Built-in tools include agent-scope ones like `web_search` and `get_time`, and pipeline-control ones such as silence, speech speed, and, when configured, voice and emotion switching. `DefaultAgent` registers `web_search`, `get_time`, `set_speed`, and `silence` by default. `set_voice` and `set_emotion` are only registered when the corresponding configuration is available.
     

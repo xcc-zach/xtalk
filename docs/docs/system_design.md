@@ -16,7 +16,7 @@ Models are adapters for external models. For example, if you want to use IndexTT
 
 Communication between `Manager`s follows the observer pattern in order to keep the capabilities of different models decoupled and move cross-model interactions into event-based communication.
 
-Model interfaces are defined in `src/xtalk/llm_agent/interfaces.py` and `src/xtalk/speech/interfaces.py`.
+Model interfaces are defined in `src/xtalk/models/agents/interfaces.py` and `src/xtalk/models/*/interfaces.py`.
 
 The former defines the LLM adapter interface: the LLM is the intelligence core of X-Talk and is responsible for producing output by combining information from various speech models.
 

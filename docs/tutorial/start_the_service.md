@@ -69,6 +69,8 @@ xtalk_instance = Xtalk.from_config("path/to/config.json")
 xtalk_instance.mount_routes(app)
 ```
 
+For `config.json`, see [Config the Service](config_the_service.md).
+
 This mounts the default endpoints used by the frontend:
 
 - `POST /api/auth/login`
