@@ -2,7 +2,7 @@ from .api import Xtalk
 from .serving import (
     Service,
     DefaultService,
-    BaseEvent,
+    Event,
     create_event_class,
     Manager,
     EventBus,
@@ -15,7 +15,7 @@ __all__ = [
     "Models",
     "Service",
     "DefaultService",
-    "BaseEvent",
+    "Event",
     "create_event_class",
     "Manager",
     "EventBus",

@@ -4,7 +4,7 @@ from ..interfaces import Manager
 from ..event_bus import EventBus
 from ...models import ASR, Agent, Models
 from ..events import (
-    BaseEvent,
+    Event,
     EnhancedAudioFrameReceived,
     TurnASRStartRequested,
     TurnASREndRequested,
@@ -223,7 +223,7 @@ class AudioConsumer:
         """Return whether recognized text is empty after trimming whitespace."""
         return not text.strip()
 
-    async def _publish_event(self, event: BaseEvent):
+    async def _publish_event(self, event: Event):
         await self._event_bus.publish(event)
 
     async def _publish_final_text(self, text: str) -> None:
