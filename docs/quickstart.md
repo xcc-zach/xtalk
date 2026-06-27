@@ -49,7 +49,7 @@ Create a JSON config specifying the models to use, and **fill in <API_KEY>** wit
 ```
 ## Step 4. Start the server
 
-A sample server script is ready at `examples/sample_app/configurable_server.py`. We simply need to start the server with the config file (**fill in <PATH_TO_CONFIG>.json** with the path to the config file we just created) and a custom port:
+A sample server script is ready at [`examples/sample_app/configurable_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/configurable_server.py). We simply need to start the server with the config file (**fill in <PATH_TO_CONFIG>.json** with the path to the config file we just created) and a custom port:
 ```bash
 git clone https://github.com/xcc-zach/xtalk.git
 cd xtalk

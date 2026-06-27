@@ -20,7 +20,7 @@ X-Talk 现在支持在浏览器端把多个前端会话接到同一条共享音�
 - 可选地把真实用户麦克风音频也注入同一条共享流；
 - 保持现有服务端接口不变，把音频编排放在前端完成。
 
-这套 API 目前只支持 Web 平台，实现位于 `frontend/src/platforms`。
+这套 API 目前只支持 Web 平台，实现位于 [`frontend/src/platforms`](https://github.com/xcc-zach/xtalk/tree/main/frontend/src/platforms)。
 
 ## 共享流模型
 

@@ -1,6 +1,6 @@
 X-Talk 的大多数模型与执行逻辑都运行在服务端。客户端主要负责访问麦克风、传输音频、收发 WebSocket 消息，以及处理轻量级的会话逻辑。
 
-客户端 API 已经发布为独立包 [xtalk-client](https://www.npmjs.com/package/xtalk-client)，其公开接口由 `frontend/src/index.ts` 导出。
+客户端 API 已经发布为独立包 [xtalk-client](https://www.npmjs.com/package/xtalk-client)，其公开接口由 [`frontend/src/index.ts`](https://github.com/xcc-zach/xtalk/blob/main/frontend/src/index.ts) 导出。
 
 ## 客户端最简接入
 
@@ -17,7 +17,7 @@ X-Talk 的大多数模型与执行逻辑都运行在服务端。客户端主要�
 npm install xtalk-client
 ```
 
-> 对开发者来说，客户端代码位于 `frontend` 目录下。在该目录中，您可以运行 `npm run watch` 进行开发构建。
+> 对开发者来说，客户端代码位于 [`frontend`](https://github.com/xcc-zach/xtalk/tree/main/frontend) 目录下。在该目录中，您可以运行 `npm run watch` 进行开发构建。
 
 然后在前端代码中导入并使用：
 
@@ -100,6 +100,6 @@ const session = createSession(wsUrl, {
 
 如果您需要包含静态资源、模板、上传界面、会话切换和音色切换的完整示例，可继续参考：
 
-- `examples/sample_app/configurable_server.py`
-- `examples/sample_app/static/js/index.js`
-- `examples/sample_app/templates/index.html`
+- [`examples/sample_app/configurable_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/configurable_server.py)
+- [`examples/sample_app/static/js/index.js`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/js/index.js)
+- [`examples/sample_app/templates/index.html`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/templates/index.html)

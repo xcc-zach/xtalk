@@ -3,7 +3,7 @@
 
 ## Agent
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 @model_type(aliases=['llm_agent'])
@@ -16,7 +16,7 @@ Abstract interface for conversational agents used by Xtalk.
 
 #### content_to_text
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def content_to_text(content: Any) -> str
@@ -36,7 +36,7 @@ Normalize model content blocks into plain text.
 
 #### accept
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def accept(self, context: AgentContext) -> Iterable[AgentOutput]
@@ -57,7 +57,7 @@ Accept an incremental context update.
 
 #### async_accept
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput]
@@ -77,7 +77,7 @@ Asynchronously accept an incremental context update.
 
 #### sync_iter_from_async
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def sync_iter_from_async(self, async_iter: AsyncIterator[T]) -> Iterable[T]
@@ -97,7 +97,7 @@ Convert an async iterator into a synchronous generator.
 
 #### clone
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def clone(self) -> 'Agent'
@@ -112,7 +112,7 @@ Clone the agent for a new session.
 
 #### restore_history
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def restore_history(self, messages: list[dict[str, Any]]) -> None
@@ -127,7 +127,7 @@ Restore persisted conversation messages into the agent state.
 
 #### get_chat_history
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def get_chat_history(self, with_system: bool = False) -> str | None
@@ -148,7 +148,7 @@ Return the serialized conversation history when available.
 
 #### add_tools
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
@@ -163,7 +163,7 @@ Attach tools to the agent.
 
 ## AgentContext
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 class AgentContext(TypedDict)
@@ -183,7 +183,7 @@ event-derived payload for that stream.
 
 ## AgentOutput
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 AgentOutput

@@ -1,7 +1,7 @@
 *Experimental API*
 
 > **Note**
-> See `examples/sample_app/custom_service.py` for the complete example. It adds a dummy `LLMOutputRefactorModel` to X-Talk and prepends `Assistant response: ` before the final LLM response text is sent to the frontend.
+> See [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) for the complete example. It adds a dummy `LLMOutputRefactorModel` to X-Talk and prepends `Assistant response: ` before the final LLM response text is sent to the frontend.
 
 You may want to introduce a service-local custom model and connect its logic to the rest of the service flow.
 
@@ -9,7 +9,7 @@ You may want to introduce a service-local custom model and connect its logic to 
 
 There are two common ways to introduce a new model:
 
-1. Define the model directly in service code and manually put it into `Models`. `examples/sample_app/custom_service.py` uses this approach.
+1. Define the model directly in service code and manually put it into `Models`. [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) uses this approach.
 2. Define a new model type first, then register a concrete model implementation so the model can be created from config.
 
 ### Approach 1: Introduce a Model Directly

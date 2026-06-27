@@ -3,7 +3,7 @@
 
 ## Event
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -36,7 +36,7 @@ Base dataclass for all Xtalk events.
 
 #### event_type
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 def event_type(self) -> str
@@ -44,7 +44,7 @@ def event_type(self) -> str
 
 ## create_event_class
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 def create_event_class(*, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None) -> Type[Event]
@@ -78,7 +78,7 @@ Create an ``Event`` subclass dynamically.
 
 ## WebSocketMessageReceived
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -92,7 +92,7 @@ class WebSocketMessageReceived(Event)
 
 ## AudioFrameReceived
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -107,7 +107,7 @@ class AudioFrameReceived(Event)
 
 ## EnhancedAudioFrameReceived
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -124,7 +124,7 @@ Enhanced audio frame for downstream ASR/VAD.
 
 ## VADSpeechStart
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -138,7 +138,7 @@ class VADSpeechStart(Event)
 
 ## VADSpeechEnd
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -152,7 +152,7 @@ class VADSpeechEnd(Event)
 
 ## ASRResultPartial
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -168,7 +168,7 @@ class ASRResultPartial(Event)
 
 ## ASRResultFinal
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -183,7 +183,7 @@ class ASRResultFinal(Event)
 
 ## LLMFirstChunk
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -198,7 +198,7 @@ Event for first LLM chunk/tool call (measure first token latency).
 
 ## LLMFirstSentence
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -213,7 +213,7 @@ Event for first synthesizable sentence (measure sentence latency).
 
 ## TTSStarted
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -226,7 +226,7 @@ class TTSStarted(Event)
 
 ## TTSStopped
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -239,7 +239,7 @@ class TTSStopped(Event)
 
 ## TTSPaused
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -252,7 +252,7 @@ class TTSPaused(Event)
 
 ## TTSResumed
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -265,7 +265,7 @@ class TTSResumed(Event)
 
 ## TTSFinished
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -278,7 +278,7 @@ class TTSFinished(Event)
 
 ## LLMAgentResponseUpdate
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -292,7 +292,7 @@ class LLMAgentResponseUpdate(Event)
 
 ## LLMAgentResponseFinish
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -313,7 +313,7 @@ Final text emitted by the agent for one response.
 
 ## ResponseUpdate
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -334,7 +334,7 @@ Text prefix whose corresponding TTS playback progress has been confirmed.
 
 ## ResponseFinish
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -355,7 +355,7 @@ Final text whose corresponding TTS playback has finished.
 
 ## TTSTextSynthesized
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -379,7 +379,7 @@ Text marker emitted after one synthesized text segment is fully produced.
 
 ## TTSVoiceChange
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -393,7 +393,7 @@ class TTSVoiceChange(Event)
 
 ## TTSEmotionChange
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -408,7 +408,7 @@ class TTSEmotionChange(Event)
 
 ## TTSSpeedChange
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -422,7 +422,7 @@ class TTSSpeedChange(Event)
 
 ## TTSChunkReady
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -439,7 +439,7 @@ Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk i
 
 ## TTSChunkPlayed
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -457,7 +457,7 @@ listeners can observe frontend playback completion in FIFO order.
 
 ## TTSPlaybackFinished
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -470,7 +470,7 @@ class TTSPlaybackFinished(Event)
 
 ## FullAudioFrameReady
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -487,7 +487,7 @@ class FullAudioFrameReady(Event)
 
 ## ErrorOccurred
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -502,7 +502,7 @@ class ErrorOccurred(Event)
 
 ## CaptionUpdated
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -518,7 +518,7 @@ class CaptionUpdated(Event)
 
 ## ToolCallOccurred
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -535,7 +535,7 @@ LLM/Agent tool invocation notification.
 
 ## RetrievalUpdated
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -550,7 +550,7 @@ class RetrievalUpdated(Event)
 
 ## EmbeddingStatusUpdated
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -568,7 +568,7 @@ Embedding lifecycle update consumed by the LLM agent context manager.
 
 ## LLMAgentLoop
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -583,7 +583,7 @@ Request one agent-context accept loop iteration for the session.
 
 ## TextForEmbeddingReady
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -597,7 +597,7 @@ class TextForEmbeddingReady(Event)
 
 ## LatencyMetricsUpdated
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -617,7 +617,7 @@ Fine-grained backend latency metrics (milliseconds).
 
 ## TurnTTSStartRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -630,7 +630,7 @@ class TurnTTSStartRequested(Event)
 
 ## TurnTTSPauseRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -643,7 +643,7 @@ class TurnTTSPauseRequested(Event)
 
 ## TurnTTSResumeRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -656,7 +656,7 @@ class TurnTTSResumeRequested(Event)
 
 ## TurnTTSStopRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -670,7 +670,7 @@ class TurnTTSStopRequested(Event)
 
 ## TurnTTSFlushRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -683,7 +683,7 @@ class TurnTTSFlushRequested(Event)
 
 ## ConsumeLLMAgentGenerationRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -699,7 +699,7 @@ Request consumption of one LLM-agent output stream.
 
 ## TurnLLMAgentResumeRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -712,7 +712,7 @@ class TurnLLMAgentResumeRequested(Event)
 
 ## TurnLLMAgentPauseRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -725,7 +725,7 @@ class TurnLLMAgentPauseRequested(Event)
 
 ## TurnLLMAgentStopRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -739,7 +739,7 @@ class TurnLLMAgentStopRequested(Event)
 
 ## TurnASRStartRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -752,7 +752,7 @@ class TurnASRStartRequested(Event)
 
 ## TurnASREndRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -767,7 +767,7 @@ Indicates hard turn end. ASR model state is reset. Turn moves to next.
 
 ## TurnASRPauseRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -782,7 +782,7 @@ Used when user indicates a wait, or pauses in the speech. Triggers recognition o
 
 ## TurnTTSTextAppendRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -798,7 +798,7 @@ Request to append text into ongoing TTS stream (sim-trans).
 
 ## SpeakerRecognized
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -815,7 +815,7 @@ Speaker-recognition result for frontend display.
 
 ## TTSModelSwitchRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -832,7 +832,7 @@ Request to switch TTS model (IndexTTS / IndexTTS2).
 
 ## LLMModelSwitchRequested
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -851,7 +851,7 @@ Request to switch LLM configuration (ChatOpenAI model/base_url).
 
 ## ClockSyncReceived
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -869,7 +869,7 @@ Clock-sync event for offset calculation.
 
 ## SessionConfigReceived
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -885,7 +885,7 @@ Client sent per-session configuration (e.g., recording path).
 
 ## TurnDetectorStopSpeaking
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -900,7 +900,7 @@ Turn detector determined ai should stop speaking.
 
 ## TurnDetectorStartGeneration
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass

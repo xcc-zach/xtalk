@@ -3,7 +3,7 @@
 
 ## Agent
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 @model_type(aliases=['llm_agent'])
@@ -16,7 +16,7 @@ Abstract interface for conversational agents used by Xtalk.
 
 #### content_to_text
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def content_to_text(content: Any) -> str
@@ -36,7 +36,7 @@ Normalize model content blocks into plain text.
 
 #### accept
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def accept(self, context: AgentContext) -> Iterable[AgentOutput]
@@ -57,7 +57,7 @@ Accept an incremental context update.
 
 #### async_accept
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput]
@@ -77,7 +77,7 @@ Asynchronously accept an incremental context update.
 
 #### sync_iter_from_async
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def sync_iter_from_async(self, async_iter: AsyncIterator[T]) -> Iterable[T]
@@ -97,7 +97,7 @@ Convert an async iterator into a synchronous generator.
 
 #### clone
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def clone(self) -> 'Agent'
@@ -112,7 +112,7 @@ Clone the agent for a new session.
 
 #### restore_history
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def restore_history(self, messages: list[dict[str, Any]]) -> None
@@ -127,7 +127,7 @@ Restore persisted conversation messages into the agent state.
 
 #### get_chat_history
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def get_chat_history(self, with_system: bool = False) -> str | None
@@ -148,7 +148,7 @@ Return the serialized conversation history when available.
 
 #### add_tools
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
@@ -163,7 +163,7 @@ Attach tools to the agent.
 
 ## AgentContext
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 class AgentContext(TypedDict)
@@ -183,7 +183,7 @@ event-derived payload for that stream.
 
 ## AgentOutput
 
-_Defined in `xtalk.models.agents.interfaces`._
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
 
 ```python
 AgentOutput
@@ -193,7 +193,7 @@ AgentOutput
 
 ## ASR
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 @model_type(aliases=['asr'])
@@ -206,7 +206,7 @@ Abstract interface for automatic speech recognition.
 
 #### recognize
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 def recognize(self, audio: bytes) -> str
@@ -226,7 +226,7 @@ Recognize a full audio buffer.
 
 #### recognize_stream
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 def recognize_stream(self, audio: bytes, *, is_final: bool = False, chat_history: str | None = None) -> str
@@ -256,7 +256,7 @@ Recognize audio incrementally in streaming mode.
 
 #### stream_chunk_bytes_hint
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 def stream_chunk_bytes_hint(self) -> int | None
@@ -272,7 +272,7 @@ Return the preferred streaming chunk size.
 
 #### reset
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 def reset(self) -> None
@@ -282,7 +282,7 @@ Reset internal recognition state.
 
 #### clone
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 def clone(self) -> 'ASR'
@@ -297,7 +297,7 @@ Clone the ASR instance for a new session.
 
 #### async_recognize
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 async def async_recognize(self, audio: bytes) -> str
@@ -317,7 +317,7 @@ Asynchronously recognize a full audio buffer.
 
 #### async_recognize_stream
 
-_Defined in `xtalk.models.asr.interfaces`._
+_Defined in [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)._
 
 ```python
 async def async_recognize_stream(self, audio: bytes, *, is_final: bool = False, chat_history: str | None = None) -> str
@@ -347,7 +347,7 @@ Asynchronously recognize incremental audio input.
 
 ## Captioner
 
-_Defined in `xtalk.models.captioner.interfaces`._
+_Defined in [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)._
 
 ```python
 @model_type(aliases=['captioner'])
@@ -360,7 +360,7 @@ Abstract base class for audio captioning models.
 
 #### caption
 
-_Defined in `xtalk.models.captioner.interfaces`._
+_Defined in [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)._
 
 ```python
 def caption(self, audio: bytes) -> str
@@ -380,7 +380,7 @@ Generate a caption for audio.
 
 #### caption_stream
 
-_Defined in `xtalk.models.captioner.interfaces`._
+_Defined in [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)._
 
 ```python
 def caption_stream(self, audio: bytes) -> Iterable[str]
@@ -400,7 +400,7 @@ Stream caption text for audio input.
 
 #### async_caption
 
-_Defined in `xtalk.models.captioner.interfaces`._
+_Defined in [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)._
 
 ```python
 async def async_caption(self, audio: bytes) -> str
@@ -420,7 +420,7 @@ Asynchronously caption audio.
 
 #### async_caption_stream
 
-_Defined in `xtalk.models.captioner.interfaces`._
+_Defined in [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)._
 
 ```python
 async def async_caption_stream(self, audio: bytes) -> AsyncIterator[str]
@@ -440,7 +440,7 @@ Asynchronously stream caption text.
 
 ## Embeddings
 
-_Defined in `xtalk.models.embeddings.interfaces`._
+_Defined in [`xtalk.models.embeddings.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/embeddings/interfaces.py)._
 
 ```python
 @model_type(aliases=['embeddings'])
@@ -451,7 +451,7 @@ Interface marker for embedding models.
 
 ## Models
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 class Models
@@ -463,7 +463,7 @@ Store model instances keyed by their model interface type.
 
 #### __init__
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 def __init__(self, entries: dict[type[Any], Any] | None = None) -> None
@@ -478,7 +478,7 @@ Initialize a model container.
 
 #### get
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 def get(self, interface: type[T]) -> T | None
@@ -498,7 +498,7 @@ Return the model registered for an interface, if present.
 
 #### require
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 def require(self, interface: type[T]) -> T
@@ -523,7 +523,7 @@ Return a required model or raise a clear configuration error.
 
 #### set
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 def set(self, interface: type[T], model: T | None) -> None
@@ -540,7 +540,7 @@ Set or remove a model for an interface.
 
 #### clone
 
-_Defined in `xtalk.models.container`._
+_Defined in [`xtalk.models.container`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/container.py)._
 
 ```python
 def clone(self) -> 'Models'
@@ -550,7 +550,7 @@ Clone every cloneable model and share the rest.
 
 ## PuntRestorer
 
-_Defined in `xtalk.models.punt_restorer.interfaces`._
+_Defined in [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)._
 
 ```python
 @model_type(aliases=['punt_restorer_model'])
@@ -563,7 +563,7 @@ Abstract base class for punctuation restoration models.
 
 #### restore
 
-_Defined in `xtalk.models.punt_restorer.interfaces`._
+_Defined in [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)._
 
 ```python
 def restore(self, text: str) -> str
@@ -583,7 +583,7 @@ Restore punctuation in text.
 
 #### async_restore
 
-_Defined in `xtalk.models.punt_restorer.interfaces`._
+_Defined in [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)._
 
 ```python
 async def async_restore(self, text: str) -> str
@@ -603,7 +603,7 @@ Asynchronously restore punctuation in text.
 
 ## Rewriter
 
-_Defined in `xtalk.models.rewriters.interfaces`._
+_Defined in [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)._
 
 ```python
 @model_type(aliases=['caption_rewriter'])
@@ -616,7 +616,7 @@ Abstract interface for text rewriting helpers.
 
 #### rewrite
 
-_Defined in `xtalk.models.rewriters.interfaces`._
+_Defined in [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)._
 
 ```python
 def rewrite(self, input: str) -> str
@@ -636,7 +636,7 @@ Rewrite input text.
 
 #### async_rewrite
 
-_Defined in `xtalk.models.rewriters.interfaces`._
+_Defined in [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)._
 
 ```python
 async def async_rewrite(self, input: str) -> str
@@ -656,7 +656,7 @@ Asynchronously rewrite input text.
 
 ## SpeakerEncoder
 
-_Defined in `xtalk.models.speaker_encoder.interfaces`._
+_Defined in [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)._
 
 ```python
 @model_type(aliases=['speaker_encoder'])
@@ -669,7 +669,7 @@ Abstract base class for speaker embedding models.
 
 #### extract
 
-_Defined in `xtalk.models.speaker_encoder.interfaces`._
+_Defined in [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)._
 
 ```python
 def extract(self, audio: bytes) -> np.ndarray
@@ -689,7 +689,7 @@ Generate a speaker embedding vector.
 
 #### async_extract
 
-_Defined in `xtalk.models.speaker_encoder.interfaces`._
+_Defined in [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)._
 
 ```python
 async def async_extract(self, audio: bytes) -> np.ndarray
@@ -709,7 +709,7 @@ Asynchronously extract a speaker embedding.
 
 #### similarity
 
-_Defined in `xtalk.models.speaker_encoder.interfaces`._
+_Defined in [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)._
 
 ```python
 def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float
@@ -731,7 +731,7 @@ Compute similarity between two speaker embeddings.
 
 ## SpeechEnhancer
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 @model_type(aliases=['speech_enhancer'])
@@ -748,7 +748,7 @@ Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
 
 #### enhance
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 def enhance(self, audio: bytes) -> bytes
@@ -768,7 +768,7 @@ Enhance an audio frame.
 
 #### flush
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 def flush(self) -> bytes
@@ -783,7 +783,7 @@ Flush any internally buffered audio.
 
 #### async_enhance
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 async def async_enhance(self, audio: bytes) -> bytes
@@ -803,7 +803,7 @@ Asynchronously enhance audio.
 
 #### async_flush
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 async def async_flush(self) -> bytes
@@ -818,7 +818,7 @@ Asynchronously flush buffered audio.
 
 #### reset
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 def reset(self) -> None
@@ -828,7 +828,7 @@ Reset internal buffers and caches.
 
 #### clone
 
-_Defined in `xtalk.models.speech_enhancer.interfaces`._
+_Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
 def clone(self) -> 'SpeechEnhancer'
@@ -843,7 +843,7 @@ Clone the speech enhancer for a new session.
 
 ## SpeechSpeedController
 
-_Defined in `xtalk.models.speech_speed_controller.interfaces`._
+_Defined in [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)._
 
 ```python
 @model_type(aliases=['speech_speed_controller'])
@@ -856,7 +856,7 @@ Interface for TTS speed controllers.
 
 #### process
 
-_Defined in `xtalk.models.speech_speed_controller.interfaces`._
+_Defined in [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)._
 
 ```python
 def process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes
@@ -878,7 +878,7 @@ Apply a speed adjustment to synthesized audio.
 
 #### async_process
 
-_Defined in `xtalk.models.speech_speed_controller.interfaces`._
+_Defined in [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)._
 
 ```python
 async def async_process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes
@@ -900,7 +900,7 @@ Asynchronously apply a speed adjustment to audio.
 
 ## TTS
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 @model_type(aliases=['tts'])
@@ -921,7 +921,7 @@ themselves declare native streaming capability.
 
 #### synthesize
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 def synthesize(self, text: str) -> bytes
@@ -946,7 +946,7 @@ this method.
 
 #### synthesize_stream
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 def synthesize_stream(self, text: str, **kwargs) -> Iterable[bytes]
@@ -975,7 +975,7 @@ declaration of streaming support.
 
 #### async_synthesize
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 async def async_synthesize(self, text: str, **kwargs: Any) -> bytes
@@ -1002,7 +1002,7 @@ inherit the default executor-based wrapper.
 
 #### async_synthesize_stream
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 async def async_synthesize_stream(self, text: str, **kwargs: Any) -> AsyncIterator[bytes]
@@ -1030,7 +1030,7 @@ backends. When not overridden, it asynchronously iterates over
 
 #### clone
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 def clone(self) -> 'TTS'
@@ -1045,7 +1045,7 @@ Clone the TTS engine for a new session.
 
 #### set_voice
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 def set_voice(self, voice_names: list[str]) -> None
@@ -1060,7 +1060,7 @@ Update the active voice selection.
 
 #### set_emotion
 
-_Defined in `xtalk.models.tts.interfaces`._
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
 
 ```python
 def set_emotion(self, emotion: str | list[float]) -> None
@@ -1075,7 +1075,7 @@ Update the active synthesis emotion.
 
 ## TurnDetector
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 @model_type(aliases=['turn_detector'])
@@ -1088,7 +1088,7 @@ Abstract interface for turn-taking detectors.
 
 #### __init__
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def __init__(self) -> None
@@ -1096,7 +1096,7 @@ def __init__(self) -> None
 
 #### listening
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def listening(self) -> bool
@@ -1111,7 +1111,7 @@ Return whether the detector is currently listening for user turns.
 
 #### listening
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def listening(self, value: bool) -> None
@@ -1126,7 +1126,7 @@ Update the listening state.
 
 #### listening_lock
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def listening_lock(self, is_async: bool = True)
@@ -1146,7 +1146,7 @@ Return the lock guarding listening state changes.
 
 #### detect
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
@@ -1174,7 +1174,7 @@ Detect conversational turn state from audio and/or text.
 
 #### async_detect
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
@@ -1201,7 +1201,7 @@ Asynchronously detect conversational turn state.
 
 #### clone
 
-_Defined in `xtalk.models.turn_detector.interfaces`._
+_Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
 def clone(self) -> 'TurnDetector'
@@ -1216,7 +1216,7 @@ Clone the turn detector for a new session.
 
 ## VAD
 
-_Defined in `xtalk.models.vad.interfaces`._
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
 
 ```python
 @model_type(aliases=['vad'])
@@ -1229,7 +1229,7 @@ Abstract base class for voice activity detection engines.
 
 #### is_speech
 
-_Defined in `xtalk.models.vad.interfaces`._
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
 
 ```python
 def is_speech(self, frame: bytes) -> bool
@@ -1249,7 +1249,7 @@ Determine whether an audio frame contains speech.
 
 #### async_is_speech
 
-_Defined in `xtalk.models.vad.interfaces`._
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
 
 ```python
 async def async_is_speech(self, frame: bytes) -> bool
@@ -1269,7 +1269,7 @@ Asynchronously determine whether an audio frame contains speech.
 
 #### clone
 
-_Defined in `xtalk.models.vad.interfaces`._
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
 
 ```python
 def clone(self) -> 'VAD'

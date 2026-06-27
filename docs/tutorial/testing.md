@@ -1,6 +1,6 @@
 *Experimental functionality*
 
-X-Talk provides a single script, `scripts/test.py`, for both test-set generation and automated backend evaluation.
+X-Talk provides a single script, [`scripts/test.py`](https://github.com/xcc-zach/xtalk/blob/main/scripts/test.py), for both test-set generation and automated backend evaluation.
 
 It has two modes:
 

@@ -20,7 +20,7 @@ Use the web audio bridge when you want one browser page to:
 - optionally inject real user microphone audio into the same shared stream,
 - keep the server contract unchanged and do the routing on the frontend.
 
-This API is currently Web-only. It lives under `frontend/src/platforms`.
+This API is currently Web-only. It lives under [`frontend/src/platforms`](https://github.com/xcc-zach/xtalk/tree/main/frontend/src/platforms).
 
 ## Shared stream model
 

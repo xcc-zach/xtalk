@@ -50,7 +50,7 @@ pip install "xtalk[ali,example] @ git+https://github.com/xcc-zach/xtalk.git@main
 
 ## 第 4 步：启动服务器
 
-示例服务器脚本已准备好在 `examples/sample_app/configurable_server.py`。我们只需使用配置文件（**用刚才创建的配置文件路径填写 <PATH_TO_CONFIG>.json**）和自定义端口启动服务器：
+示例服务器脚本已准备好在 [`examples/sample_app/configurable_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/configurable_server.py)。我们只需使用配置文件（**用刚才创建的配置文件路径填写 <PATH_TO_CONFIG>.json**）和自定义端口启动服务器：
 ```bash
 git clone https://github.com/xcc-zach/xtalk.git
 cd xtalk

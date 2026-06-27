@@ -3,7 +3,7 @@
 
 ## ServiceManager
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 class ServiceManager
@@ -15,7 +15,7 @@ Manage active Service instances for WebSocket sessions.
 
 #### __init__
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 def __init__(self, models: Models | None = None, service_config: dict[str, Any] | None = None, service_prototype: Service | None = None, persistence_store: PersistenceStore | None = None)
@@ -23,7 +23,7 @@ def __init__(self, models: Models | None = None, service_config: dict[str, Any] 
 
 #### create_service
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 async def create_service(self, websocket: WebSocket, *, session_id: str | None = None, user_id: str | None = None) -> Service
@@ -33,7 +33,7 @@ Create a new Service instance bound to the given WebSocket.
 
 #### remove_service
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 async def remove_service(self, session_id: str) -> bool
@@ -43,7 +43,7 @@ Remove and shut down the Service with the given session id.
 
 #### get_service
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 def get_service(self, session_id: str) -> Optional[Service]
@@ -51,7 +51,7 @@ def get_service(self, session_id: str) -> Optional[Service]
 
 #### get_service_count
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 def get_service_count(self) -> int
@@ -59,7 +59,7 @@ def get_service_count(self) -> int
 
 #### connect
 
-_Defined in `xtalk.serving.service_manager`._
+_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
 async def connect(self, websocket: WebSocket, already_accepted: bool = False, user_id: str | None = None) -> None
@@ -69,7 +69,7 @@ Start a new service and connect to it for the given WebSocket.
 
 ## Service
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 class Service
@@ -95,7 +95,7 @@ Orchestrate a session-scoped model container and manager stack.
 
 #### __init__
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[Type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None)
@@ -103,7 +103,7 @@ def __init__(self, *, models: Models, service_config: dict[str, Any] | None = No
 
 #### unsubscribe_event
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def unsubscribe_event(self, *, event_listener_cls: Type[EventListenerMixin], event_type: Type[Event], method_name: str | None = None) -> None
@@ -123,7 +123,7 @@ Disable an automatic event subscription for a listener class.
 
 #### subscribe_event
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def subscribe_event(self, *, event_listener_cls: Type[EventListenerMixin], event_type: Type[Event], method_or_handler: str | Callable[[EventListenerMixin, Event], Any] | Callable[[Event], Any] | Callable[[EventListenerMixin, Event], Coroutine[Any, Any, Any]] | Callable[[Event], Coroutine[Any, Any, Any]], priority: int = 0, enabled_if: Callable[[EventListenerMixin], bool] | None = None) -> None
@@ -148,7 +148,7 @@ Register an additional event subscription override.
 
 #### register_manager
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def register_manager(self, manager_cls: Type[Manager])
@@ -163,7 +163,7 @@ Register a manager class on the service.
 
 #### unregister_manager
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def unregister_manager(self, manager_cls: Type[Manager])
@@ -178,7 +178,7 @@ Remove a manager class from the service.
 
 #### handle_message_loop
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 async def handle_message_loop(self, already_accepted: bool = False) -> None
@@ -200,7 +200,7 @@ Run the full WebSocket message loop for a live session.
 
 #### restore_conversation
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None
@@ -210,7 +210,7 @@ Restore persisted conversation history into the session agent.
 
 #### send_session_attached
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 async def send_session_attached(self) -> None
@@ -220,7 +220,7 @@ Notify the client that the session is attached.
 
 #### stop
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 async def stop(self) -> None
@@ -230,7 +230,7 @@ Stop the service and shut down all managers.
 
 #### clone
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def clone(self, new_websocket: WebSocket, *, session_id: str | None = None, service_config_overrides: dict[str, Any] | None = None) -> 'Service'
@@ -250,7 +250,7 @@ Clone the service prototype for a new WebSocket session.
 
 ## DefaultService
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 class DefaultService(Service)
@@ -271,7 +271,7 @@ register or override managers for custom behavior.
 
 #### __init__
 
-_Defined in `xtalk.serving.service`._
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
 def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[Type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None)
@@ -279,7 +279,7 @@ def __init__(self, *, models: Models, service_config: dict[str, Any] | None = No
 
 ## Event
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 @dataclass
@@ -312,7 +312,7 @@ Base dataclass for all Xtalk events.
 
 #### event_type
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 def event_type(self) -> str
@@ -320,7 +320,7 @@ def event_type(self) -> str
 
 ## create_event_class
 
-_Defined in `xtalk.serving.events`._
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
 
 ```python
 def create_event_class(*, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None) -> Type[Event]
@@ -354,7 +354,7 @@ Create an ``Event`` subclass dynamically.
 
 ## Manager
 
-_Defined in `xtalk.serving.interfaces`._
+_Defined in [`xtalk.serving.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/interfaces.py)._
 
 ```python
 class Manager(EventListenerMixin, ShutdownMixin)
@@ -371,7 +371,7 @@ Subclasses typically accept ``event_bus``, ``session_id``, ``models``, and
 
 #### event_handler
 
-_Defined in `xtalk.serving.interfaces`._
+_Defined in [`xtalk.serving.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/interfaces.py)._
 
 ```python
 def event_handler(event_type: Type[Event], *, priority: int = 0, enabled_if: Callable[['EventListenerMixin'], bool] | None = None)
@@ -396,7 +396,7 @@ Declare a manager event handler.
 
 ## EventBus
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 class EventBus
@@ -421,7 +421,7 @@ Publish and subscribe session events with async dispatch support.
 
 #### __init__
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def __init__(self, enable_history: bool = False, max_history: int = 1000)
@@ -438,7 +438,7 @@ Initialize the event bus.
 
 #### subscribe
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def subscribe(self, event_class: Union[Type[Event], str], handler: Callable[[Event], Any], priority: int = 0) -> None
@@ -457,7 +457,7 @@ Subscribe a handler to an event type.
 
 #### unsubscribe
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def unsubscribe(self, event_class: Union[Type[Event], str], handler: Callable) -> bool
@@ -479,7 +479,7 @@ Unsubscribe a handler from an event type.
 
 #### publish
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 async def publish(self, event: Event, wait_for_completion: bool = False) -> bool
@@ -501,7 +501,7 @@ Publish an event to all matching handlers.
 
 #### get_history
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def get_history(self, event_type: Optional[str] = None, session_id: Optional[str] = None) -> List[Event]
@@ -518,7 +518,7 @@ Returns:
 
 #### get_stats
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def get_stats(self) -> Dict[str, Any]
@@ -531,7 +531,7 @@ Returns:
 
 #### clear_history
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def clear_history(self) -> None
@@ -541,7 +541,7 @@ Clear event history.
 
 #### reset_error_tracking
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 def reset_error_tracking(self) -> None
@@ -551,7 +551,7 @@ Reset error event tracking (useful for testing).
 
 #### shutdown
 
-_Defined in `xtalk.serving.event_bus`._
+_Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
 async def shutdown(self) -> None

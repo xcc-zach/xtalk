@@ -1,5 +1,5 @@
 > **Note**
-> 示例请参阅 `examples/sample_app/custom_model.py`。该示例在服务端文件中定义了一个 `EchoAgent`，用 `@model` 注册后，通过配置把默认 `llm_agent` 替换为这个自定义 Agent。
+> 示例请参阅 [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py)。该示例在服务端文件中定义了一个 `EchoAgent`，用 `@model` 注册后，通过配置把默认 `llm_agent` 替换为这个自定义 Agent。
 
 您可能希望为已有模型类型引入一个新模型，例如新的文本转语音模型。下面以 `custom_model.py` 为例，说明如何一步步引入一个新的 `EchoAgent`。这个 Agent 会读取最终 ASR 文本，然后把这段文本原样作为助手回复输出。
 

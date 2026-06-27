@@ -1,6 +1,6 @@
 X-Talk keeps most models and execution on the server side. The client is mainly responsible for microphone access, audio streaming, WebSocket messaging, and lightweight session logic.
 
-The client API is published as [xtalk-client](https://www.npmjs.com/package/xtalk-client), and its public interface is exported from `frontend/src/index.ts`.
+The client API is published as [xtalk-client](https://www.npmjs.com/package/xtalk-client), and its public interface is exported from [`frontend/src/index.ts`](https://github.com/xcc-zach/xtalk/blob/main/frontend/src/index.ts).
 
 ## Minimal client setup
 
@@ -17,7 +17,7 @@ If you use a bundler, install the package first:
 npm install xtalk-client
 ```
 
-> For developers, client code is under `frontend`. In that directory, you may run `npm run watch` for a dev build.
+> For developers, client code is under [`frontend`](https://github.com/xcc-zach/xtalk/tree/main/frontend). In that directory, you may run `npm run watch` for a dev build.
 
 Then import it in your frontend code:
 
@@ -100,6 +100,6 @@ const session = createSession(wsUrl, {
 
 For a fuller example including static files, templates, upload UI, session switching, and voice selection, see:
 
-- `examples/sample_app/configurable_server.py`
-- `examples/sample_app/static/js/index.js`
-- `examples/sample_app/templates/index.html`
+- [`examples/sample_app/configurable_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/configurable_server.py)
+- [`examples/sample_app/static/js/index.js`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/js/index.js)
+- [`examples/sample_app/templates/index.html`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/templates/index.html)
