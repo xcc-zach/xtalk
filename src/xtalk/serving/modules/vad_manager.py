@@ -3,7 +3,7 @@
 VADManager
 
 Backend VAD manager used when the frontend cannot run VAD. It mimics the logic in
-`frontend/src/index.js` using `pipeline.vad_model`:
+`frontend/src/index.js` using a configured VAD model:
 
 - Process frames at 16 kHz with 512 samples (~32 ms/frame)
 - Speech start triggers when speech frames accumulate beyond `min_speech_ms`
@@ -31,7 +31,7 @@ from ..events import (
     VADSpeechStart,
     VADSpeechEnd,
 )
-from ...pipelines import Pipeline
+from ...models import Models, VAD
 
 
 @dataclass
@@ -50,16 +50,15 @@ class VADManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config: dict[str, Any] = config or {}
 
         # Enable only when a backend VAD model is configured
-        self.vad = self.pipeline.get_vad_model()
+        self.vad = models.get(VAD)
 
         # Sampling parameters (aligned with frontend defaults: 16 kHz / 512 samples)
         self.sample_rate: int = int(self.config.get("vad_sample_rate", 16000))

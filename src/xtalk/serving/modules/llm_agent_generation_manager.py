@@ -6,9 +6,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncIterator
 
+from ...models import Agent, Models
 from ...models.agents import AgentOutput
 from ...log_utils import logger
-from ...pipelines import Pipeline
 from ..event_bus import EventBus
 from ..events import (
     ConsumeLLMAgentGenerationRequested,
@@ -45,12 +45,12 @@ class LLMAgentConsumptionManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
+        self.models = models
         self.config: dict[str, Any] = config or {}
 
         self._active_streams: dict[asyncio.Task[None], AsyncIterator[AgentOutput]] = {}
@@ -68,24 +68,63 @@ class LLMAgentConsumptionManager(Manager):
         """Handle runtime LLM model switch requests."""
 
         try:
-            if hasattr(self.pipeline, "set_llm_model"):
-                self.pipeline.set_llm_model(
-                    event.model_name,
-                    event.base_url,
-                    event.api_key,
-                    event.extra_body,
-                )
-            else:
-                logger.warning(
-                    "Pipeline does not support set_llm_model - session: %s",
-                    self.session_id,
-                )
+            self._set_llm_model(
+                event.model_name,
+                event.base_url,
+                event.api_key,
+                event.extra_body,
+            )
         except Exception as exc:
             logger.error(
                 "Failed to switch LLM model: %s - session: %s",
                 exc,
                 self.session_id,
             )
+
+    def _set_llm_model(
+        self,
+        model: str,
+        base_url: str = "",
+        api_key: str = "",
+        extra_body: dict[str, Any] | None = None,
+    ) -> None:
+        """Replace the current agent LLM with a ``ChatOpenAI`` instance."""
+        from langchain_openai import ChatOpenAI
+        import os
+
+        kwargs: dict[str, Any] = {"model": model}
+
+        if api_key:
+            kwargs["api_key"] = api_key
+        elif os.environ.get("OPENAI_API_KEY"):
+            kwargs["api_key"] = os.environ["OPENAI_API_KEY"]
+
+        if base_url:
+            kwargs["base_url"] = base_url
+        elif os.environ.get("OPENAI_BASE_URL"):
+            kwargs["base_url"] = os.environ["OPENAI_BASE_URL"]
+
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
+        new_model = ChatOpenAI(**kwargs)
+        agent = self.models.get(Agent)
+        if agent is None or not hasattr(agent, "model"):
+            return
+
+        agent.model = new_model
+        if not hasattr(agent, "_model_with_tools"):
+            return
+
+        tools = list(getattr(agent, "tools_map", {}).values())
+        if not tools:
+            agent._model_with_tools = new_model
+            return
+
+        try:
+            agent._model_with_tools = new_model.bind_tools(tools)
+        except Exception:
+            agent._model_with_tools = new_model
 
     @Manager.event_handler(ConsumeLLMAgentGenerationRequested, priority=98)
     async def _handle_generation_request(

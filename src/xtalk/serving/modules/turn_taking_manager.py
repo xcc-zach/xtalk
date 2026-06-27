@@ -12,7 +12,7 @@ from ..events import (
     TurnDetectorStopSpeaking,
     TTSPlaybackFinished,
 )
-from ...pipelines import Pipeline
+from ...models import Models, TurnDetector
 
 
 class TurnTakingManager(Manager):
@@ -20,12 +20,12 @@ class TurnTakingManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self._turn_detector_model = pipeline.get_turn_detector_model()
+        self._turn_detector_model = models.get(TurnDetector)
 
     @Manager.event_handler(TurnDetectorStartGeneration, priority=99)
     async def _on_turn_detector_start_generation(

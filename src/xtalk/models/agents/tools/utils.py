@@ -5,7 +5,7 @@ Helper utilities unrelated to agent decision logic.
 
 This module defines a constructor for a pseudo tool named "tool_call_result".
 It wraps each finished tool invocation into a consistent payload so upstream
-components (e.g., Pipeline/TTSManager) can consume the result and downstream
+components (e.g., TTSManager) can consume the result and downstream
 modules (e.g., RetrievalManager) can react accordingly.
 
 Notes:
