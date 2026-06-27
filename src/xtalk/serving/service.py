@@ -27,7 +27,7 @@ from .modules.recording_manager import RecordingManager
 from .modules.turn_detector_manager import TurnDetectorManager
 from .modules.tts_playback_manager import TTSPlaybackManager
 from .modules.persistence_manager import PersistenceManager
-from .events import BaseEvent, LLMAgentLoop
+from .events import Event, LLMAgentLoop
 from ..models import Agent, Models
 from .interfaces import EventListenerMixin, EventOverrides
 
@@ -116,7 +116,7 @@ class Service:
         self,
         *,
         event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         method_name: str | None = None,
     ) -> None:
         """Disable an automatic event subscription for a listener class.
@@ -125,7 +125,7 @@ class Service:
         ----------
         event_listener_cls : Type[EventListenerMixin]
             Listener class whose subscription should be disabled.
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event type to unsubscribe.
         method_name : str | None, optional
             Specific method name to disable. If omitted, every handler for the
@@ -142,13 +142,13 @@ class Service:
         self,
         *,
         event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         method_or_handler: (
             str
-            | Callable[[EventListenerMixin, BaseEvent], Any]
-            | Callable[[BaseEvent], Any]
-            | Callable[[EventListenerMixin, BaseEvent], Coroutine[Any, Any, Any]]
-            | Callable[[BaseEvent], Coroutine[Any, Any, Any]]
+            | Callable[[EventListenerMixin, Event], Any]
+            | Callable[[Event], Any]
+            | Callable[[EventListenerMixin, Event], Coroutine[Any, Any, Any]]
+            | Callable[[Event], Coroutine[Any, Any, Any]]
         ),
         priority: int = 0,
         enabled_if: Callable[[EventListenerMixin], bool] | None = None,
@@ -159,7 +159,7 @@ class Service:
         ----------
         event_listener_cls : Type[EventListenerMixin]
             Listener class that should receive the event.
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event type to subscribe to.
         method_or_handler : str | Callable
             Method name on the listener instance or an external sync/async

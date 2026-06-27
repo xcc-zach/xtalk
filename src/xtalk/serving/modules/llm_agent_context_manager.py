@@ -13,7 +13,7 @@ from ..event_bus import EventBus
 from ..events import (
     ASRResultPartial,
     ASRResultFinal,
-    BaseEvent,
+    Event,
     CaptionUpdated,
     ConsumeLLMAgentGenerationRequested,
     EmbeddingStatusUpdated,
@@ -24,7 +24,7 @@ from ..events import (
 )
 from ..interfaces import Manager
 
-_BASE_EVENT_FIELD_NAMES = frozenset(field.name for field in fields(BaseEvent))
+_BASE_EVENT_FIELD_NAMES = frozenset(field.name for field in fields(Event))
 
 
 class LLMAgentContextManager(Manager):
@@ -107,7 +107,7 @@ class LLMAgentContextManager(Manager):
 
     async def _accept_event_context(
         self,
-        event: BaseEvent,
+        event: Event,
         *,
         context_type: str,
     ) -> None:
@@ -115,7 +115,7 @@ class LLMAgentContextManager(Manager):
 
         Parameters
         ----------
-        event : BaseEvent
+        event : Event
             Source event published within the current session.
         context_type : str
             Logical agent-context stream name.

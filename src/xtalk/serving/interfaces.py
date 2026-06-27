@@ -2,23 +2,23 @@ from abc import ABC, abstractmethod, ABCMeta
 from typing import Type, Callable, Any
 from dataclasses import dataclass, field
 from inspect import signature, isawaitable
-from .events import BaseEvent
+from .events import Event
 from .event_bus import EventBus
 
 
 @dataclass
 class EventOverrides:
-    disable: list[tuple[str, Type[BaseEvent]]] = field(default_factory=list)
+    disable: list[tuple[str, Type[Event]]] = field(default_factory=list)
     extra: list[dict[str, Any]] = field(default_factory=list)
 
-    def should_skip(self, method_name: str, event_type: Type[BaseEvent]) -> bool:
+    def should_skip(self, method_name: str, event_type: Type[Event]) -> bool:
         if any(m == "*" and et is event_type for m, et in self.disable):
             return True
         return any(m == method_name and et is event_type for m, et in self.disable)
 
     def register_extra(self, obj: Any, event_bus: EventBus) -> None:
         for item in self.extra:
-            ev_type: Type[BaseEvent] = item["event_type"]
+            ev_type: Type[Event] = item["event_type"]
             priority: int = item.get("priority", 0)
             enabled_if = item.get("enabled_if", None)
 
@@ -87,7 +87,7 @@ class EventListenerMeta(ABCMeta):
                     )
                 method = getattr(obj, method_name)
                 for meta in meta_list:
-                    ev_type: Type[BaseEvent] = meta["event_type"]
+                    ev_type: Type[Event] = meta["event_type"]
                     priority: int = meta["priority"]
                     enabled_if = meta["enabled_if"]
 
@@ -108,7 +108,7 @@ class EventListenerMeta(ABCMeta):
 class EventListenerMixin(metaclass=EventListenerMeta):
     @staticmethod
     def event_handler(
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         *,
         priority: int = 0,
         enabled_if: Callable[["EventListenerMixin"], bool] | None = None,
@@ -117,7 +117,7 @@ class EventListenerMixin(metaclass=EventListenerMeta):
 
         Parameters
         ----------
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event class handled by the decorated method.
         priority : int, optional
             Execution priority for the handler. Higher values run first.
@@ -131,7 +131,7 @@ class EventListenerMixin(metaclass=EventListenerMeta):
             Decorator that annotates the target method for automatic event-bus
             registration.
         """
-        def decorator(func: Callable[[BaseEvent], Any]):
+        def decorator(func: Callable[[Event], Any]):
             meta_list = getattr(func, "__event_handlers__", [])
             meta_list.append(
                 {
@@ -163,7 +163,7 @@ class Manager(EventListenerMixin, ShutdownMixin):
 
     @staticmethod
     def event_handler(
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         *,
         priority: int = 0,
         enabled_if: Callable[["EventListenerMixin"], bool] | None = None,
@@ -172,7 +172,7 @@ class Manager(EventListenerMixin, ShutdownMixin):
 
         Parameters
         ----------
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event class handled by the decorated method.
         priority : int, optional
             Execution priority for the handler. Higher values run first.

@@ -6,7 +6,7 @@ from ..models.agents.interfaces import AgentOutput
 
 
 @dataclass
-class BaseEvent:
+class Event:
     """Base dataclass for all Xtalk events.
 
     Parameters
@@ -38,8 +38,8 @@ class BaseEvent:
 
 def create_event_class(
     *, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None
-) -> Type[BaseEvent]:
-    """Create a ``BaseEvent`` subclass dynamically.
+) -> Type[Event]:
+    """Create an ``Event`` subclass dynamically.
 
     Parameters
     ----------
@@ -53,8 +53,8 @@ def create_event_class(
 
     Returns
     -------
-    Type[BaseEvent]
-        Generated dataclass type inheriting from ``BaseEvent``.
+    Type[Event]
+        Generated dataclass type inheriting from ``Event``.
 
     Examples
     --------
@@ -69,25 +69,25 @@ def create_event_class(
         dataclass_fields.append((key, type(default), field(default=default)))
     type_name = type_name or name.lower()
     return make_dataclass(
-        name, dataclass_fields, bases=(BaseEvent,), namespace={"TYPE": type_name}
+        name, dataclass_fields, bases=(Event,), namespace={"TYPE": type_name}
     )
 
 
 @dataclass
-class WebSocketMessageReceived(BaseEvent):
+class WebSocketMessageReceived(Event):
     TYPE: ClassVar[str] = "websocket.message_received"
     message: str = ""
 
 
 @dataclass
-class AudioFrameReceived(BaseEvent):
+class AudioFrameReceived(Event):
     TYPE: ClassVar[str] = "audio.frame_received"
     audio_data: bytes
     sample_rate: int = 16000
 
 
 @dataclass
-class EnhancedAudioFrameReceived(BaseEvent):
+class EnhancedAudioFrameReceived(Event):
     """Enhanced audio frame for downstream ASR/VAD."""
 
     TYPE: ClassVar[str] = "audio.enhanced_frame_received"
@@ -96,19 +96,19 @@ class EnhancedAudioFrameReceived(BaseEvent):
 
 
 @dataclass
-class VADSpeechStart(BaseEvent):
+class VADSpeechStart(Event):
     TYPE: ClassVar[str] = "vad.speech_start"
     origin: str = "client"
 
 
 @dataclass
-class VADSpeechEnd(BaseEvent):
+class VADSpeechEnd(Event):
     TYPE: ClassVar[str] = "vad.speech_end"
     origin: str = "client"
 
 
 @dataclass
-class ASRResultPartial(BaseEvent):
+class ASRResultPartial(Event):
     TYPE: ClassVar[str] = "asr.result_partial"
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
@@ -116,7 +116,7 @@ class ASRResultPartial(BaseEvent):
 
 
 @dataclass
-class ASRResultFinal(BaseEvent):
+class ASRResultFinal(Event):
     # Emit when ready for generation
     TYPE: ClassVar[str] = "asr.result_final"
     text: str = ""
@@ -124,52 +124,52 @@ class ASRResultFinal(BaseEvent):
 
 
 @dataclass
-class LLMFirstChunk(BaseEvent):
+class LLMFirstChunk(Event):
     """Event for first LLM chunk/tool call (measure first token latency)."""
 
     TYPE: ClassVar[str] = "llm.first_chunk"
 
 
 @dataclass
-class LLMFirstSentence(BaseEvent):
+class LLMFirstSentence(Event):
     """Event for first synthesizable sentence (measure sentence latency)."""
 
     TYPE: ClassVar[str] = "llm.sentence_ready"
 
 
 @dataclass
-class TTSStarted(BaseEvent):
+class TTSStarted(Event):
     TYPE: ClassVar[str] = "tts.started"
 
 
 @dataclass
-class TTSStopped(BaseEvent):
+class TTSStopped(Event):
     TYPE: ClassVar[str] = "tts.stopped"
 
 
 @dataclass
-class TTSPaused(BaseEvent):
+class TTSPaused(Event):
     TYPE: ClassVar[str] = "tts.paused"
 
 
 @dataclass
-class TTSResumed(BaseEvent):
+class TTSResumed(Event):
     TYPE: ClassVar[str] = "tts.resumed"
 
 
 @dataclass
-class TTSFinished(BaseEvent):
+class TTSFinished(Event):
     TYPE: ClassVar[str] = "tts.finished"
 
 
 @dataclass
-class LLMAgentResponseUpdate(BaseEvent):
+class LLMAgentResponseUpdate(Event):
     TYPE: ClassVar[str] = "llm_agent.response_update"
     text: str = ""
 
 
 @dataclass
-class LLMAgentResponseFinish(BaseEvent):
+class LLMAgentResponseFinish(Event):
     """Final text emitted by the agent for one response.
 
     Attributes
@@ -183,7 +183,7 @@ class LLMAgentResponseFinish(BaseEvent):
 
 
 @dataclass
-class ResponseUpdate(BaseEvent):
+class ResponseUpdate(Event):
     """Text prefix whose corresponding TTS playback progress has been confirmed.
 
     Attributes
@@ -197,7 +197,7 @@ class ResponseUpdate(BaseEvent):
 
 
 @dataclass
-class ResponseFinish(BaseEvent):
+class ResponseFinish(Event):
     """Final text whose corresponding TTS playback has finished.
 
     Attributes
@@ -211,7 +211,7 @@ class ResponseFinish(BaseEvent):
 
 
 @dataclass
-class TTSTextSynthesized(BaseEvent):
+class TTSTextSynthesized(Event):
     """Text marker emitted after one synthesized text segment is fully produced.
 
     Attributes
@@ -228,13 +228,13 @@ class TTSTextSynthesized(BaseEvent):
 
 
 @dataclass
-class TTSVoiceChange(BaseEvent):
+class TTSVoiceChange(Event):
     TYPE: ClassVar[str] = "tts.reference_audio_changed"
     voice_name: str = ""
 
 
 @dataclass
-class TTSEmotionChange(BaseEvent):
+class TTSEmotionChange(Event):
     TYPE: ClassVar[str] = "tts.emotion_changed"
     emotion_name: str = ""
     emotion_vector: list = None
@@ -246,13 +246,13 @@ class TTSEmotionChange(BaseEvent):
 
 
 @dataclass
-class TTSSpeedChange(BaseEvent):
+class TTSSpeedChange(Event):
     TYPE: ClassVar[str] = "tts.speed_changed"
     speed: float = 1.0  # 0.5 ~ 1.5
 
 
 @dataclass
-class TTSChunkReady(BaseEvent):
+class TTSChunkReady(Event):
     """Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated."""
     TYPE: ClassVar[str] = "tts.chunk_ready"
     audio_chunk: bytes = b""
@@ -260,7 +260,7 @@ class TTSChunkReady(BaseEvent):
 
 
 @dataclass
-class TTSChunkPlayed(BaseEvent):
+class TTSChunkPlayed(Event):
     """Frontend confirmed playback completion for a TTS audio chunk.
 
     InputGateway publishes this after receiving tts_chunk_played so downstream
@@ -271,12 +271,12 @@ class TTSChunkPlayed(BaseEvent):
 
 
 @dataclass
-class TTSPlaybackFinished(BaseEvent):
+class TTSPlaybackFinished(Event):
     TYPE: ClassVar[str] = "tts.playback_finished"
 
 
 @dataclass
-class FullAudioFrameReady(BaseEvent):
+class FullAudioFrameReady(Event):
     TYPE: ClassVar[str] = "audio.full_frame_ready"
     audio_chunk: bytes = b""
     sample_rate: int = 48000
@@ -285,14 +285,14 @@ class FullAudioFrameReady(BaseEvent):
 
 
 @dataclass
-class ErrorOccurred(BaseEvent):
+class ErrorOccurred(Event):
     TYPE: ClassVar[str] = "error.occurred"
     error_type: str = ""
     error_message: str = ""
 
 
 @dataclass
-class CaptionUpdated(BaseEvent):
+class CaptionUpdated(Event):
     TYPE: ClassVar[str] = "caption.updated"
     text: str = ""
     is_final: bool = False
@@ -300,7 +300,7 @@ class CaptionUpdated(BaseEvent):
 
 
 @dataclass
-class ToolCallOccurred(BaseEvent):
+class ToolCallOccurred(Event):
     """LLM/Agent tool invocation notification."""
 
     TYPE: ClassVar[str] = "agent.tool_called"
@@ -309,14 +309,14 @@ class ToolCallOccurred(BaseEvent):
 
 
 @dataclass
-class RetrievalUpdated(BaseEvent):
+class RetrievalUpdated(Event):
     TYPE: ClassVar[str] = "retrieval.updated"
     text: str = ""
     is_final: bool = False
 
 
 @dataclass
-class EmbeddingStatusUpdated(BaseEvent):
+class EmbeddingStatusUpdated(Event):
     """Embedding lifecycle update consumed by the LLM agent context manager."""
 
     TYPE: ClassVar[str] = "embedding.status_updated"
@@ -326,14 +326,14 @@ class EmbeddingStatusUpdated(BaseEvent):
 
 
 @dataclass
-class LLMAgentLoop(BaseEvent):
+class LLMAgentLoop(Event):
     """Request one agent-context accept loop iteration for the session."""
 
     TYPE: ClassVar[str] = "llm.agent_loop"
 
 
 @dataclass
-class TextForEmbeddingReady(BaseEvent):
+class TextForEmbeddingReady(Event):
     TYPE: ClassVar[str] = "embeddings.text_ready"
     text: str = ""
 
@@ -342,7 +342,7 @@ class TextForEmbeddingReady(BaseEvent):
 
 
 @dataclass
-class LatencyMetricsUpdated(BaseEvent):
+class LatencyMetricsUpdated(Event):
     """Fine-grained backend latency metrics (milliseconds)."""
 
     TYPE: ClassVar[str] = "metrics.latency_updated"
@@ -357,33 +357,33 @@ class LatencyMetricsUpdated(BaseEvent):
 
 
 @dataclass
-class TurnTTSStartRequested(BaseEvent):
+class TurnTTSStartRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_start_requested"
 
 
 @dataclass
-class TurnTTSPauseRequested(BaseEvent):
+class TurnTTSPauseRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_pause_requested"
 
 
 @dataclass
-class TurnTTSResumeRequested(BaseEvent):
+class TurnTTSResumeRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_resume_requested"
 
 
 @dataclass
-class TurnTTSStopRequested(BaseEvent):
+class TurnTTSStopRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_stop_requested"
     reason: str = ""  # e.g., verification_valid|playback_finished
 
 
 @dataclass
-class TurnTTSFlushRequested(BaseEvent):
+class TurnTTSFlushRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_flush_requested"
 
 
 @dataclass
-class ConsumeLLMAgentGenerationRequested(BaseEvent):
+class ConsumeLLMAgentGenerationRequested(Event):
     """Request consumption of one LLM-agent output stream."""
 
     TYPE: ClassVar[str] = "llm_agent.consume_generation_requested"
@@ -391,28 +391,28 @@ class ConsumeLLMAgentGenerationRequested(BaseEvent):
 
 
 @dataclass
-class TurnLLMAgentResumeRequested(BaseEvent):
+class TurnLLMAgentResumeRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_resume_requested"
 
 
 @dataclass
-class TurnLLMAgentPauseRequested(BaseEvent):
+class TurnLLMAgentPauseRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_pause_requested"
 
 
 @dataclass
-class TurnLLMAgentStopRequested(BaseEvent):
+class TurnLLMAgentStopRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_stop_requested"
     reason: str = ""  # e.g., vad_start|verification_valid
 
 
 @dataclass
-class TurnASRStartRequested(BaseEvent):
+class TurnASRStartRequested(Event):
     TYPE: ClassVar[str] = "turn.asr_start_requested"
 
 
 @dataclass
-class TurnASREndRequested(BaseEvent):
+class TurnASREndRequested(Event):
     """
     Indicates hard turn end. ASR model state is reset. Turn moves to next.
     """
@@ -421,7 +421,7 @@ class TurnASREndRequested(BaseEvent):
 
 
 @dataclass
-class TurnASRPauseRequested(BaseEvent):
+class TurnASRPauseRequested(Event):
     """
     Used when user indicates a wait, or pauses in the speech. Triggers recognition once. ASR model state is preserved; turn unchanged.
     """
@@ -430,7 +430,7 @@ class TurnASRPauseRequested(BaseEvent):
 
 
 @dataclass
-class TurnTTSTextAppendRequested(BaseEvent):
+class TurnTTSTextAppendRequested(Event):
     """Request to append text into ongoing TTS stream (sim-trans)."""
 
     TYPE: ClassVar[str] = "turn.tts_text_append_requested"
@@ -441,7 +441,7 @@ class TurnTTSTextAppendRequested(BaseEvent):
 
 
 @dataclass
-class SpeakerRecognized(BaseEvent):
+class SpeakerRecognized(Event):
     """Speaker-recognition result for frontend display."""
 
     TYPE: ClassVar[str] = "speaker.recognized"
@@ -453,7 +453,7 @@ class SpeakerRecognized(BaseEvent):
 
 
 @dataclass
-class TTSModelSwitchRequested(BaseEvent):
+class TTSModelSwitchRequested(Event):
     """Request to switch TTS model (IndexTTS / IndexTTS2)."""
 
     TYPE: ClassVar[str] = "tts.model_switch_requested"
@@ -462,7 +462,7 @@ class TTSModelSwitchRequested(BaseEvent):
 
 
 @dataclass
-class LLMModelSwitchRequested(BaseEvent):
+class LLMModelSwitchRequested(Event):
     """Request to switch LLM configuration (ChatOpenAI model/base_url)."""
 
     TYPE: ClassVar[str] = "llm.model_switch_requested"
@@ -473,7 +473,7 @@ class LLMModelSwitchRequested(BaseEvent):
 
 
 @dataclass
-class ClockSyncReceived(BaseEvent):
+class ClockSyncReceived(Event):
     """Clock-sync event for offset calculation."""
 
     TYPE: ClassVar[str] = "clock.sync_received"
@@ -483,7 +483,7 @@ class ClockSyncReceived(BaseEvent):
 
 
 @dataclass
-class SessionConfigReceived(BaseEvent):
+class SessionConfigReceived(Event):
     """Client sent per-session configuration (e.g., recording path)."""
 
     TYPE: ClassVar[str] = "session.config_received"
@@ -494,14 +494,14 @@ class SessionConfigReceived(BaseEvent):
 
 
 @dataclass
-class TurnDetectorStopSpeaking(BaseEvent):
+class TurnDetectorStopSpeaking(Event):
     """Turn detector determined ai should stop speaking."""
 
     TYPE: ClassVar[str] = "turn_detector.stop_speaking"
 
 
 @dataclass
-class TurnDetectorStartGeneration(BaseEvent):
+class TurnDetectorStartGeneration(Event):
     """Turn detector determined ai should start generation."""
 
     TYPE: ClassVar[str] = "turn_detector.start_generation"
