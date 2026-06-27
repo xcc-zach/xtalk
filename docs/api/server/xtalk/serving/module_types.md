@@ -72,7 +72,7 @@ class ASRManager(Manager)
 _Defined in `xtalk.serving.modules.asr_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
@@ -139,7 +139,7 @@ class EmbeddingsManager(Manager)
 _Defined in `xtalk.serving.modules.embeddings_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
@@ -169,7 +169,7 @@ Backend speech enhancement manager.
 _Defined in `xtalk.serving.modules.enhancer_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: Optional[dict[str, Any]] = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: Optional[dict[str, Any]] = None) -> None
 ```
 
 #### shutdown
@@ -239,8 +239,8 @@ Forward session context events into the configured LLM agent.
   Shared event bus for the current session.
 - `session_id` (`str`)
   Current session identifier.
-- `pipeline` (`Pipeline`)
-  Session pipeline that owns the LLM agent.
+- `models` (`Models`)
+  Session model container that owns the LLM agent.
 - `config` (`dict[str, Any] | None, optional`)
   Unused manager config kept for interface consistency.
 
@@ -251,7 +251,7 @@ Forward session context events into the configured LLM agent.
 _Defined in `xtalk.serving.modules.llm_agent_context_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
 ```
 
 #### shutdown
@@ -287,7 +287,7 @@ arrival order.
 _Defined in `xtalk.serving.modules.llm_agent_generation_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
 ```
 
 #### shutdown
@@ -323,7 +323,7 @@ Responsibilities:
 _Defined in `xtalk.serving.modules.speaker_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 Initialize the speaker manager.
@@ -331,7 +331,7 @@ Initialize the speaker manager.
 Args:
     event_bus: shared event bus
     session_id: unique session identifier
-    pipeline: pipeline providing a speaker encoder
+    models: model container providing a speaker encoder
     config: optional parameters
         - similarity_threshold: cosine threshold (default 0.4)
         - min_audio_length_sec: minimum audio length (default 0.5s)
@@ -398,7 +398,7 @@ Event-driven TTS manager handling streaming synthesis and control.
 _Defined in `xtalk.serving.modules.tts_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 Initialize TTS manager.
@@ -406,7 +406,7 @@ Initialize TTS manager.
 Args:
     event_bus: shared event bus
     session_id: unique session identifier
-    pipeline: pipeline providing TTS models/controllers
+    models: model container providing TTS models/controllers
 
 #### reset_tts
 
@@ -443,7 +443,7 @@ class TurnTakingManager(Manager)
 _Defined in `xtalk.serving.modules.turn_taking_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
@@ -471,7 +471,7 @@ Backend VAD manager.
 _Defined in `xtalk.serving.modules.vad_manager`._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: Optional[dict[str, Any]] = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: Optional[dict[str, Any]] = None) -> None
 ```
 
 #### shutdown

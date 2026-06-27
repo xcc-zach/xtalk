@@ -7,7 +7,7 @@
     
 **Dependency:** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/asr/sherpa_onnx_asr.py`
+**Path:** `src/xtalk/models/asr/sherpa_onnx_asr.py`
     
 A high-performance speech recognition framework and beyond.
 
@@ -24,7 +24,7 @@ A high-performance speech recognition framework and beyond.
     
 **Dependency:** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/asr/qwen3_asr_flash_realtime.py`
+**Path:** `src/xtalk/models/asr/qwen3_asr_flash_realtime.py`
     
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/qwen3-asr-flash)
     
@@ -35,7 +35,7 @@ A high-performance speech recognition framework and beyond.
     
 **Dependency:** `pip install "xtalk[zipformer-local] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/asr/zipformer_local.py`
+**Path:** `src/xtalk/models/asr/zipformer_local.py`
     
 [Details](https://www.modelscope.cn/models/yhdai666/xtalk_zipformer_onnx/summary)
     
@@ -46,7 +46,7 @@ A high-performance speech recognition framework and beyond.
     
 **Dependency:** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/asr/elevenlabs.py`
+**Path:** `src/xtalk/models/asr/elevenlabs.py`
     
 [API Reference](https://elevenlabs.io/docs/api-reference/speech-to-text/convert)
     
@@ -62,8 +62,8 @@ A high-performance speech recognition framework and beyond.
 **Dependency:** `pip install "xtalk[index-tts] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **Path:** 
-- `src/xtalk/speech/tts/index_tts.py`
-- `src/xtalk/speech/tts/index_tts2.py`
+- `src/xtalk/models/tts/index_tts.py`
+- `src/xtalk/models/tts/index_tts2.py`
     
 [Repo](https://github.com/index-tts/index-tts)
     
@@ -79,7 +79,7 @@ A high-performance speech recognition framework and beyond.
 
 **Dependency:** `pip install "xtalk[gpt-sovits] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/tts/gpt_sovits.py`
+**Path:** `src/xtalk/models/tts/gpt_sovits.py`
 
     
 [Repo](https://github.com/RVC-Boss/GPT-SoVITS)
@@ -93,7 +93,7 @@ A high-performance speech recognition framework and beyond.
 
 **Dependency:** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/tts/cosyvoice.py`
+**Path:** `src/xtalk/models/tts/cosyvoice.py`
 
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/cosyvoice-v3-flash)
     
@@ -104,7 +104,7 @@ A high-performance speech recognition framework and beyond.
     
 **Dependency:** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/tts/elevenlabs.py`
+**Path:** `src/xtalk/models/tts/elevenlabs.py`
     
 [API Reference](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)
     
@@ -121,7 +121,7 @@ X-Talk has VAD on client side, so you may not need one.
 
 **Dependency:** `pip install "xtalk[silero-vad] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/vad/silero_vad.py`
+**Path:** `src/xtalk/models/vad/silero_vad.py`
     
 [Model Details](https://github.com/snakers4/silero-vad)
 [VAD-Web](https://github.com/ricky0123/vad)
@@ -139,7 +139,7 @@ Turn detectors decide when the user has finished speaking and the system should 
 
 **Dependency:** `pip install "xtalk[soulx-duplug] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/turn_detector/soulx_duplug.py`
+**Path:** `src/xtalk/models/turn_detector/soulx_duplug.py`
 
 [Repo](https://github.com/Soul-AILab/SoulX-Duplug)
 
@@ -150,7 +150,7 @@ Turn detectors decide when the user has finished speaking and the system should 
 
 **Dependency:** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/turn_detector/turn_sense.py`
+**Path:** `src/xtalk/models/turn_detector/turn_sense.py`
 
 [Original Repo](https://github.com/Bairong-Xdynamics/TurnSense)
 
@@ -167,7 +167,7 @@ Turn detectors decide when the user has finished speaking and the system should 
     
 **Dependency:** `pip install onnxruntime`
 
-**Path:** `src/xtalk/speech/speech_enhancer/speech_enhancer.py`
+**Path:** `src/xtalk/models/speech_enhancer/speech_enhancer.py`
     
 [Model Details](https://github.com/aask1357/fastenhancer)
     
@@ -182,7 +182,7 @@ Turn detectors decide when the user has finished speaking and the system should 
   
 **Dependency:** `pip install "xtalk[pyannote] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** `src/xtalk/speech/speaker_encoder/pyannote_embedding.py`
+**Path:** `src/xtalk/models/speaker_encoder/pyannote_embedding.py`
     
 [Wespeaker](https://github.com/wenet-e2e/wespeaker)
 [Model Details](https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM)
@@ -200,7 +200,7 @@ Captioners give you description of audio clip.
    
 **Dependency:** None
 
-**Path:** `src/xtalk/speech/captioner/qwen3_omni_captioner.py`
+**Path:** `src/xtalk/models/captioner/qwen3_omni_captioner.py`
     
 [HuggingFace](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Captioner)
 [ModelScope](https://www.modelscope.cn/models/Qwen/Qwen3-Omni-30B-A3B-Captioner)

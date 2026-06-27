@@ -186,7 +186,7 @@ Each call should return the complete recognized text accumulated from the last `
 
 ## Pseudo-streaming Integration for Non-streaming / Offline ASR Models
 
-You can use `MockStreamRecognizer` from `src/xtalk/speech/utils.py` and build pseudo-streaming behavior on top of `async_recognize`.
+You can use `MockStreamRecognizer` from `src/xtalk/models/audio_utils.py` and build pseudo-streaming behavior on top of `async_recognize`.
 
 ## Meaning of `stream_chunk_bytes_hint`
 

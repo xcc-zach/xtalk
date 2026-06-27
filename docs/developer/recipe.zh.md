@@ -4,12 +4,16 @@
 
 ## 引入新的ASR模型
 
-假设要引入Qwen3ASRFlashRealtime，目前实现已经在`src/xtalk/speech/asr/qwen3_asr_flash_realtime.py`。
+假设要引入Qwen3ASRFlashRealtime，目前实现已经在`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`。
 
-1. 在`src/xtalk/speech/asr`下创建`qwen3_asr_flash_realtime.py`
-2. 准备骨架，并实现对应方法（各类模型接口参考`src/xtalk/speech/interfaces.py`）
+1. 在`src/xtalk/models/asr`下创建`qwen3_asr_flash_realtime.py`
+2. 准备骨架，并实现对应方法（各类模型接口参考`src/xtalk/models/*/interfaces.py`，模型接口细节参考[ASR设计](../docs/asr_design.zh.md)等文档）
 ```python
+from xtalk import model
+
 from ..interfaces import ASR
+
+@model
 class Qwen3ASRFlashRealtime(ASR):
     def __init__(
         self,
@@ -45,7 +49,7 @@ class Qwen3ASRFlashRealtime(ASR):
     ) -> str:
         ...
 ```
-3. 在`src/xtalk/speech/asr/__init__.py`注册新实现的模型
+3. 用 `@model` 装饰实现类，使其可以从配置中被发现
 4. 配置中使用
 ```json
 "asr": {
@@ -58,7 +62,7 @@ class Qwen3ASRFlashRealtime(ASR):
 
 ## 引入新的Agent
 
-参考`src/xtalk/llm_agent/experimental.py`；实现与配置方法类似`引入新的ASR模型`章节，注意在`src/xtalk/llm_agent/__init__.py`中注册模型。
+参考`src/xtalk/models/agents/experimental.py`；实现与配置方法类似`引入新的ASR模型`章节：继承接口，并用 `@model` 装饰实现类。
 
 ### accept的逻辑
 
@@ -67,7 +71,7 @@ async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput
     pass
 ```
 
-`accept`方法订阅外部输入并启动相关处理逻辑；`AgentContext`来自`src/xtalk/serving/modules/llm_agent_context_manager.py`，目前较为稳定的类型有`asr_partial`、`asr_final`、`loop`。其中`loop`在连接建立时触发一次，可以用于处理任何主动触发逻辑，或者是启动输出循环。`src/xtalk/llm_agent/experimental.py`用于触发主动对话。
+`accept`方法订阅外部输入并启动相关处理逻辑；`AgentContext`来自`src/xtalk/serving/modules/llm_agent_context_manager.py`，目前较为稳定的类型有`asr_partial`、`asr_final`、`loop`。其中`loop`在连接建立时触发一次，可以用于处理任何主动触发逻辑，或者是启动输出循环。`src/xtalk/models/agents/experimental.py`用于触发主动对话。
 
 `AgentOutput`为字符串、工具调用或工具调用结果；工具调用返回后可用于`Manager`触发相关逻辑，例如`src/xtalk/serving/modules/llm_agent_context_manager.py`中`direct_audio`的工具调用触发下游`src/xtalk/serving/modules/direct_audio_manager.py`生成直接播放音频的事件。
 
@@ -83,4 +87,4 @@ async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput
 
 ## 引入新的类型的模型
 
-在`src/xtalk/speech/interfaces.py`中创建接口，在`src/xtalk/speech`下创建对应文件夹与模型文件即可，流程与`引入新的ASR模型`相近，之后要在`src/xtalk/model_loader.py`与`src/xtalk/model_types.py`中注册。
+创建`src/xtalk/models/<model_type>`文件夹，在`src/xtalk/models/<model_type>/interfaces.py`中创建接口，并用从 `xtalk` 导入的 `@model_type(aliases=[...])` 装饰它，然后在同一文件夹下创建对应模型文件即可。文件夹名会成为主配置 key，alias 用于保留为配置键设置别名。
