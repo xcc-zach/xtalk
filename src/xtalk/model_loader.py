@@ -38,12 +38,6 @@ def ensure_model_types_registered(
             paths.append(spec)
 
 
-def _registered_model_slots() -> tuple[str, ...]:
-    """Return model slots known to the shared internal registry."""
-    ensure_model_types_registered()
-    return tuple(_MODEL_REGISTRY)
-
-
 def ensure_model_type_registered(
     slot: str,
     registry: dict[str, list[ImportSpec]] | None = None,
@@ -264,11 +258,6 @@ def _resolve_registry_slot(
     return None
 
 
-def _is_module_suffix(value: str) -> bool:
-    """Return whether a config type can be used as a module suffix."""
-    return all(part.isidentifier() for part in value.split("."))
-
-
 def _should_skip_model_scan_module(module_name: str) -> bool:
     """Return whether a module should be skipped during fallback scanning."""
     parts = module_name.split(".")
@@ -342,12 +331,6 @@ def _discover_registered_model_class(
         if ":" in spec_str:
             continue
 
-        if _is_module_suffix(model_type):
-            _import_module_for_discovery(f"{spec_str}.{model_type}", errors)
-            model_class = get_model_class(slot, model_type)
-            if model_class is not None:
-                return model_class, errors
-
         model_class = _scan_model_package(
             package_name=spec_str,
             slot=slot,
@@ -418,12 +401,12 @@ def init_configured_model(
     config: dict[str, Any],
     registry: dict[str, list[ImportSpec]] | None = None,
 ) -> Any:
-    """Instantiate a model for a pipeline slot from a config dictionary.
+    """Instantiate a model for a model slot from a config dictionary.
 
     Parameters
     ----------
     slot : str
-        Pipeline init key or model registry slot.
+        Model registry slot.
     config : dict[str, Any]
         Full service configuration dictionary.
     registry : dict[str, list[ImportSpec]] | None, optional
@@ -441,26 +424,7 @@ def init_configured_model(
     )
 
 
-def is_registered_model_slot(
-    slot: str,
-    registry: dict[str, list[ImportSpec]] | None = None,
-) -> bool:
-    """Return whether a slot or alias is registered as a model type."""
-    ensure_model_type_registered(slot, registry)
-
-    target_registry = registry if registry is not None else _MODEL_REGISTRY
-    if _resolve_registry_slot(slot, target_registry) is not None:
-        return True
-
-    from .models.registry import is_model_slot
-
-    return is_model_slot(slot)
-
-
 __all__ = [
-    "ensure_model_type_registered",
-    "ensure_model_types_registered",
     "init_configured_model",
     "init_registered_model",
-    "is_registered_model_slot",
 ]

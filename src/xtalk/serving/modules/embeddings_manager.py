@@ -6,7 +6,7 @@ from typing import Any
 from ...log_utils import logger
 from ..event_bus import EventBus
 from ..interfaces import Manager
-from ...pipelines import Pipeline
+from ...models import Embeddings, Models
 from ..events import (
     EmbeddingStatusUpdated,
     TextForEmbeddingReady,
@@ -18,12 +18,12 @@ class EmbeddingsManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
+        self.models = models
         # Session-level config shared with managers
         self.config: dict[str, Any] = config or {}
 
@@ -77,10 +77,10 @@ class EmbeddingsManager(Manager):
     async def _run_embedding_job(self, text: str) -> Any | None:
         """Write text to session-level Chroma vector store."""
         # Fetch embeddings model
-        embeddings_model = self.pipeline.get_embeddings_model()
+        embeddings_model = self.models.get(Embeddings)
         if embeddings_model is None:
             logger.warning(
-                "Embeddings model is not configured on pipeline, skip embedding."
+                "Embeddings model is not configured on models, skip embedding."
             )
             return None
 

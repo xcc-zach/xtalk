@@ -157,7 +157,7 @@ class Manager(EventListenerMixin, ShutdownMixin):
 
     Notes
     -----
-    Subclasses typically accept ``event_bus``, ``session_id``, ``pipeline``, and
+    Subclasses typically accept ``event_bus``, ``session_id``, ``models``, and
     ``config`` arguments, then register handlers with ``@Manager.event_handler``.
     """
 

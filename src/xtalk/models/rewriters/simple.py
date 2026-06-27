@@ -7,7 +7,7 @@ Features:
 - Returns the generated text content.
 
 Notes:
-- Implements just the essentials for quick pipeline integration.
+- Implements just the essentials for quick service integration.
 - Extend this class if you need streaming or advanced control.
 """
 

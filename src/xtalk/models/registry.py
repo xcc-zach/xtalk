@@ -233,6 +233,11 @@ def iter_model_search_specs() -> tuple[tuple[str, ImportSpec], ...]:
     return tuple(items)
 
 
+def iter_model_type_infos() -> tuple[ModelTypeInfo, ...]:
+    """Return registered model type metadata in discovery order."""
+    return tuple(_MODEL_TYPE_ORDER)
+
+
 def resolve_config_slot(slot: str, config: dict[str, Any]) -> str:
     """Resolve which config key should be used for a requested model slot."""
     if slot in config:

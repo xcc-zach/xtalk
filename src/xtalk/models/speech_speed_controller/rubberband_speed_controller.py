@@ -60,7 +60,7 @@ class RubberbandSpeedController(SpeechSpeedController):
             return y_stretched.tobytes()
 
         except Exception as e:
-            # On any failure, return original audio to keep pipeline alive
+            # On any failure, return original audio to keep the session alive.
             import warnings
 
             warnings.warn(
