@@ -33,7 +33,7 @@
 
 键值如`asr`代表模型类型，`type`代表该模型类型选择的模型，`params`为模型初始化参数。
 
-例如，模型类型为`llm_agent`的`DefaultAgent` 的定义位于 `src/xtalk/models/agents/default.py`：
+例如，模型类型为`llm_agent`的`DefaultAgent` 的定义位于 [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py)：
 ```python
 class DefaultAgent(Agent):
     def __init__(

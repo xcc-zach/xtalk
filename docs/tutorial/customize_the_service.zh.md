@@ -1,7 +1,7 @@
 *实验中的API*
 
 > **Note**
-> 示例请参阅 `examples/sample_app/custom_service.py`。其中向 X-Talk 添加了一个哑的 `LLMOutputRefactorModel`，用于在发送到前端的最终 LLM 响应文本前附加 `Assistant response: `。
+> 示例请参阅 [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py)。其中向 X-Talk 添加了一个哑的 `LLMOutputRefactorModel`，用于在发送到前端的最终 LLM 响应文本前附加 `Assistant response: `。
 
 您可能希望引入服务内自定义模型，并将其逻辑和其他流程绑定。
 
@@ -9,7 +9,7 @@
 
 引入新模型有两种常见做法：
 
-1. 直接在服务代码里定义模型，并手动放入 `Models`。`examples/sample_app/custom_service.py` 使用的是这种方式。
+1. 直接在服务代码里定义模型，并手动放入 `Models`。[`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) 使用的是这种方式。
 2. 先定义新的模型类型，再注册具体模型实现，让模型可以通过配置文件创建。
 
 ### 做法一：直接引入新模型

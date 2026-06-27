@@ -33,7 +33,7 @@ As mentioned in [Start the Service](start_the_service.md), `Xtalk.from_config(pa
 
 Keys such as `asr` represent model types, `type` selects the model for that model type, and `params` contains the model initialization arguments.
 
-For example, the `DefaultAgent` for the `llm_agent` model type is defined in `src/xtalk/models/agents/default.py`:
+For example, the `DefaultAgent` for the `llm_agent` model type is defined in [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py):
 ```python
 class DefaultAgent(Agent):
     def __init__(

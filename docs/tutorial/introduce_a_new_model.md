@@ -1,5 +1,5 @@
 > **Note**
-> See `examples/sample_app/custom_model.py` for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the default `llm_agent` with this custom agent through config.
+> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the default `llm_agent` with this custom agent through config.
 
 You may want to introduce a new model for an existing model type, such as a new text-to-speech model. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
 

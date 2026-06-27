@@ -13,6 +13,7 @@ SRC_ROOT = REPO_ROOT / "src"
 PACKAGE_ROOT = SRC_ROOT / "xtalk"
 SERVER_DOCS_ROOT = DOCS_ROOT / "api" / "server"
 SAMPLE_APP_ROOT = REPO_ROOT / "examples" / "sample_app"
+GITHUB_SOURCE_ROOT = "https://github.com/xcc-zach/xtalk/blob/main"
 SERVER_API_MODULES = (
     "xtalk",
     "xtalk.events",
@@ -21,6 +22,23 @@ SERVER_API_MODULES = (
     "xtalk.serving",
     "xtalk.serving.module_types",
 )
+LOCALES = ("en", "zh")
+NUMPY_SECTION_TRANSLATIONS_ZH = {
+    "Attributes": "属性",
+    "Examples": "示例",
+    "Methods": "方法",
+    "Notes": "说明",
+    "Other Parameters": "其他参数",
+    "Parameters": "参数",
+    "Raises": "抛出",
+    "Receives": "接收",
+    "References": "参考",
+    "Returns": "返回",
+    "See Also": "另请参阅",
+    "Warns": "警告",
+    "Warnings": "警告",
+    "Yields": "生成",
+}
 
 
 @dataclass
@@ -87,6 +105,23 @@ def _doc_path_for_module(module_name: str) -> Path:
     if _module_path(module_name).name == "__init__.py":
         return Path(*parts) / "index.md"
     return Path(*parts[:-1]) / f"{parts[-1]}.md"
+
+
+def _localized_doc_path(doc_path: Path, locale: str) -> Path:
+    if locale == "en":
+        return doc_path
+    return doc_path.with_name(f"{doc_path.stem}.{locale}{doc_path.suffix}")
+
+
+def _github_url_for_path(path: Path) -> str:
+    relative_path = path.relative_to(REPO_ROOT).as_posix()
+    return f"{GITHUB_SOURCE_ROOT}/{relative_path}"
+
+
+def _github_url_for_module(module_name: str) -> str | None:
+    if not module_name.startswith("xtalk"):
+        return None
+    return _github_url_for_path(_module_path(module_name))
 
 
 def _module_path(module_name: str) -> Path:
@@ -665,9 +700,16 @@ def _render_numpy_examples(lines: list[str]) -> list[str]:
     return _strip_blank_edges(rendered)
 
 
+def _localized_numpy_section_title(title: str, locale: str) -> str:
+    if locale == "zh":
+        return NUMPY_SECTION_TRANSLATIONS_ZH.get(title, title)
+    return title
+
+
 def _render_numpy_sections(
     sections: list[tuple[str | None, list[str]]],
     heading_level: int,
+    locale: str,
 ) -> list[str]:
     rendered: list[str] = []
     for title, lines in sections:
@@ -679,7 +721,9 @@ def _render_numpy_sections(
             rendered.append("")
             continue
 
-        rendered.append(f"{'#' * heading_level} {title}")
+        rendered.append(
+            f"{'#' * heading_level} {_localized_numpy_section_title(title, locale)}"
+        )
         rendered.append("")
         if title in NUMPY_FIELD_SECTIONS:
             rendered.extend(_render_numpy_field_section(lines))
@@ -694,24 +738,55 @@ def _render_numpy_sections(
     return _strip_blank_edges(rendered)
 
 
-def _render_docstring(docstring: str, heading_level: int = 3) -> list[str]:
+def _render_docstring(
+    docstring: str,
+    heading_level: int = 3,
+    locale: str = "en",
+) -> list[str]:
     if not docstring:
         return []
 
     numpy_sections = _split_numpy_sections(docstring)
     if numpy_sections is not None:
-        return _render_numpy_sections(numpy_sections, heading_level)
+        return _render_numpy_sections(numpy_sections, heading_level, locale)
 
     return docstring.strip().splitlines()
 
 
-def _render_object(object_doc: ObjectDoc, current_module: str, level: int = 2) -> list[str]:
+def _object_field_title(object_doc: ObjectDoc, locale: str) -> str:
+    if locale == "zh":
+        if object_doc.kind == "class":
+            return "类字段"
+        return "字段"
+    return f"{object_doc.kind.capitalize()} Fields"
+
+
+def _object_children_title(object_doc: ObjectDoc, locale: str) -> str:
+    if locale == "zh":
+        return "方法" if object_doc.kind == "class" else "成员"
+    return "Methods" if object_doc.kind == "class" else "Members"
+
+
+def _render_object(
+    object_doc: ObjectDoc,
+    current_module: str,
+    level: int = 2,
+    locale: str = "en",
+) -> list[str]:
     heading = "#" * level
-    kind_label = object_doc.kind.capitalize()
     lines = [f"{heading} {object_doc.name}", ""]
 
     if object_doc.source_module and object_doc.source_module != current_module:
-        lines.append(f"_Defined in `{object_doc.source_module}`._")
+        source_url = _github_url_for_module(object_doc.source_module)
+        source_ref = (
+            f"[`{object_doc.source_module}`]({source_url})"
+            if source_url
+            else f"`{object_doc.source_module}`"
+        )
+        if locale == "zh":
+            lines.append(f"_定义于 {source_ref}。_")
+        else:
+            lines.append(f"_Defined in {source_ref}._")
         lines.append("")
 
     if object_doc.signature:
@@ -720,16 +795,23 @@ def _render_object(object_doc: ObjectDoc, current_module: str, level: int = 2) -
         lines.append("```")
         lines.append("")
 
-    lines.extend(_render_docstring(object_doc.docstring, heading_level=level + 1))
+    lines.extend(
+        _render_docstring(
+            object_doc.docstring,
+            heading_level=level + 1,
+            locale=locale,
+        )
+    )
     if object_doc.docstring:
         lines.append("")
 
     if object_doc.value:
-        lines.append(f"**Value:** `{object_doc.value}`")
+        value_label = "值" if locale == "zh" else "Value"
+        lines.append(f"**{value_label}:** `{object_doc.value}`")
         lines.append("")
 
     if object_doc.fields:
-        lines.append(f"### {kind_label} Fields")
+        lines.append(f"### {_object_field_title(object_doc, locale)}")
         lines.append("")
         for field_doc in object_doc.fields:
             field_line = f"- `{field_doc.signature}`"
@@ -739,24 +821,27 @@ def _render_object(object_doc: ObjectDoc, current_module: str, level: int = 2) -
         lines.append("")
 
     if object_doc.children:
-        section_title = "Methods" if object_doc.kind == "class" else "Members"
-        lines.append(f"### {section_title}")
+        lines.append(f"### {_object_children_title(object_doc, locale)}")
         lines.append("")
         for child in object_doc.children:
-            lines.extend(_render_object(child, current_module, level + 2))
+            lines.extend(_render_object(child, current_module, level + 2, locale))
 
     return lines
 
 
-def _render_module_page(module_name: str) -> str:
+def _render_module_page(module_name: str, locale: str = "en") -> str:
     module_info = _parse_module(module_name)
     lines = [
-        "<!-- This file is auto-generated by generate_server_docs.py. -->",
+        (
+            "<!-- 此文件由 generate_server_docs.py 自动生成。 -->"
+            if locale == "zh"
+            else "<!-- This file is auto-generated by generate_server_docs.py. -->"
+        ),
         f"# {module_name}",
         "",
     ]
 
-    lines.extend(_render_docstring(module_info.docstring, heading_level=2))
+    lines.extend(_render_docstring(module_info.docstring, heading_level=2, locale=locale))
     if module_info.docstring:
         lines.append("")
 
@@ -769,20 +854,24 @@ def _render_module_page(module_name: str) -> str:
     for object_doc in exported_objects:
         if object_doc is None:
             continue
-        lines.extend(_render_object(object_doc, module_name))
+        lines.extend(_render_object(object_doc, module_name, locale=locale))
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_index() -> str:
+def _render_index(locale: str = "en") -> str:
     doc_entries = _server_api_doc_entries()
     lines = [
-        "<!-- This file is auto-generated by generate_server_docs.py. -->",
-        "# Server API",
+        (
+            "<!-- 此文件由 generate_server_docs.py 自动生成。 -->"
+            if locale == "zh"
+            else "<!-- This file is auto-generated by generate_server_docs.py. -->"
+        ),
+        "# 服务端 API" if locale == "zh" else "# Server API",
         "",
     ]
     lines.extend(
-        f"- [`{module_name}`]({doc_path.as_posix()})"
+        f"- [`{module_name}`]({_localized_doc_path(doc_path, locale).as_posix()})"
         for module_name, doc_path in doc_entries
     )
     lines.append("")
@@ -798,8 +887,6 @@ def _write_if_changed(path: Path, content: str) -> None:
 
 def _prune_generated_server_docs() -> None:
     for path in SERVER_DOCS_ROOT.rglob("*.md"):
-        if path == SERVER_DOCS_ROOT / "index.md":
-            continue
         path.unlink()
 
     for directory in sorted(
@@ -817,13 +904,19 @@ def _prune_generated_server_docs() -> None:
 
 def _write_module_docs() -> None:
     for module_name, doc_path in _server_api_doc_entries():
-        _write_if_changed(SERVER_DOCS_ROOT / doc_path, _render_module_page(module_name))
+        for locale in LOCALES:
+            _write_if_changed(
+                SERVER_DOCS_ROOT / _localized_doc_path(doc_path, locale),
+                _render_module_page(module_name, locale=locale),
+            )
 
 
 def generate_server_docs() -> None:
     _prune_generated_server_docs()
     _write_module_docs()
-    _write_if_changed(SERVER_DOCS_ROOT / "index.md", _render_index())
+    for locale in LOCALES:
+        index_path = _localized_doc_path(Path("index.md"), locale)
+        _write_if_changed(SERVER_DOCS_ROOT / index_path, _render_index(locale=locale))
 
 
 if __name__ == "__main__":
