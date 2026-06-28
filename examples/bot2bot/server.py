@@ -523,7 +523,7 @@ def create_app(config_path: str) -> FastAPI:
             Rendered demo HTML.
         """
 
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request=request, name="index.html")
 
     @app.get("/api/bot2bot/template")
     async def read_template() -> dict[str, Any]:
