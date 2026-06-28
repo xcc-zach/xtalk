@@ -12,8 +12,9 @@ Features:
 Input: PCM 16-bit mono 16 kHz raw bytes.
 """
 
-from typing import Optional
 import asyncio
+from typing import Optional
+from urllib.parse import urlparse
 
 import numpy as np
 
@@ -31,6 +32,20 @@ else:
     _import_error = None
 
 
+def _resolve_sherpa_base_url(base_url: str) -> str:
+    """Resolve the Sherpa-ONNX WebSocket base URL."""
+    normalized = base_url.strip().rstrip("/")
+    if not normalized:
+        raise ValueError("base_url must not be empty")
+    parsed = urlparse(normalized)
+    if not parsed.scheme:
+        normalized = f"ws://{normalized}"
+        parsed = urlparse(normalized)
+    if parsed.scheme not in {"ws", "wss"}:
+        raise ValueError("SherpaOnnxASR base_url must use ws:// or wss://")
+    return normalized
+
+
 @model
 class SherpaOnnxASR(ASR):
     """Sherpa-ONNX WebSocket ASR wrapper."""
@@ -40,12 +55,8 @@ class SherpaOnnxASR(ASR):
     def __init__(
         self,
         *,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        base_url: str = "ws://localhost:6006",
         mode: str = "streaming",
-        # Optional aliases (match example scripts)
-        server_addr: Optional[str] = None,
-        server_port: Optional[int] = None,
         # streaming-mode parameters
         samples_per_message: int = 8000,
         seconds_per_message: float = 0.0,
@@ -53,17 +64,22 @@ class SherpaOnnxASR(ASR):
         offline_payload_len: int = 10240,
         mock_window_size: int = 5,
     ) -> None:
-        """
-        Initialize Sherpa-ONNX WebSocket ASR.
+        """Initialize Sherpa-ONNX WebSocket ASR.
 
-        Args:
-            host/port: WebSocket server host and port.
-            mode: "streaming" or "offline".
-            server_addr/server_port: Aliases for host/port to match official scripts.
-            samples_per_message: Number of samples per send when streaming.
-            seconds_per_message: Optional delay after each streaming payload (0 disables).
-            offline_payload_len: Max payload bytes per send for offline mode.
-            mock_window_size: Window size used by MockStreamRecognizer in offline mode.
+        Parameters
+        ----------
+        base_url : str, optional
+            WebSocket server URL.
+        mode : str, optional
+            Recognition mode, either ``"streaming"`` or ``"offline"``.
+        samples_per_message : int, optional
+            Number of samples per send when streaming.
+        seconds_per_message : float, optional
+            Optional delay after each streaming payload. Zero disables delays.
+        offline_payload_len : int, optional
+            Maximum payload bytes per send for offline mode.
+        mock_window_size : int, optional
+            Window size used by ``MockStreamRecognizer`` in offline mode.
         """
 
         if websockets is None:  # pragma: no cover - dependency missing
@@ -71,14 +87,7 @@ class SherpaOnnxASR(ASR):
                 f"websockets is required for SherpaOnnxASR: {_import_error}"
             )
 
-        # Normalize alias parameters
-        if server_addr is not None and host is None:
-            host = server_addr
-        if server_port is not None and port is None:
-            port = server_port
-
-        self.host: str = host or "localhost"
-        self.port: int = int(port or 6006)
+        self.base_url = _resolve_sherpa_base_url(base_url)
 
         mode_norm = mode.strip().lower()
         if mode_norm in ("streaming", "online"):
@@ -222,8 +231,7 @@ class SherpaOnnxASR(ASR):
     def clone(self) -> "SherpaOnnxASR":
         """Create a clone that reuses the remote config but keeps separate state."""
         return SherpaOnnxASR(
-            host=self.host,
-            port=self.port,
+            base_url=self.base_url,
             mode=self.mode,
             samples_per_message=self.samples_per_message,
             seconds_per_message=self.seconds_per_message,
@@ -252,7 +260,7 @@ class SherpaOnnxASR(ASR):
     # -------------------- offline websocket --------------------
     async def _offline_decode(self, samples: np.ndarray, sample_rate: int) -> str:
         """Call sherpa-onnx-offline-websocket-server for a decode request."""
-        uri = f"ws://{self.host}:{self.port}"
+        uri = self.base_url
         async with websockets.connect(uri) as websocket:  # type: ignore[arg-type]
             assert samples.dtype == np.float32
             assert samples.ndim == 1
@@ -287,7 +295,7 @@ class SherpaOnnxASR(ASR):
     # -------------------- streaming websocket --------------------
     async def _streaming_decode(self, samples: np.ndarray) -> str:
         """Call sherpa-onnx-online-websocket-server for streaming decode."""
-        uri = f"ws://{self.host}:{self.port}"
+        uri = self.base_url
         async with websockets.connect(uri) as websocket:  # type: ignore[arg-type]
 
             async def _receiver() -> str:

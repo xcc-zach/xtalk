@@ -5,7 +5,7 @@
     "asr": {
         "type": "SherpaOnnxASR",
         "params": {
-            "port": 6006,
+            "base_url": "ws://127.0.0.1:6006",
             "mode": "offline"
         }
     },
@@ -46,7 +46,7 @@
     "tts": {
         "type": "IndexTTS",
         "params": {
-            "port": 11996,
+            "base_url": "http://127.0.0.1:11996",
             "voices": [
                 {
                     "name": "Man",

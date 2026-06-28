@@ -42,8 +42,7 @@ logs/test_templates/smoke/
 {
   "type": "IndexTTS",
   "params": {
-    "host": "127.0.0.1",
-    "port": 11996,
+    "base_url": "http://127.0.0.1:11996",
     "voices": [
       {
         "name": "man",
@@ -61,8 +60,7 @@ logs/test_templates/smoke/
   "tts": {
     "type": "IndexTTS",
     "params": {
-      "host": "127.0.0.1",
-      "port": 11996,
+      "base_url": "http://127.0.0.1:11996",
       "voices": [
         {
           "name": "man",
