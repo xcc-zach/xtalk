@@ -9,7 +9,11 @@ import { BasePersistenceStore } from "../bases/persistence";
 import { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 
 import vadProcessorUrl from "../../worklets/vad-processor.worklet.js";
-import fastEnhancerOnnxUrl from "../../models/fastenhancer_s.onnx";
+
+const FRONTEND_UTILITIES_BASE_URL = "/xtalk/frontend-utilities";
+const ONNXRUNTIME_WEB_CDN_BASE_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web";
+const VAD_WEB_VERSION = "0.0.27";
+const VAD_WEB_CDN_BASE_URL = `https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@${VAD_WEB_VERSION}/dist`;
 export {
     WebDeferredTaskScheduler,
     WebWebSocket,
@@ -287,6 +291,8 @@ interface WebInputAudioSessionConfig extends InputAudioSessionConfig {
     enableVAD?: boolean;
     // Whether to enable enhancer on client. Defaults to true.
     enableEnhancer?: boolean;
+    // Base URL for locally hosted browser-side runtime and model assets.
+    frontendUtilitiesBaseUrl?: string;
     // VAD redemption window in milliseconds.
     vadRedemptionMs?: number;
 }
@@ -311,7 +317,7 @@ class WebInputAudioSession extends BaseInputAudioSession {
     }
     readonly MAX_VAD_QUEUE_FRAMES = 8;
     readonly ENHANCER_PARAMS = {
-        hopSize: 256,
+        hopSize: 512,
         nFFT: 512,
     }
     private config: WebInputAudioSessionConfig;
@@ -387,8 +393,10 @@ class WebInputAudioSession extends BaseInputAudioSession {
         enhanceFrame: (frame: Float32Array) => Promise<Float32Array>,
         resetEnhancer: () => void
     ): Promise<void> {
-        const vadURL = 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/silero_vad_v5.onnx';
-        const vadArrayBuffer = await fetch(vadURL).then(r => r.arrayBuffer());
+        const vadArrayBuffer = await this.fetchArrayBufferWithFallback(
+            this.frontendUtilityURL(`vad-web/${VAD_WEB_VERSION}/dist/silero_vad_v5.onnx`),
+            `${VAD_WEB_CDN_BASE_URL}/silero_vad_v5.onnx`
+        );
         const vadSession = await window.ort.InferenceSession.create(vadArrayBuffer);
         const vadStateZeros = Array(2 * 128).fill(0);
         let vadState = new window.ort.Tensor('float32', vadStateZeros, [2, 1, 128]);
@@ -514,50 +522,71 @@ class WebInputAudioSession extends BaseInputAudioSession {
         }
 
         try {
-            const enhancerArrayBuffer = await fetch(fastEnhancerOnnxUrl).then(r => r.arrayBuffer());
+            const enhancerURL = this.frontendUtilityURL('xtalk/models/fastenhancer_s.onnx');
+            const enhancerArrayBuffer = await this.fetchArrayBuffer(enhancerURL);
             const enhancerSession = await window.ort.InferenceSession.create(enhancerArrayBuffer);
             const enhancerCache: Record<string, any> = {
-                'cache_in_0': new window.ort.Tensor('float32', new Float32Array(1 * 256).fill(0), [1, 256]),
-                'cache_in_1': new window.ort.Tensor('float32', new Float32Array(1 * 256).fill(0), [1, 256]),
-                'cache_in_2': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48]),
-                'cache_in_3': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48]),
-                'cache_in_4': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48])
+                'cache_in_0': new window.ort.Tensor('float32', new Float32Array(1 * 512).fill(0), [1, 512]),
+                'cache_in_1': new window.ort.Tensor('float32', new Float32Array(1 * 512).fill(0), [1, 512]),
+                'cache_in_2': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48]),
+                'cache_in_3': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48]),
+                'cache_in_4': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48])
             };
             let enhancerInputBuffer: number[] = [];
             let enhancerOutputBuffer: number[] = [];
             let isFirstEnhancerFrame = true;
+            let enhancerRuntimeDisabled = false;
+
+            const disableEnhancerRuntime = (error: unknown) => {
+                enhancerRuntimeDisabled = true;
+                this.config.enableEnhancer = false;
+                enhancerInputBuffer = [];
+                enhancerOutputBuffer = [];
+                console.error(
+                    'FastEnhancer inference failed. FastEnhancer has been disabled.',
+                    error
+                );
+            };
 
             const enhanceFrame = async (frame: Float32Array) => {
-                for (let i = 0; i < frame.length; i++) {
-                    enhancerInputBuffer.push(frame[i]!);
+                if (enhancerRuntimeDisabled) {
+                    return frame;
                 }
-                while (enhancerInputBuffer.length >= this.ENHANCER_PARAMS.hopSize) {
-                    const chunk = enhancerInputBuffer.splice(0, this.ENHANCER_PARAMS.hopSize);
-                    const chunkArray = new Float32Array(chunk);
-                    const wavIn = new window.ort.Tensor('float32', chunkArray, [1, this.ENHANCER_PARAMS.hopSize]);
-                    const inputs: Record<string, any> = { wav_in: wavIn };
-                    for (const inputName of Object.keys(enhancerCache)) {
-                        inputs[inputName] = enhancerCache[inputName];
+                try {
+                    for (let i = 0; i < frame.length; i++) {
+                        enhancerInputBuffer.push(frame[i]!);
                     }
-                    const outputs = await enhancerSession.run(inputs);
-                    const outputNames = enhancerSession.outputNames;
-                    const enhancedChunk = outputs[outputNames[0]].data;
-                    for (let i = 1; i < outputNames.length; i++) {
-                        const cacheName = `cache_in_${i - 1}`;
-                        enhancerCache[cacheName] = outputs[outputNames[i]];
+                    while (enhancerInputBuffer.length >= this.ENHANCER_PARAMS.hopSize) {
+                        const chunk = enhancerInputBuffer.splice(0, this.ENHANCER_PARAMS.hopSize);
+                        const chunkArray = new Float32Array(chunk);
+                        const wavIn = new window.ort.Tensor('float32', chunkArray, [1, this.ENHANCER_PARAMS.hopSize]);
+                        const inputs: Record<string, any> = { wav_in: wavIn };
+                        for (const inputName of Object.keys(enhancerCache)) {
+                            inputs[inputName] = enhancerCache[inputName];
+                        }
+                        const outputs = await enhancerSession.run(inputs);
+                        const outputNames = enhancerSession.outputNames;
+                        const enhancedChunk = outputs[outputNames[0]].data;
+                        for (let i = 1; i < outputNames.length; i++) {
+                            const cacheName = `cache_in_${i - 1}`;
+                            enhancerCache[cacheName] = outputs[outputNames[i]];
+                        }
+                        for (let i = 0; i < enhancedChunk.length; i++) {
+                            enhancerOutputBuffer.push(enhancedChunk[i]);
+                        }
+                        if (isFirstEnhancerFrame && enhancerOutputBuffer.length >= (this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize)) {
+                            enhancerOutputBuffer.splice(0, this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize);
+                            isFirstEnhancerFrame = false;
+                        }
                     }
-                    for (let i = 0; i < enhancedChunk.length; i++) {
-                        enhancerOutputBuffer.push(enhancedChunk[i]);
+                    if (enhancerOutputBuffer.length >= frame.length) {
+                        const output = enhancerOutputBuffer.splice(0, frame.length);
+                        return new Float32Array(output);
+                    } else {
+                        return frame;
                     }
-                    if (isFirstEnhancerFrame && enhancerOutputBuffer.length >= (this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize)) {
-                        enhancerOutputBuffer.splice(0, this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize);
-                        isFirstEnhancerFrame = false;
-                    }
-                }
-                if (enhancerOutputBuffer.length >= frame.length) {
-                    const output = enhancerOutputBuffer.splice(0, frame.length);
-                    return new Float32Array(output);
-                } else {
+                } catch (error) {
+                    disableEnhancerRuntime(error);
                     return frame;
                 }
             };
@@ -574,7 +603,12 @@ class WebInputAudioSession extends BaseInputAudioSession {
             };
 
             return { enhanceFrame, resetEnhancer };
-        } catch {
+        } catch (error) {
+            this.config.enableEnhancer = false;
+            console.error(
+                'Failed to load FastEnhancer from the server. FastEnhancer has been disabled.',
+                error
+            );
             return { enhanceFrame: identityMap, resetEnhancer: () => { } };
         }
     }
@@ -588,29 +622,101 @@ class WebInputAudioSession extends BaseInputAudioSession {
         return int16.buffer;
     }
 
+    private frontendUtilityURL(path: string): string {
+        const baseURL = this.config.frontendUtilitiesBaseUrl ?? FRONTEND_UTILITIES_BASE_URL;
+        return `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+    }
+
+    private async fetchArrayBuffer(url: string): Promise<ArrayBuffer> {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${url}: ${response.status}`);
+        }
+        return await response.arrayBuffer();
+    }
+
+    private async fetchArrayBufferWithFallback(
+        localURL: string,
+        fallbackURL: string
+    ): Promise<ArrayBuffer> {
+        try {
+            const response = await fetch(localURL);
+            if (response.ok) {
+                return await response.arrayBuffer();
+            }
+        } catch {
+            // Fall back to the public URL below.
+        }
+        const fallbackResponse = await fetch(fallbackURL);
+        if (!fallbackResponse.ok) {
+            throw new Error(`Failed to fetch ${fallbackURL}: ${fallbackResponse.status}`);
+        }
+        return await fallbackResponse.arrayBuffer();
+    }
+
+    private injectScript(src: string): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => resolve();
+            script.onerror = () => {
+                script.remove();
+                reject(new Error(`Failed to load script ${src}`));
+            };
+            document.head.appendChild(script);
+        });
+    }
+
+    private formatLoadError(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    private async injectScriptWithFallback(
+        localURL: string,
+        fallbackURL: string
+    ): Promise<'local' | 'fallback'> {
+        try {
+            await this.injectScript(localURL);
+            return 'local';
+        } catch (localError) {
+            try {
+                await this.injectScript(fallbackURL);
+                return 'fallback';
+            } catch (fallbackError) {
+                throw new Error(
+                    `Failed to load script from local URL ${localURL} `
+                    + `(${this.formatLoadError(localError)}) and fallback URL `
+                    + `${fallbackURL} (${this.formatLoadError(fallbackError)}).`
+                );
+            }
+        }
+    }
+
     private async ensureModelsEnv() {
         if (!this.config.enableEnhancer && !this.config.enableVAD) {
             // No need to load models
             return;
         }
-        // Inject window.ort and window.vad
-        const inject = (src: string) => new Promise<void>((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = src;
-            s.onload = () => resolve();
-            s.onerror = (e) => reject(e);
-            document.head.appendChild(s);
-        });
         if (!window.ort) {
             // Pick ORT version by UA (only iOS stays on 1.17.0)
             const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
             const ortVersion = isIOS ? '1.17.0' : '1.22.0';
+            const localOrtBaseURL = this.frontendUtilityURL(`onnxruntime-web/${ortVersion}/dist/`);
+            const fallbackOrtBaseURL = `${ONNXRUNTIME_WEB_CDN_BASE_URL}@${ortVersion}/dist/`;
+            const ortSource = await this.injectScriptWithFallback(
+                `${localOrtBaseURL}ort.js`,
+                `${fallbackOrtBaseURL}ort.js`
+            );
 
-            await inject(`https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/ort.js`);
-            window.ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`;
+            window.ort.env.wasm.wasmPaths = ortSource === 'local'
+                ? localOrtBaseURL
+                : fallbackOrtBaseURL;
         }
         if (this.config.enableVAD && !window.vad) {
-            await inject('https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js');
+            await this.injectScriptWithFallback(
+                this.frontendUtilityURL(`vad-web/${VAD_WEB_VERSION}/dist/bundle.min.js`),
+                `${VAD_WEB_CDN_BASE_URL}/bundle.min.js`
+            );
         }
     }
 }
