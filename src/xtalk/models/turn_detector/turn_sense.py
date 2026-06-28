@@ -1,8 +1,12 @@
+import argparse
 import asyncio
 from dataclasses import dataclass
+import socket
+import sys
 from typing import Literal, Optional
 
 import aiohttp
+import numpy as np
 
 from .interfaces import (
     TurnDetectionAction,
@@ -382,3 +386,68 @@ class TurnSense(TurnDetector):
             timeout=self._timeout,
             inference_interval_ms=self._inference_interval_ms,
         )
+
+
+
+def _is_tcp_port_open(host: str, port: int, timeout: float) -> bool:
+    """Return whether a TCP listener accepts connections at host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _build_test_pcm(sample_rate: int, duration_seconds: float) -> bytes:
+    """Build a small PCM s16le test tone for the remote TurnSense smoke test."""
+    sample_count = int(sample_rate * duration_seconds)
+    time_axis = np.arange(sample_count, dtype=np.float32) / sample_rate
+    samples = 0.2 * np.sin(2.0 * np.pi * 440.0 * time_axis)
+    return (samples * 32767.0).astype(np.int16).tobytes()
+
+
+async def _run_remote_smoke_test_async() -> int:
+    """Run a simple client request against a running TurnSense service."""
+    parser = argparse.ArgumentParser(description="Smoke test the TurnSense HTTP client.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8002)
+    parser.add_argument("--duration-seconds", type=float, default=1.0)
+    args = parser.parse_args()
+
+    if not _is_tcp_port_open(args.host, args.port, timeout=2.0):
+        print(
+            "No service is listening on "
+            f"{args.host}:{args.port}. Please start turn-sense first.",
+            file=sys.stderr,
+        )
+        return 2
+
+    base_url = f"http://{args.host}:{args.port}"
+    detector = TurnSense(base_url=base_url)
+    pcm_bytes = _build_test_pcm(detector.SAMPLE_RATE, args.duration_seconds)
+    try:
+        result = await detector._infer_audio_bytes(pcm_bytes, source="turn_sense_smoke.pcm")
+    except aiohttp.ClientError as exc:
+        print(f"TurnSense client request failed for {base_url}: {exc}", file=sys.stderr)
+        return 1
+    except asyncio.TimeoutError as exc:
+        print(f"TurnSense client request timed out for {base_url}: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        "TurnSense client request succeeded: "
+        f"input_bytes={len(pcm_bytes)}, prediction={result.prediction}, "
+        f"complete={result.probabilities.complete:.6f}, "
+        f"incomplete={result.probabilities.incomplete:.6f}, "
+        f"invalid={result.probabilities.invalid:.6f}, base_url={base_url}"
+    )
+    return 0
+
+
+def _run_remote_smoke_test() -> int:
+    """Run the TurnSense remote smoke test synchronously."""
+    return asyncio.run(_run_remote_smoke_test_async())
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_remote_smoke_test())
