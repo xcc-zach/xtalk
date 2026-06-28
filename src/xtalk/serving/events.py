@@ -454,7 +454,7 @@ class SpeakerRecognized(Event):
 
 @dataclass
 class TTSModelSwitchRequested(Event):
-    """Request to switch TTS model (IndexTTS / IndexTTS2)."""
+    """Request to switch the IndexTTS protocol version."""
 
     TYPE: ClassVar[str] = "tts.model_switch_requested"
     model_type: str = ""

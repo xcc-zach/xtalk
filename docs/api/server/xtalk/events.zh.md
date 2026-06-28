@@ -822,7 +822,7 @@ _定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/
 class TTSModelSwitchRequested(Event)
 ```
 
-Request to switch TTS model (IndexTTS / IndexTTS2).
+Request to switch the IndexTTS protocol version.
 
 ### 类字段
 

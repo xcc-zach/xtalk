@@ -42,8 +42,7 @@ Minimal example with `IndexTTS`:
 {
   "type": "IndexTTS",
   "params": {
-    "host": "127.0.0.1",
-    "port": 11996,
+    "base_url": "http://127.0.0.1:11996",
     "voices": [
       {
         "name": "man",
@@ -61,8 +60,7 @@ Equivalent full-service form:
   "tts": {
     "type": "IndexTTS",
     "params": {
-      "host": "127.0.0.1",
-      "port": 11996,
+      "base_url": "http://127.0.0.1:11996",
       "voices": [
         {
           "name": "man",

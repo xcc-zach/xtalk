@@ -664,7 +664,7 @@ class TTSManager(Manager):
 
     @Manager.event_handler(TTSModelSwitchRequested, priority=100)
     async def _handle_tts_model_switch(self, event: TTSModelSwitchRequested) -> None:
-        """Handle TTS model switch requests (IndexTTS / IndexTTS2)."""
+        """Handle TTS model switch requests for IndexTTS 1.5 or 2."""
         model_type = event.model_type
         config = event.config
 
@@ -680,7 +680,6 @@ class TTSManager(Manager):
     def _set_tts_model(self, model_type: str, config: dict[str, Any]) -> None:
         """Replace the active TTS model for the current session."""
         from ...models.tts.index_tts import IndexTTS
-        from ...models.tts.index_tts2 import IndexTTS2
 
         current_tts = self.models.get(TTS)
         current_ref_paths = []
@@ -689,36 +688,36 @@ class TTSManager(Manager):
         elif current_tts and hasattr(current_tts, "_base_audio_paths"):
             current_ref_paths = current_tts._base_audio_paths or []
 
-        host = config.get("host", "localhost")
-        port = config.get("port")
         ref_audio_paths = config.get("ref_audio_paths") or current_ref_paths
         sample_rate = config.get("sample_rate", 48000)
         timeout = config.get("timeout", 30.0)
+        voices = config.get("voices") or [
+            {"name": str(index), "path": path}
+            for index, path in enumerate(ref_audio_paths)
+        ]
 
-        if port is None:
-            port = 11996 if model_type == "IndexTTS" else 6006
-
-        if model_type == "IndexTTS":
-            self.models.set(
-                TTS,
-                IndexTTS(
-                    ref_audio_paths=ref_audio_paths,
-                    host=host,
-                    port=port,
-                    sample_rate=sample_rate,
-                    timeout=timeout,
-                ),
-            )
-        elif model_type == "IndexTTS2":
-            self.models.set(
-                TTS,
-                IndexTTS2(
-                    ref_audio_paths=ref_audio_paths,
-                    host=host,
-                    port=port,
-                    sample_rate=sample_rate,
-                    timeout=timeout,
-                ),
-            )
-        else:
+        if model_type != "IndexTTS":
             raise ValueError(f"Unsupported TTS model type: {model_type}")
+        model_version = str(config.get("model", config.get("model_version", "1.5")))
+
+        base_url = config.get("base_url")
+        if base_url is None and ("host" in config or "port" in config):
+            host = config.get("host", "localhost")
+            port = config.get("port", 6006)
+            base_url = f"http://{host}:{port}"
+
+        self.models.set(
+            TTS,
+            IndexTTS(
+                voices=voices,
+                base_url=base_url,
+                sample_rate=sample_rate,
+                timeout=timeout,
+                model=model_version,
+                emo_weight=config.get("emo_weight", 1.0),
+                emo_random=config.get("emo_random", False),
+                max_text_tokens_per_sentence=config.get(
+                    "max_text_tokens_per_sentence", 120
+                ),
+            ),
+        )
