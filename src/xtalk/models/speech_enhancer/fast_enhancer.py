@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Speech enhancement module.
+"""FastEnhancer speech enhancement module.
 
 Implements streaming enhancement based on the FastEnhancer-S ONNX model:
 - Input: 16 kHz PCM s16le audio frames
@@ -8,30 +6,70 @@ Implements streaming enhancement based on the FastEnhancer-S ONNX model:
 - Maintains ONNX cache state for streaming processing
 """
 
+from __future__ import annotations
+
+import argparse
 import os
+import socket
+import sys
 from typing import Optional
+
 import numpy as np
-import onnxruntime
+import requests
+
+try:
+    import onnxruntime
+except ImportError:  # pragma: no cover - remote mode does not need ONNX Runtime.
+    onnxruntime = None  # type: ignore[assignment]
 
 from .interfaces import SpeechEnhancer
 from ..registry import model
 
 
-@model
-class FastEnhancerS(SpeechEnhancer):
-    """Streaming speech enhancer using FastEnhancer-S ONNX."""
+@model(aliases=["FastEnhancerS", "speech_enhancer"])
+class FastEnhancer(SpeechEnhancer):
+    """Streaming or remote speech enhancer using FastEnhancer.
+
+    Notes
+    -----
+    When ``base_url`` is provided, all other initialization parameters are
+    ignored and audio is enhanced by the FastEnhancer HTTP service at
+    ``POST /v1/enhance/pcm``.
+    """
 
     def __init__(
         self,
         model_path: Optional[str] = None,
         n_fft: int = 512,
         hop_size: int = 256,
-        _shared_session: Optional[onnxruntime.InferenceSession] = None,
+        _shared_session: Optional[object] = None,
+        base_url: Optional[str] = None,
     ):
-        """Initialize the enhancer."""
+        """Initialize the enhancer.
+
+        Parameters
+        ----------
+        model_path : str | None, optional
+            Local ONNX model path for in-process enhancement.
+        n_fft : int, optional
+            FFT size used for delay compensation in local mode.
+        hop_size : int, optional
+            Number of samples processed per local ONNX step.
+        _shared_session : object | None, optional
+            Existing ONNX Runtime session reused by local clones.
+        base_url : str | None, optional
+            Base URL of a running FastEnhancer HTTP service. When set,
+            ``model_path``, ``n_fft``, ``hop_size``, and ``_shared_session`` are
+            ignored and no local ONNX model is loaded.
+        """
+        self.base_url = base_url.rstrip("/") if base_url else None
+        self.sample_rate = 16000
+        if self.base_url is not None:
+            self.model_path = None
+            return
+
         self.n_fft = n_fft
         self.hop_size = hop_size
-        self.sample_rate = 16000
         self.model_path = model_path
 
         # Reuse shared session if provided
@@ -57,6 +95,9 @@ class FastEnhancerS(SpeechEnhancer):
 
     def _init_session(self, model_path: Optional[str]) -> None:
         """Initialize ONNX Runtime session (only during first creation)."""
+        if onnxruntime is None:
+            raise ImportError("onnxruntime is required for local FastEnhancer mode")
+
         # Resolve default model paths relative to this file
         if model_path is None:
             base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -110,6 +151,9 @@ class FastEnhancerS(SpeechEnhancer):
 
     def reset(self) -> None:
         """Reset enhancer state."""
+        if self.base_url is not None:
+            return
+
         self._init_cache()
         self.input_buffer = np.array([], dtype=np.float32)
         self.output_buffer = np.array([], dtype=np.float32)
@@ -118,9 +162,18 @@ class FastEnhancerS(SpeechEnhancer):
         self._total_input_samples = 0
         self._total_output_samples = 0
 
-    def clone(self) -> "FastEnhancerS":
-        """Clone enhancer sharing session but keeping independent state."""
-        return FastEnhancerS(
+    def clone(self) -> "FastEnhancer":
+        """Clone enhancer sharing local weights or remote service settings.
+
+        Returns
+        -------
+        FastEnhancer
+            Clone with isolated runtime state.
+        """
+        if self.base_url is not None:
+            return FastEnhancer(base_url=self.base_url)
+
+        return FastEnhancer(
             model_path=self.model_path,
             n_fft=self.n_fft,
             hop_size=self.hop_size,
@@ -128,9 +181,22 @@ class FastEnhancerS(SpeechEnhancer):
         )
 
     def enhance(self, pcm_bytes: bytes) -> bytes:
-        """Enhance audio frames in streaming mode."""
+        """Enhance audio frames in streaming mode.
+
+        Parameters
+        ----------
+        pcm_bytes : bytes
+            PCM 16-bit mono audio bytes at 16 kHz.
+
+        Returns
+        -------
+        bytes
+            Enhanced PCM 16-bit mono audio bytes at 16 kHz.
+        """
         if not pcm_bytes:
             return b""
+        if self.base_url is not None:
+            return self._enhance_remote(pcm_bytes)
 
         # Convert to float32 [-1, 1]
         pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -189,7 +255,16 @@ class FastEnhancerS(SpeechEnhancer):
         return output_int16.tobytes()
 
     def flush(self) -> bytes:
-        """Flush remaining buffers at the end of the stream."""
+        """Flush remaining buffers at the end of the stream.
+
+        Returns
+        -------
+        bytes
+            Remaining enhanced PCM audio bytes.
+        """
+        if self.base_url is not None:
+            return b""
+
         # Pad silence to process leftover input (similar to official pad-right)
         padding_needed = self.n_fft
         padding = np.zeros(padding_needed, dtype=np.float32)
@@ -232,3 +307,83 @@ class FastEnhancerS(SpeechEnhancer):
         output_samples = np.clip(output_samples, a_min=-1.0, a_max=1.0)
         output_int16 = (output_samples * 32768.0).astype(np.int16)
         return output_int16.tobytes()
+
+    def _enhance_remote(self, pcm_bytes: bytes) -> bytes:
+        """Enhance one PCM payload by calling the FastEnhancer HTTP service."""
+        response = requests.post(
+            f"{self.base_url}/v1/enhance/pcm",
+            params={"input_dtype": "int16", "response_format": "pcm"},
+            data=pcm_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.content
+
+
+
+def _is_tcp_port_open(host: str, port: int, timeout: float) -> bool:
+    """Return whether a TCP listener accepts connections at host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _build_test_pcm(sample_rate: int, duration_seconds: float) -> bytes:
+    """Build a small PCM s16le test tone for the remote smoke test."""
+    sample_count = int(sample_rate * duration_seconds)
+    time_axis = np.arange(sample_count, dtype=np.float32) / sample_rate
+    samples = 0.2 * np.sin(2.0 * np.pi * 440.0 * time_axis)
+    return (samples * 32767.0).astype(np.int16).tobytes()
+
+
+def _run_remote_smoke_test() -> int:
+    """Run a simple client request against a running FastEnhancer service."""
+    parser = argparse.ArgumentParser(
+        description="Smoke test the FastEnhancer HTTP client."
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--duration-seconds", type=float, default=0.5)
+    args = parser.parse_args()
+
+    if not _is_tcp_port_open(args.host, args.port, timeout=2.0):
+        print(
+            "No service is listening on "
+            f"{args.host}:{args.port}. Please start fastenhancer first.",
+            file=sys.stderr,
+        )
+        return 2
+
+    base_url = f"http://{args.host}:{args.port}"
+    enhancer = FastEnhancer(base_url=base_url)
+    pcm_bytes = _build_test_pcm(enhancer.sample_rate, args.duration_seconds)
+    try:
+        enhanced_bytes = enhancer.enhance(pcm_bytes)
+    except requests.RequestException as exc:
+        print(
+            f"FastEnhancer client request failed for {base_url}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not enhanced_bytes or len(enhanced_bytes) % 2 != 0:
+        print(
+            "FastEnhancer client request failed: invalid PCM response "
+            f"({len(enhanced_bytes)} bytes).",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "FastEnhancer client request succeeded: "
+        f"input_bytes={len(pcm_bytes)}, output_bytes={len(enhanced_bytes)}, "
+        f"base_url={base_url}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_remote_smoke_test())
