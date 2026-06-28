@@ -1,93 +1,55 @@
+The model *quick-start* repositories are convenience adapters under development. If you encounter any issue, open an issue directly in the X-Talk repository and use the *original repository* to start the service.
+
 ### Speech Recognition
-    
+
 **Name in config**: `asr`
-    
+
 <details markdown="1">
 <summary>SherpaOnnx [Recommended]</summary>
-    
+
 **Dependency:** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
-    
-A high-performance speech recognition framework and beyond.
+**Implementation path:** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
-[Repo](https://github.com/k2-fsa/sherpa-onnx)
-    
-[Models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)
-    
-[Tutorial to start speech recognition server](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)
-    
+A high-performance speech recognition framework, and more. It can run many speech recognition models.
+
+[Quick Start](https://github.com/xcc-zach/xtalk-sherpa-onnx-asr)
+
+[Original Repository](https://github.com/k2-fsa/sherpa-onnx)
+
 </details>
 
 <details markdown="1">
 <summary>Qwen3ASRFlashRealtime</summary>
-    
+
 **Dependency:** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **Path:** [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)
-    
+
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/qwen3-asr-flash)
-    
-</details>
-    
-<details markdown="1">
-<summary>Zipformer</summary>
-    
-**Dependency:** `pip install "xtalk[zipformer-local] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** [`src/xtalk/models/asr/zipformer_local.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/zipformer_local.py)
-    
-[Details](https://www.modelscope.cn/models/yhdai666/xtalk_zipformer_onnx/summary)
-    
 </details>
-    
-<details markdown="1">
-<summary>ElevenLabs</summary>
-    
-**Dependency:** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** [`src/xtalk/models/asr/elevenlabs.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/elevenlabs.py)
-    
-[API Reference](https://elevenlabs.io/docs/api-reference/speech-to-text/convert)
-    
-</details>
-    
 ### Text to Speech
-    
+
 **Name in config**: `tts`
-    
+
 <details markdown="1">
-<summary>IndexTTS [Recommended]</summary>
+<summary>IndexTTS 1.5&2 [Recommended]</summary>
 
 **Dependency:** `pip install "xtalk[index-tts] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** 
+**Path:**
 - [`src/xtalk/models/tts/index_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/index_tts.py)
-- [`src/xtalk/models/tts/index_tts2.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/index_tts2.py)
-    
-[Repo](https://github.com/index-tts/index-tts)
-    
-[Installation (vllm boost)](https://github.com/Ksuriuri/index-tts-vllm)
 
-    
+[Quick Start](https://github.com/xcc-zach/xtalk-index-tts)
+
+[Model Original Repository](https://github.com/index-tts/index-tts)
+
+[Inference Acceleration Original Repository](https://github.com/Ksuriuri/index-tts-vllm)
+
 </details>
-    
-<details markdown="1">
-<summary>GPT-SoVITS</summary>
 
-> Experimental. Feel free to open an issue for any problem.
-
-**Dependency:** `pip install "xtalk[gpt-sovits] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**Path:** [`src/xtalk/models/tts/gpt_sovits.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/gpt_sovits.py)
-
-    
-[Repo](https://github.com/RVC-Boss/GPT-SoVITS)
-    
-
-    
-</details>
-    
 <details markdown="1">
 <summary>CosyVoice</summary>
 
@@ -96,25 +58,14 @@ A high-performance speech recognition framework and beyond.
 **Path:** [`src/xtalk/models/tts/cosyvoice.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/cosyvoice.py)
 
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/cosyvoice-v3-flash)
-    
-</details>
-    
-<details markdown="1">
-<summary>ElevenLabs</summary>
-    
-**Dependency:** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** [`src/xtalk/models/tts/elevenlabs.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/elevenlabs.py)
-    
-[API Reference](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)
-    
 </details>
 
 ### Voice Activity Detection
-    
+
 **Name in config**: `vad`
-    
-X-Talk has VAD on client side, so you may not need one.
+
+X-Talk already provides VAD on the client side, so you may not need to deploy an additional one.
 
 <details markdown="1">
 <summary>Silero VAD</summary>
@@ -122,28 +73,20 @@ X-Talk has VAD on client side, so you may not need one.
 **Dependency:** `pip install "xtalk[silero-vad] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **Path:** [`src/xtalk/models/vad/silero_vad.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/silero_vad.py)
-    
-[Model Details](https://github.com/snakers4/silero-vad)
+
+[Quick Start](https://github.com/xcc-zach/xtalk-silero-vad)
+
+[Original Repository](https://github.com/snakers4/silero-vad)
+
 [VAD-Web](https://github.com/ricky0123/vad)
-    
+
 </details>
 
 ### Turn Detection
 
 **Name in config**: `turn_detector`
 
-Turn detectors decide when the user has finished speaking and the system should start generation.
-
-<details markdown="1">
-<summary>SoulxDuplug</summary>
-
-**Dependency:** `pip install "xtalk[soulx-duplug] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**Path:** [`src/xtalk/models/turn_detector/soulx_duplug.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/soulx_duplug.py)
-
-[Repo](https://github.com/Soul-AILab/SoulX-Duplug)
-
-</details>
+Turn detector is used to determine whether the user has finished speaking and decide when the system should start generating a response.
 
 <details markdown="1">
 <summary>TurnSense</summary>
@@ -152,58 +95,25 @@ Turn detectors decide when the user has finished speaking and the system should 
 
 **Path:** [`src/xtalk/models/turn_detector/turn_sense.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/turn_sense.py)
 
-[Original Repo](https://github.com/Bairong-Xdynamics/TurnSense)
+[Quick Start](https://github.com/xcc-zach/xtalk-TurnSense)
 
-[X-Talk-adapted service deployment reference](https://github.com/xcc-zach/TurnSense-server)
+[Original Repository](https://github.com/Bairong-Xdynamics/TurnSense)
 
 </details>
 
 ### Speech Enhancement
-    
+
 **Name in config**: `speech_enhancer`
 
 <details markdown="1">
 <summary>FastEnhancer</summary>
-    
-**Dependency:** `pip install onnxruntime`
 
-**Path:** [`src/xtalk/models/speech_enhancer/speech_enhancer.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/speech_enhancer.py)
-    
-[Model Details](https://github.com/aask1357/fastenhancer)
-    
-</details>
-    
-### Speaker Recognition
-    
-**Name in config**: `speaker_encoder`    
-    
-<details markdown="1">
-<summary>Wespeaker-Voxceleb-Resnet34-LM</summary>
-  
-**Dependency:** `pip install "xtalk[pyannote] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+**Dependency:** `pip install "xtalk[fast-enhancer] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**Path:** [`src/xtalk/models/speaker_encoder/pyannote_embedding.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/pyannote_embedding.py)
-    
-[Wespeaker](https://github.com/wenet-e2e/wespeaker)
-[Model Details](https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM)
-    
-</details>
-    
-### Captioner
-    
-**Name in config**: `captioner`
-    
-Captioners give you description of audio clip.
-    
-<details markdown="1">
-<summary>Qwen3-Omni-30B-A3B-Captioner</summary>
-   
-**Dependency:** None
+**Path:** [`src/xtalk/models/speech_enhancer/fast_enhancer.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/fast_enhancer.py)
 
-**Path:** [`src/xtalk/models/captioner/qwen3_omni_captioner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/qwen3_omni_captioner.py)
-    
-[HuggingFace](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Captioner)
-[ModelScope](https://www.modelscope.cn/models/Qwen/Qwen3-Omni-30B-A3B-Captioner)
-    
+[Quick Start](https://github.com/xcc-zach/xtalk-fastenhancer)
+
+[Original Repository](https://github.com/aask1357/fastenhancer)
+
 </details>
-    

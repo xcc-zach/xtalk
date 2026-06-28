@@ -1,3 +1,5 @@
+模型的*快速开始*仓库为开发中的便捷适配；如遇任何问题可直接在X-Talk仓库提Issue，并采用*原始仓库*启动服务。
+
 ### 语音识别
 
 **配置中的名称**：`asr`
@@ -7,15 +9,13 @@
 
 **依赖：** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**路径：** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
+**实现路径：** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
-一个高性能的语音识别框架，并且不仅限于此。
+一个高性能的语音识别框架，并且不仅限于此。可运行多种语音识别模型。
 
-[仓库](https://github.com/k2-fsa/sherpa-onnx)
+[快速开始](https://github.com/xcc-zach/xtalk-sherpa-onnx-asr)
 
-[模型](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)
-
-[启动语音识别服务的教程](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)
+[原始仓库](https://github.com/k2-fsa/sherpa-onnx)
 
 </details>
 
@@ -30,61 +30,23 @@
 
 </details>
 
-<details markdown="1">
-<summary>Zipformer</summary>
-
-**依赖：** `pip install "xtalk[zipformer-local] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/asr/zipformer_local.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/zipformer_local.py)
-
-[详情](https://www.modelscope.cn/models/yhdai666/xtalk_zipformer_onnx/summary)
-
-</details>
-
-<details markdown="1">
-<summary>ElevenLabs</summary>
-
-**依赖：** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/asr/elevenlabs.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/elevenlabs.py)
-
-[API 参考](https://elevenlabs.io/docs/api-reference/speech-to-text/convert)
-
-</details>
-
 ### 文本转语音
 
 **配置中的名称**：`tts`
 
 <details markdown="1">
-<summary>IndexTTS [推荐]</summary>
+<summary>IndexTTS 1.5&2[推荐]</summary>
 
 **依赖：** `pip install "xtalk[index-tts] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **路径：**
 - [`src/xtalk/models/tts/index_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/index_tts.py)
-- [`src/xtalk/models/tts/index_tts2.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/index_tts2.py)
 
-[仓库](https://github.com/index-tts/index-tts)
+[快速开始](https://github.com/xcc-zach/xtalk-index-tts)
 
-[安装方式（vllm boost）](https://github.com/Ksuriuri/index-tts-vllm)
+[模型原始仓库](https://github.com/index-tts/index-tts)
 
-
-</details>
-
-<details markdown="1">
-<summary>GPT-SoVITS</summary>
-
-> 实验性支持。如遇问题，欢迎提交 issue。
-
-**依赖：** `pip install "xtalk[gpt-sovits] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/tts/gpt_sovits.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/gpt_sovits.py)
-
-
-[仓库](https://github.com/RVC-Boss/GPT-SoVITS)
-
-
+[推理加速原始仓库](https://github.com/Ksuriuri/index-tts-vllm)
 
 </details>
 
@@ -96,17 +58,6 @@
 **路径：** [`src/xtalk/models/tts/cosyvoice.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/cosyvoice.py)
 
 [详情](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/cosyvoice-v3-flash)
-
-</details>
-
-<details markdown="1">
-<summary>ElevenLabs</summary>
-
-**依赖：** `pip install "xtalk[elevenlabs] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/tts/elevenlabs.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/elevenlabs.py)
-
-[API 参考](https://elevenlabs.io/docs/api-reference/text-to-speech/convert)
 
 </details>
 
@@ -123,7 +74,10 @@ X-Talk 已经在客户端侧提供了 VAD，因此您可能不一定需要额外
 
 **路径：** [`src/xtalk/models/vad/silero_vad.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/silero_vad.py)
 
-[模型详情](https://github.com/snakers4/silero-vad)
+[快速开始](https://github.com/xcc-zach/xtalk-silero-vad)
+
+[原始仓库](https://github.com/snakers4/silero-vad)
+
 [VAD-Web](https://github.com/ricky0123/vad)
 
 </details>
@@ -135,26 +89,15 @@ X-Talk 已经在客户端侧提供了 VAD，因此您可能不一定需要额外
 Turn detector 用于判断用户是否已经说完，并决定系统何时开始生成回复。
 
 <details markdown="1">
-<summary>SoulxDuplug</summary>
-
-**依赖：** `pip install "xtalk[soulx-duplug] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/turn_detector/soulx_duplug.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/soulx_duplug.py)
-
-[仓库](https://github.com/Soul-AILab/SoulX-Duplug)
-
-</details>
-
-<details markdown="1">
 <summary>TurnSense</summary>
 
 **依赖：** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **路径：** [`src/xtalk/models/turn_detector/turn_sense.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/turn_sense.py)
 
-[原仓库](https://github.com/Bairong-Xdynamics/TurnSense)
+[快速开始](https://github.com/xcc-zach/xtalk-TurnSense)
 
-[适配 X-Talk 的服务部署参考](https://github.com/xcc-zach/TurnSense-server)
+[原始仓库](https://github.com/Bairong-Xdynamics/TurnSense)
 
 </details>
 
@@ -165,44 +108,12 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 <details markdown="1">
 <summary>FastEnhancer</summary>
 
-**依赖：** `pip install onnxruntime`
+**依赖：** `pip install "xtalk[fast-enhancer] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
-**路径：** [`src/xtalk/models/speech_enhancer/speech_enhancer.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/speech_enhancer.py)
+**路径：** [`src/xtalk/models/speech_enhancer/fast_enhancer.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/fast_enhancer.py)
 
-[模型详情](https://github.com/aask1357/fastenhancer)
+[快速开始](https://github.com/xcc-zach/xtalk-fastenhancer)
 
-</details>
-
-### 说话人识别
-
-**配置中的名称**：`speaker_encoder`
-
-<details markdown="1">
-<summary>Wespeaker-Voxceleb-Resnet34-LM</summary>
-
-**依赖：** `pip install "xtalk[pyannote] @ git+https://github.com/xcc-zach/xtalk.git@main"`
-
-**路径：** [`src/xtalk/models/speaker_encoder/pyannote_embedding.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/pyannote_embedding.py)
-
-[Wespeaker](https://github.com/wenet-e2e/wespeaker)
-[模型详情](https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM)
-
-</details>
-
-### 字幕生成器
-
-**配置中的名称**：`captioner`
-
-Captioner 用于生成音频片段的文字描述。
-
-<details markdown="1">
-<summary>Qwen3-Omni-30B-A3B-Captioner</summary>
-
-**依赖：** 无
-
-**路径：** [`src/xtalk/models/captioner/qwen3_omni_captioner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/qwen3_omni_captioner.py)
-
-[HuggingFace](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Captioner)
-[ModelScope](https://www.modelscope.cn/models/Qwen/Qwen3-Omni-30B-A3B-Captioner)
+[原始仓库](https://github.com/aask1357/fastenhancer)
 
 </details>
