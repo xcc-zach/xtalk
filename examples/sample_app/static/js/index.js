@@ -10,15 +10,23 @@ async function loadXtalk() {
 
 const { createSession } = await loadXtalk();
 
-function getWebSocketURL() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const wsPath = new URL("./ws", window.location.href);
-    wsPath.protocol = proto;
-    wsPath.host = window.location.host;
-    return wsPath;
+function resolveAppURL(path) {
+    const baseURL = new URL("./", window.location.href);
+    return new URL(path.replace(/^\/+/, ""), baseURL);
 }
 
-const session = createSession(getWebSocketURL());
+function getWebSocketURL() {
+    const url = resolveAppURL("ws");
+    url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    return url;
+}
+
+const frontendUtilitiesBaseUrl = resolveAppURL("xtalk/frontend-utilities").toString();
+const session = createSession(getWebSocketURL(), {
+    inputConfig: {
+        frontendUtilitiesBaseUrl,
+    },
+});
 
 const $btnStart = document.getElementById('btn-start');
 const $btnStop = document.getElementById('btn-stop');
