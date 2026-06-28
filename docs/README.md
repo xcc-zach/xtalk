@@ -25,7 +25,7 @@ python docs/generate_server_docs.py
 ```
 
 The backend generator writes Markdown files to `docs/api/server/` for the
-Xtalk modules imported by `examples/sample_app/*.py`.
+Xtalk modules imported by [`examples/sample_app/*.py`](https://github.com/xcc-zach/xtalk/tree/main/examples/sample_app).
 
 Only the English backend API docs are generated. The MkDocs i18n
 configuration falls back to the English pages for the Chinese site.

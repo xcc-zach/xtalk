@@ -185,7 +185,7 @@ import asyncio
 
 ## 非流式/离线语音识别模型的伪流式接入
 
-可使用`src/xtalk/speech/utils.py`中的`MockStreamRecognizer`，调用`async_recognize`实现伪流式效果。
+可使用[`src/xtalk/models/audio_utils.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/audio_utils.py)中的`MockStreamRecognizer`，调用`async_recognize`实现伪流式效果。
 
 ## `stream_chunk_bytes_hint`语义
 

@@ -32,7 +32,7 @@ from ..events import (
 )
 from ..events import TurnTTSTextAppendRequested
 from ..interfaces import Manager
-from ...pipelines import Pipeline
+from ...models import Models, SpeechSpeedController, TTS
 
 
 class TTSQueueItem(NamedTuple):
@@ -58,7 +58,7 @@ class TTSManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         """
@@ -67,11 +67,11 @@ class TTSManager(Manager):
         Args:
             event_bus: shared event bus
             session_id: unique session identifier
-            pipeline: pipeline providing TTS models/controllers
+            models: model container providing TTS models/controllers
         """
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
+        self.models = models
         # Session-level config
         self.config: dict[str, Any] = config or {}
 
@@ -90,7 +90,7 @@ class TTSManager(Manager):
         self.consumer_task: Optional[asyncio.Task] = None
 
         # Optional speed controller, falls back to passthrough when absent
-        self.speed_controller = self.pipeline.get_speed_controller()
+        self.speed_controller = self.models.get(SpeechSpeedController)
         self.current_speed: float = 1.0
 
         self._resume_event = asyncio.Event()
@@ -452,7 +452,7 @@ class TTSManager(Manager):
 
     async def _enqueue_sentence_stream(self, sentence: str) -> None:
         """Run streaming TTS for one sentence and enqueue resulting chunks."""
-        tts_model = self.pipeline.get_tts_model()
+        tts_model = self.models.get(TTS)
         if not tts_model:
             await self._publish_error(
                 "tts_model_missing", "TTS model is not configured"
@@ -613,7 +613,11 @@ class TTSManager(Manager):
         voice_name = event.voice_name
 
         try:
-            self.pipeline.get_tts_model().set_voice(voice_names=[voice_name])
+            tts_model = self.models.get(TTS)
+            if tts_model is None:
+                logger.warning("TTS model is not configured - session: %s", self.session_id)
+                return
+            tts_model.set_voice(voice_names=[voice_name])
         except Exception as e:
             logger.error(
                 "Failed to change voice: %s - session: %s",
@@ -636,7 +640,11 @@ class TTSManager(Manager):
             return
 
         try:
-            self.pipeline.get_tts_model().set_emotion(
+            tts_model = self.models.get(TTS)
+            if tts_model is None:
+                logger.warning("TTS model is not configured - session: %s", self.session_id)
+                return
+            tts_model.set_emotion(
                 emotion=emotion_name if emotion_name else emotion_vector
             )
         except Exception as e:
@@ -656,21 +664,60 @@ class TTSManager(Manager):
 
     @Manager.event_handler(TTSModelSwitchRequested, priority=100)
     async def _handle_tts_model_switch(self, event: TTSModelSwitchRequested) -> None:
-        """Handle TTS model switch requests (IndexTTS / IndexTTS2)."""
+        """Handle TTS model switch requests for IndexTTS 1.5 or 2."""
         model_type = event.model_type
         config = event.config
 
         try:
-            if hasattr(self.pipeline, "set_tts_model"):
-                self.pipeline.set_tts_model(model_type, config)
-            else:
-                logger.warning(
-                    "Pipeline does not support set_tts_model - session: %s",
-                    self.session_id,
-                )
+            self._set_tts_model(model_type, config)
         except Exception as e:
             logger.error(
                 "Failed to switch TTS model: %s - session: %s",
                 e,
                 self.session_id,
             )
+
+    def _set_tts_model(self, model_type: str, config: dict[str, Any]) -> None:
+        """Replace the active TTS model for the current session."""
+        from ...models.tts.index_tts import IndexTTS
+
+        current_tts = self.models.get(TTS)
+        current_ref_paths = []
+        if current_tts and hasattr(current_tts, "audio_paths"):
+            current_ref_paths = current_tts.audio_paths or []
+        elif current_tts and hasattr(current_tts, "_base_audio_paths"):
+            current_ref_paths = current_tts._base_audio_paths or []
+
+        ref_audio_paths = config.get("ref_audio_paths") or current_ref_paths
+        sample_rate = config.get("sample_rate", 48000)
+        timeout = config.get("timeout", 30.0)
+        voices = config.get("voices") or [
+            {"name": str(index), "path": path}
+            for index, path in enumerate(ref_audio_paths)
+        ]
+
+        if model_type != "IndexTTS":
+            raise ValueError(f"Unsupported TTS model type: {model_type}")
+        model_version = str(config.get("model", config.get("model_version", "1.5")))
+
+        base_url = config.get("base_url")
+        if base_url is None and ("host" in config or "port" in config):
+            host = config.get("host", "localhost")
+            port = config.get("port", 6006)
+            base_url = f"http://{host}:{port}"
+
+        self.models.set(
+            TTS,
+            IndexTTS(
+                voices=voices,
+                base_url=base_url,
+                sample_rate=sample_rate,
+                timeout=timeout,
+                model=model_version,
+                emo_weight=config.get("emo_weight", 1.0),
+                emo_random=config.get("emo_random", False),
+                max_text_tokens_per_sentence=config.get(
+                    "max_text_tokens_per_sentence", 120
+                ),
+            ),
+        )

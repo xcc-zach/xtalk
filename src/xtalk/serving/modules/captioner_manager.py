@@ -40,8 +40,7 @@ from ..events import (
     CaptionUpdated,
 )
 from ..interfaces import Manager
-from ...pipelines import Pipeline
-from ...rewriter.interfaces import Rewriter
+from ...models import Captioner, Models, Rewriter
 
 
 class CaptionerManager(Manager):
@@ -57,21 +56,17 @@ class CaptionerManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         # Per-session config
         self.config: dict[str, Any] = config or {}
 
         # Check captioner/rewriter availability
-        self.captioner = pipeline.get_captioner_model()
-        # Reuse caption rewriter from pipeline if available
-        self.caption_rewriter: Optional[Rewriter] = (
-            pipeline.get_caption_rewriter_model()
-        )
+        self.captioner = models.get(Captioner)
+        self.caption_rewriter: Optional[Rewriter] = models.get(Rewriter)
 
         # Audio cache: deque of (timestamp, bytes). During speech_active, we let it grow beyond the 15s cap;
         # after speech ends we prune down to the configured limit.
@@ -138,7 +133,7 @@ class CaptionerManager(Manager):
             logger.warning("Captioner error (refresh): %s", e)
             return
         if text:
-            # Apply rewriter (if configured) here rather than inside pipeline
+            # Apply rewriter if configured.
             rewritten = await self._rewrite_caption(text)
             await self.event_bus.publish(
                 CaptionUpdated(

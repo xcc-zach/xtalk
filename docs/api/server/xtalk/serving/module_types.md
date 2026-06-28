@@ -3,7 +3,7 @@
 
 ## OutputGateway
 
-_Defined in `xtalk.serving.modules.output_gateway`._
+_Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
 
 ```python
 class OutputGateway(EventListenerMixin)
@@ -26,7 +26,7 @@ Forward backend events to the frontend WebSocket.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.output_gateway`._
+_Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
 
 ```python
 def __init__(self, event_bus: EventBus, session_id: str, websocket: WebSocket, config: dict[str, Any] | None = None)
@@ -34,7 +34,7 @@ def __init__(self, event_bus: EventBus, session_id: str, websocket: WebSocket, c
 
 #### send_signal
 
-_Defined in `xtalk.serving.modules.output_gateway`._
+_Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
 
 ```python
 async def send_signal(self, message: dict) -> None
@@ -49,7 +49,7 @@ Send a JSON payload to the frontend.
 
 #### send_session_attached
 
-_Defined in `xtalk.serving.modules.output_gateway`._
+_Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
 
 ```python
 async def send_session_attached(self) -> None
@@ -59,7 +59,7 @@ Send the attached session identifier to the frontend.
 
 ## ASRManager
 
-_Defined in `xtalk.serving.modules.asr_manager`._
+_Defined in [`xtalk.serving.modules.asr_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py)._
 
 ```python
 class ASRManager(Manager)
@@ -69,15 +69,15 @@ class ASRManager(Manager)
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.asr_manager`._
+_Defined in [`xtalk.serving.modules.asr_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.asr_manager`._
+_Defined in [`xtalk.serving.modules.asr_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py)._
 
 ```python
 async def shutdown(self)
@@ -85,7 +85,7 @@ async def shutdown(self)
 
 ## DirectAudioManager
 
-_Defined in `xtalk.serving.modules.direct_audio_manager`._
+_Defined in [`xtalk.serving.modules.direct_audio_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)._
 
 ```python
 class DirectAudioManager(Manager)
@@ -97,7 +97,7 @@ Forward ``direct_audio`` tool calls to the outbound audio stream.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.direct_audio_manager`._
+_Defined in [`xtalk.serving.modules.direct_audio_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)._
 
 ```python
 def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] | None = None) -> None
@@ -116,7 +116,7 @@ Initialize the direct-audio manager.
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.direct_audio_manager`._
+_Defined in [`xtalk.serving.modules.direct_audio_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -126,7 +126,7 @@ Shut down the manager.
 
 ## EmbeddingsManager
 
-_Defined in `xtalk.serving.modules.embeddings_manager`._
+_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
 
 ```python
 class EmbeddingsManager(Manager)
@@ -136,15 +136,15 @@ class EmbeddingsManager(Manager)
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.embeddings_manager`._
+_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.embeddings_manager`._
+_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -154,7 +154,7 @@ Remove per-session embedding directory on shutdown.
 
 ## EnhancerManager
 
-_Defined in `xtalk.serving.modules.enhancer_manager`._
+_Defined in [`xtalk.serving.modules.enhancer_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/enhancer_manager.py)._
 
 ```python
 class EnhancerManager(Manager)
@@ -166,15 +166,15 @@ Backend speech enhancement manager.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.enhancer_manager`._
+_Defined in [`xtalk.serving.modules.enhancer_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/enhancer_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: Optional[dict[str, Any]] = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: Optional[dict[str, Any]] = None) -> None
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.enhancer_manager`._
+_Defined in [`xtalk.serving.modules.enhancer_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/enhancer_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -184,7 +184,7 @@ Reset enhancer state on shutdown.
 
 ## LatencyManager
 
-_Defined in `xtalk.serving.modules.latency_manager`._
+_Defined in [`xtalk.serving.modules.latency_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/latency_manager.py)._
 
 ```python
 class LatencyManager(EventListenerMixin)
@@ -196,7 +196,7 @@ Per-session latency tracker that listens to VAD/ASR/LLM/TTS events.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.latency_manager`._
+_Defined in [`xtalk.serving.modules.latency_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/latency_manager.py)._
 
 ```python
 def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] | None = None) -> None
@@ -204,7 +204,7 @@ def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] 
 
 #### update_clock_offset
 
-_Defined in `xtalk.serving.modules.latency_manager`._
+_Defined in [`xtalk.serving.modules.latency_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/latency_manager.py)._
 
 ```python
 def update_clock_offset(self, client_send_ts: float, server_recv_ts: float, client_recv_ts: float) -> None
@@ -217,7 +217,7 @@ Offset = T2 - (T1 + T4)/2 and we track a rolling median for stability.
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.latency_manager`._
+_Defined in [`xtalk.serving.modules.latency_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/latency_manager.py)._
 
 ```python
 async def shutdown(self)
@@ -225,7 +225,7 @@ async def shutdown(self)
 
 ## LLMAgentContextManager
 
-_Defined in `xtalk.serving.modules.llm_agent_context_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)._
 
 ```python
 class LLMAgentContextManager(Manager)
@@ -239,8 +239,8 @@ Forward session context events into the configured LLM agent.
   Shared event bus for the current session.
 - `session_id` (`str`)
   Current session identifier.
-- `pipeline` (`Pipeline`)
-  Session pipeline that owns the LLM agent.
+- `models` (`Models`)
+  Session model container that owns the LLM agent.
 - `config` (`dict[str, Any] | None, optional`)
   Unused manager config kept for interface consistency.
 
@@ -248,15 +248,15 @@ Forward session context events into the configured LLM agent.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.llm_agent_context_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.llm_agent_context_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -266,7 +266,7 @@ Release manager resources.
 
 ## LLMAgentConsumptionManager
 
-_Defined in `xtalk.serving.modules.llm_agent_generation_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_generation_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_generation_manager.py)._
 
 ```python
 class LLMAgentConsumptionManager(Manager)
@@ -284,15 +284,15 @@ arrival order.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.llm_agent_generation_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_generation_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_generation_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.llm_agent_generation_manager`._
+_Defined in [`xtalk.serving.modules.llm_agent_generation_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_generation_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -302,7 +302,7 @@ Cancel all active streams during service shutdown.
 
 ## SpeakerManager
 
-_Defined in `xtalk.serving.modules.speaker_manager`._
+_Defined in [`xtalk.serving.modules.speaker_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/speaker_manager.py)._
 
 ```python
 class SpeakerManager(Manager)
@@ -320,10 +320,10 @@ Responsibilities:
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.speaker_manager`._
+_Defined in [`xtalk.serving.modules.speaker_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/speaker_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 Initialize the speaker manager.
@@ -331,7 +331,7 @@ Initialize the speaker manager.
 Args:
     event_bus: shared event bus
     session_id: unique session identifier
-    pipeline: pipeline providing a speaker encoder
+    models: model container providing a speaker encoder
     config: optional parameters
         - similarity_threshold: cosine threshold (default 0.4)
         - min_audio_length_sec: minimum audio length (default 0.5s)
@@ -339,7 +339,7 @@ Args:
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.speaker_manager`._
+_Defined in [`xtalk.serving.modules.speaker_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/speaker_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -349,7 +349,7 @@ Stop buffering audio and persist debug summaries.
 
 ## TTSPlaybackManager
 
-_Defined in `xtalk.serving.modules.tts_playback_manager`._
+_Defined in [`xtalk.serving.modules.tts_playback_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_playback_manager.py)._
 
 ```python
 class TTSPlaybackManager(Manager)
@@ -361,7 +361,7 @@ Project confirmed TTS playback progress back onto response text.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.tts_playback_manager`._
+_Defined in [`xtalk.serving.modules.tts_playback_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_playback_manager.py)._
 
 ```python
 def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] | None = None) -> None
@@ -369,7 +369,7 @@ def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] 
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.tts_playback_manager`._
+_Defined in [`xtalk.serving.modules.tts_playback_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_playback_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -377,7 +377,7 @@ async def shutdown(self) -> None
 
 ## TTSManager
 
-_Defined in `xtalk.serving.modules.tts_manager`._
+_Defined in [`xtalk.serving.modules.tts_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_manager.py)._
 
 ```python
 class TTSManager(Manager)
@@ -395,10 +395,10 @@ Event-driven TTS manager handling streaming synthesis and control.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.tts_manager`._
+_Defined in [`xtalk.serving.modules.tts_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 Initialize TTS manager.
@@ -406,11 +406,11 @@ Initialize TTS manager.
 Args:
     event_bus: shared event bus
     session_id: unique session identifier
-    pipeline: pipeline providing TTS models/controllers
+    models: model container providing TTS models/controllers
 
 #### reset_tts
 
-_Defined in `xtalk.serving.modules.tts_manager`._
+_Defined in [`xtalk.serving.modules.tts_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_manager.py)._
 
 ```python
 async def reset_tts(self) -> None
@@ -420,7 +420,7 @@ Reset all TTS state and cancel consumers.
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.tts_manager`._
+_Defined in [`xtalk.serving.modules.tts_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_manager.py)._
 
 ```python
 async def shutdown(self) -> None
@@ -430,7 +430,7 @@ Shut down TTS manager and reset state.
 
 ## TurnTakingManager
 
-_Defined in `xtalk.serving.modules.turn_taking_manager`._
+_Defined in [`xtalk.serving.modules.turn_taking_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/turn_taking_manager.py)._
 
 ```python
 class TurnTakingManager(Manager)
@@ -440,15 +440,15 @@ class TurnTakingManager(Manager)
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.turn_taking_manager`._
+_Defined in [`xtalk.serving.modules.turn_taking_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/turn_taking_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.turn_taking_manager`._
+_Defined in [`xtalk.serving.modules.turn_taking_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/turn_taking_manager.py)._
 
 ```python
 async def shutdown(self)
@@ -456,7 +456,7 @@ async def shutdown(self)
 
 ## VADManager
 
-_Defined in `xtalk.serving.modules.vad_manager`._
+_Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/vad_manager.py)._
 
 ```python
 class VADManager(Manager)
@@ -468,15 +468,15 @@ Backend VAD manager.
 
 #### __init__
 
-_Defined in `xtalk.serving.modules.vad_manager`._
+_Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/vad_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, pipeline: Pipeline, config: Optional[dict[str, Any]] = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: Optional[dict[str, Any]] = None) -> None
 ```
 
 #### shutdown
 
-_Defined in `xtalk.serving.modules.vad_manager`._
+_Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/vad_manager.py)._
 
 ```python
 async def shutdown(self) -> None

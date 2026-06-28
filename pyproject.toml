@@ -17,7 +17,8 @@ dependencies    = [
   "PyYAML",
   "fastapi",
   "numpy",
-  "aiohttp"
+  "aiohttp",
+  "requests"
 ]
 dynamic         = ["version"]
 
@@ -69,6 +70,7 @@ cosyvoice-local = [
 ]
 index-tts = [
   "requests",
+  "aiohttp",
   "soundfile",
   "soxr",
   "numpy"
@@ -92,6 +94,7 @@ sense-voice-small = [
   "modelscope"
 ]
 sherpa-onnx-asr = [
+  "numpy",
   "websockets",
 ]
 ct-punt = [
@@ -122,6 +125,12 @@ edge-tts = [
   "edge-tts"
 ]
 silero-vad = [
+  "numpy",
+  "onnxruntime",
+]
+fast-enhancer = [
+  "numpy",
+  "requests",
   "onnxruntime",
 ]
 rubberband = [
@@ -133,6 +142,7 @@ soulx-duplug = [
 ]
 turn-sense = [
   "aiohttp",
+  "numpy",
 ]
 example = [
   "pypdf",

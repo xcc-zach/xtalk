@@ -2011,7 +2011,6 @@ def load_tts_from_config(config_path: Path):
     return init_registered_model(
         slot="tts",
         model_config=tts_config,
-        registry=Xtalk.MODEL_REGISTRY,
     )
 
 

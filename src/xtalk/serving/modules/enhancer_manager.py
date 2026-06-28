@@ -3,13 +3,13 @@
 EnhancerManager
 
 Backend audio enhancer: when the frontend keeps raw audio (pure_frontend mode),
-this manager runs `pipeline.enhancer_model` to denoise/enhance frames.
+this manager runs the configured speech enhancer to denoise/enhance frames.
 It also serializes downstream audio-frame handling so bursty frame arrival does
 not become concurrent VAD/ASR/turn-detector processing.
 
 Flow:
 - Subscribe to `AudioFrameReceived`.
-- If `pipeline.enhancer_model` exists, call `enhance()`; otherwise pass through.
+- If a speech enhancer exists, call `enhance()`; otherwise pass through.
 - Queue raw frames and process them in order on a single worker.
 - Publish `EnhancedAudioFrameReceived` for ASR/VAD.
 - Flush buffered enhancer state on `VADSpeechEnd`.
@@ -35,7 +35,7 @@ from ..events import (
     EnhancedAudioFrameReceived,
     VADSpeechEnd,
 )
-from ...pipelines import Pipeline
+from ...models import Models, SpeechEnhancer
 
 
 @dataclass(slots=True)
@@ -62,16 +62,15 @@ class EnhancerManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config: dict[str, Any] = config or {}
 
         # Only enable when enhancer model is provided
-        self.enhancer = self.pipeline.get_enhancer_model()
+        self.enhancer = models.get(SpeechEnhancer)
         self._last_sample_rate = 16000
         # EnhancerManager is also the serialized handoff for raw audio frames so
         # network jitter does not turn into concurrent downstream audio handling.

@@ -2,9 +2,9 @@ from typing import Optional, Any
 import asyncio
 from ..interfaces import Manager
 from ..event_bus import EventBus
-from ...pipelines import Pipeline
+from ...models import ASR, Agent, Models
 from ..events import (
-    BaseEvent,
+    Event,
     EnhancedAudioFrameReceived,
     TurnASRStartRequested,
     TurnASREndRequested,
@@ -70,13 +70,13 @@ class AudioConsumer:
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ) -> None:
         self._event_bus = event_bus
-        self._asr_model = pipeline.get_asr_model()
+        self._asr_model = models.require(ASR)
         self._asr_model.reset()
-        self._agent = pipeline.get_agent()
+        self._agent = models.get(Agent)
         self._session_id = session_id
         # Flag to avoid repeat pause or end
         self._ended = True
@@ -223,7 +223,7 @@ class AudioConsumer:
         """Return whether recognized text is empty after trimming whitespace."""
         return not text.strip()
 
-    async def _publish_event(self, event: BaseEvent):
+    async def _publish_event(self, event: Event):
         await self._event_bus.publish(event)
 
     async def _publish_final_text(self, text: str) -> None:
@@ -271,11 +271,11 @@ class ASRManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
-        self._audio_consumer = AudioConsumer(event_bus, session_id, pipeline, config)
+        self._audio_consumer = AudioConsumer(event_bus, session_id, models, config)
 
     @Manager.event_handler(EnhancedAudioFrameReceived)
     async def _handle_audio_frame(self, event: EnhancedAudioFrameReceived):

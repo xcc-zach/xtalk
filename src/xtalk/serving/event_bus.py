@@ -11,7 +11,7 @@ import time
 
 from ..log_utils import logger
 
-from .events import BaseEvent, ErrorOccurred
+from .events import Event, ErrorOccurred
 
 
 @dataclass
@@ -59,7 +59,7 @@ class EventBus:
         # Event history tracking
         self._enable_history = enable_history
         self._max_history = max_history
-        self._event_history: List[BaseEvent] = []
+        self._event_history: List[Event] = []
 
         # Metrics
         self._stats = {
@@ -84,7 +84,7 @@ class EventBus:
         self._error_event_times: List[float] = []
         self._last_error_event_time = 0.0
 
-    def _get_event_key(self, event_identifier: Union[Type[BaseEvent], str]) -> str:
+    def _get_event_key(self, event_identifier: Union[Type[Event], str]) -> str:
         """Normalize event identifier (class or string) into type string."""
         # Already a string
         if isinstance(event_identifier, str):
@@ -104,17 +104,17 @@ class EventBus:
 
     def subscribe(
         self,
-        event_class: Union[Type[BaseEvent], str],
-        handler: Callable[[BaseEvent], Any],
+        event_class: Union[Type[Event], str],
+        handler: Callable[[Event], Any],
         priority: int = 0,
     ) -> None:
         """Subscribe a handler to an event type.
 
         Parameters
         ----------
-        event_class : Type[BaseEvent] | str
+        event_class : Type[Event] | str
             Event class or event type string such as ``"tts.started"``.
-        handler : Callable[[BaseEvent], Any]
+        handler : Callable[[Event], Any]
             Sync or async callable invoked for matching events.
         priority : int, optional
             Higher values run earlier.
@@ -130,13 +130,13 @@ class EventBus:
         self._stats["handlers_count"] += 1
 
     def unsubscribe(
-        self, event_class: Union[Type[BaseEvent], str], handler: Callable
+        self, event_class: Union[Type[Event], str], handler: Callable
     ) -> bool:
         """Unsubscribe a handler from an event type.
 
         Parameters
         ----------
-        event_class : Type[BaseEvent] | str
+        event_class : Type[Event] | str
             Event class or event type string.
         handler : Callable
             Previously subscribed handler to remove.
@@ -157,13 +157,13 @@ class EventBus:
         return False
 
     async def publish(
-        self, event: BaseEvent, wait_for_completion: bool = False
+        self, event: Event, wait_for_completion: bool = False
     ) -> bool:
         """Publish an event to all matching handlers.
 
         Parameters
         ----------
-        event : BaseEvent
+        event : Event
             Event instance to dispatch.
         wait_for_completion : bool, optional
             Whether to await handler completion before returning.
@@ -217,7 +217,7 @@ class EventBus:
 
             return False
 
-    async def _handle_event_safe(self, handler: EventHandler, event: BaseEvent) -> None:
+    async def _handle_event_safe(self, handler: EventHandler, event: Event) -> None:
         """
         Safely handle an event, capturing exceptions.
 
@@ -330,7 +330,7 @@ class EventBus:
                 # Ensure depth counter is always restored
                 self._error_event_depth -= 1
 
-    def _add_to_history(self, event: BaseEvent) -> None:
+    def _add_to_history(self, event: Event) -> None:
         """
         Append event to history storage.
 
@@ -345,7 +345,7 @@ class EventBus:
 
     def get_history(
         self, event_type: Optional[str] = None, session_id: Optional[str] = None
-    ) -> List[BaseEvent]:
+    ) -> List[Event]:
         """
         Retrieve event history with optional filters.
 

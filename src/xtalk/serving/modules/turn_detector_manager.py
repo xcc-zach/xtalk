@@ -34,8 +34,8 @@ from ..events import (
     TurnDetectorStopSpeaking,
     TurnDetectorStartGeneration,
 )
-from ...pipelines import Pipeline
-from ...speech.interfaces import (
+from ...models import Models, TurnDetector, VAD
+from ...models.turn_detector.interfaces import (
     TurnDetectionAction,
     TurnDetectionResult,
     TurnVADResult,
@@ -49,17 +49,16 @@ class TurnDetectorManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config: dict[str, Any] = config or {}
 
-        # Get turn detector from pipeline
-        self.turn_detector = self.pipeline.get_turn_detector_model()
-        self._backend_vad = self.pipeline.get_vad_model()
+        # Get turn detector from configured models.
+        self.turn_detector = models.get(TurnDetector)
+        self._backend_vad = models.get(VAD)
         self._proxy_vad_enabled = self._backend_vad is None
         self._proxy_vad_in_speech = False
 

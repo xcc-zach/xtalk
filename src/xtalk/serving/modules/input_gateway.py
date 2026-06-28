@@ -170,7 +170,7 @@ class TextMsgHandler(EventListenerMixin):
         await self._publish(TTSSpeedChange(session_id=self.session_id, speed=speed))
 
     async def _handle_change_tts_model(self, message_data: dict) -> None:
-        """Handle requests to switch TTS models (IndexTTS / IndexTTS2)."""
+        """Handle requests to switch the IndexTTS protocol version."""
         model_type = message_data.get("model_type", "")
         if not _require(
             message_data, "model_type", self.session_id, "change_tts_model"

@@ -1,6 +1,6 @@
 *Experimental functionality*
 
-X-Talk provides a single script, `scripts/test.py`, for both test-set generation and automated backend evaluation.
+X-Talk provides a single script, [`scripts/test.py`](https://github.com/xcc-zach/xtalk/blob/main/scripts/test.py), for both test-set generation and automated backend evaluation.
 
 It has two modes:
 
@@ -42,8 +42,7 @@ Minimal example with `IndexTTS`:
 {
   "type": "IndexTTS",
   "params": {
-    "host": "127.0.0.1",
-    "port": 11996,
+    "base_url": "http://127.0.0.1:11996",
     "voices": [
       {
         "name": "man",
@@ -61,8 +60,7 @@ Equivalent full-service form:
   "tts": {
     "type": "IndexTTS",
     "params": {
-      "host": "127.0.0.1",
-      "port": 11996,
+      "base_url": "http://127.0.0.1:11996",
       "voices": [
         {
           "name": "man",

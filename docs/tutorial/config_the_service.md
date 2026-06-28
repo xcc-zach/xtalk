@@ -1,34 +1,39 @@
 # Configure the service
 
-## Customize models
+## Configuration file
 
-As mentioned before in [Start the Service](start_the_service.md), an X-Talk instance can be created from a JSON config, which is used to customize the models in use.
+As mentioned in [Start the Service](start_the_service.md), `Xtalk.from_config(path/to/config.json)` reads a config file to instantiate X-Talk. A minimal config file looks like this:
 
-Inspect the supported model categories:
-
-```python
-from xtalk import Xtalk
-print(Xtalk.MODEL_REGISTRY)
-# Something like
-# {
-#     "asr": ["xtalk.speech.asr"],
-#     "llm_agent": ["xtalk.llm_agent"],
-#     "tts": ["xtalk.speech.tts"],
-#     "embeddings": ["xtalk.embeddings"],
-#     "speaker_encoder": ["xtalk.speech.speaker_encoder"],
-#     "captioner": ["xtalk.speech.captioner"],
-#     "caption_rewriter": ["xtalk.rewriter"],
-#     "thought_rewriter": ["xtalk.rewriter"],
-#     "vad": ["xtalk.speech.vad"],
-#     "speech_enhancer": ["xtalk.speech.speech_enhancer"],
-#     "speech_speed_controller": ["xtalk.speech.speech_speed_controller"],
-#     "turn_detector": ["xtalk.speech.turn_detector"],
-# }
+```json
+{
+    "asr": {
+        "type": "Qwen3ASRFlashRealtime",
+        "params": {
+            "api_key": "<API_KEY>"
+        }
+    },
+    "llm_agent": {
+        "type": "DefaultAgent",
+        "params": {
+            "model": {
+                "api_key": "<API_KEY>",
+                "model": "qwen-plus-2025-12-01",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            }
+        }
+    },
+    "tts": {
+        "type": "CosyVoice",
+        "params": {
+            "api_key": "<API_KEY>"
+        }
+    }
+}
 ```
 
-For model configuration, the config item should match the model Python class name and its initialization arguments.
+Keys such as `asr` represent model types, `type` selects the model for that model type, and `params` contains the model initialization arguments.
 
-For example, `DefaultAgent` is defined in `src/xtalk/llm_agent/default.py`:
+For example, the `DefaultAgent` for the `llm_agent` model type is defined in [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py):
 ```python
 class DefaultAgent(Agent):
     def __init__(
@@ -133,18 +138,7 @@ const session = createSession(wsUrl, {
 - `enableEnhancer`
   Whether to enable frontend speech enhancement. The default is `true`.
 - `vadRedemptionMs`
-  VAD redemption window in milliseconds.
-
-Bridge mode with `mode: "web_bridge"` also supports:
-
-- `mode`
-  Either `"microphone"` or `"web_bridge"`.
-- `participantId`
-  Participant identifier for bridge-backed input.
-- `bridge`
-  Shared audio bridge instance.
-- `autoEmitVad`
-  Whether to auto-broadcast frontend VAD events in bridge mode.
+  VAD redemption window in milliseconds. The default is `500`.
 
 ### outputConfig
 
@@ -155,7 +149,7 @@ Bridge mode with `mode: "web_bridge"` also supports:
 
 ### serviceURLs
 
-`serviceURLs` overrides auxiliary HTTP endpoints. It currently supports:
+`serviceURLs` overrides server HTTP endpoints. It currently supports:
 
 - `login`
 - `sessions`

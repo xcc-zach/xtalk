@@ -1,3 +1,4 @@
+<!-- 此文件由 generate_server_docs.py 自动生成。 -->
 # xtalk.log_utils
 
 ## mute_other_logging
@@ -6,11 +7,13 @@
 def mute_other_logging()
 ```
 
-降低 Xtalk 所使用的第三方日志器噪声。
+Reduce noise from third-party loggers used by Xtalk.
 
-### Notes
+### 说明
 
-该辅助函数会将根日志器级别提升到 `WARNING`，并对常见的网络层和 SDK 日志器应用相同阈值，这样示例应用可以将终端输出集中在 Xtalk 事件上。
+This helper raises the root logger level to ``WARNING`` and applies the
+same threshold to common network and SDK loggers so sample applications
+can keep terminal output focused on Xtalk events.
 
 ## setup_logging
 
@@ -18,16 +21,16 @@ def mute_other_logging()
 def setup_logging()
 ```
 
-配置进程级 Xtalk 日志器。
+Configure the process-wide Xtalk logger.
 
-### Returns
+### 返回
 
 - `logging.Logger`
-  已配置好的 `xtalk` 日志器实例。
+  The configured ``xtalk`` logger instance.
 
-### Notes
+### 说明
 
-每次进程启动时，都会在 `logs/` 下创建一个带时间戳的日志文件。
+A timestamped log file is created under ``logs/`` for every process start.
 
 ## logger
 
@@ -35,4 +38,4 @@ def setup_logging()
 logger
 ```
 
-**Value:** `setup_logging()`
+**值:** `setup_logging()`
