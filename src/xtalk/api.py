@@ -1,7 +1,7 @@
 import json
 import uuid
 from pathlib import Path
-from typing import Callable, Type, Any
+from typing import Callable, Any
 from fastapi import (
     File,
     Form,
@@ -16,31 +16,26 @@ from langchain_core.tools import BaseTool
 from .auth import JWTAuth, extract_bearer_token, resolve_auth_config
 from .persistence import PersistenceStore
 from .serving.service_manager import ServiceManager
-from .pipelines import Pipeline
-from .pipelines.default import DefaultPipeline
 from .serving.session_limiter import SessionLimiter
 from .serving.events import TextForEmbeddingReady
 from .serving.service import Service, DefaultService
+from .models import Agent
+from .models.container import Models
 from .model_loader import (
-    ImportSpec,
-    MODEL_REGISTRY as SHARED_MODEL_REGISTRY,
-    init_model,
-    register_model_search_spec as register_model_search_spec_helper,
+    ensure_model_types_registered,
+    init_configured_model,
 )
 
 
 class Xtalk:
-    """Create Xtalk pipelines, services, and session entrypoints.
+    """Create Xtalk model services and session entrypoints.
 
     Notes
     -----
     ``Xtalk`` is the main integration surface used by the sample applications.
-    It builds pipelines from configuration, stores a prototype service, and
+    It builds model containers from configuration, stores a prototype service, and
     accepts WebSocket sessions on demand.
     """
-
-    MODEL_REGISTRY: dict[str, list[ImportSpec]] = SHARED_MODEL_REGISTRY
-
     def __init__(self, *, service_prototype: Service, max_sessions: int | None = None):
         """Initialize an ``Xtalk`` application wrapper.
 
@@ -67,49 +62,10 @@ class Xtalk:
             service_prototype=service_prototype,
             persistence_store=self._persistence,
         )
-        self._pipeline = service_prototype.pipeline
+        self._models = service_prototype.models
         self._session_limiter = (
             SessionLimiter(max_sessions) if max_sessions is not None else None
         )
-
-    # -------------------------
-    # Public registry APIs
-    # -------------------------
-    @classmethod
-    def register_model_search_spec(
-        cls,
-        *,
-        slot: str,
-        spec: ImportSpec,
-        prepend: bool = True,
-    ) -> None:
-        """Register an additional model lookup location for a slot.
-
-        Parameters
-        ----------
-        slot : str
-            Registry slot name such as ``"llm_agent"`` or ``"tts"``.
-        spec : ImportSpec
-            Import target to try when loading that slot. Supported forms include
-            module paths, ``"module:attribute"`` references, and Python file
-            paths.
-        prepend : bool, default=True
-            Whether to try the new spec before existing registered specs.
-
-        Notes
-        -----
-        Common ``spec`` forms include ``"my_pkg.custom_tts"``,
-        ``"my_pkg.custom_tts:registry"``, ``"/abs/path/custom_tts.py"``, and
-        ``Path("./custom_tts.py")``.
-
-        Examples
-        --------
-        >>> Xtalk.register_model_search_spec(
-        ...     slot="llm_agent",
-        ...     spec="./echo_agent.py",
-        ... )
-        """
-        register_model_search_spec_helper(slot=slot, spec=spec, prepend=prepend)
 
     # -------------------------
     # Config / construction
@@ -135,57 +91,51 @@ class Xtalk:
         Returns
         -------
         Xtalk
-            Configured application wrapper backed by a ``DefaultPipeline`` and
-            ``DefaultService``.
+            Configured application wrapper backed by a ``DefaultService``.
 
         Examples
         --------
         >>> xtalk = Xtalk.from_config("server_config.json")
         """
         config = cls._get_config_dict(path_or_dict)
-        pipeline = cls._load_pipeline(DefaultPipeline, config)
+        models = cls._load_models(config)
         service_prototype = DefaultService(
-            pipeline=pipeline, service_config=cls._load_service_config(config)
+            models=models, service_config=cls._load_service_config(config)
         )
         max_sessions = cls._max_sessions(config)
         return cls(service_prototype=service_prototype, max_sessions=max_sessions)
 
     @classmethod
-    def create_pipeline_from_config(
+    def create_models_from_config(
         cls,
         *,
-        pipeline_cls: Type[Pipeline],
         config_path_or_dict: str | dict,
-        additional_model_registry: dict[str, Any],
-    ) -> Pipeline:
-        """Instantiate a custom pipeline class from configuration.
+        additional_models: dict[type[Any], Any] | None = None,
+    ) -> Models:
+        """Instantiate configured models from configuration.
 
         Parameters
         ----------
-        pipeline_cls : Type[Pipeline]
-            Concrete pipeline type to instantiate.
         config_path_or_dict : str | dict
             JSON file path or already loaded configuration dictionary.
-        additional_model_registry : dict[str, Any]
-            Extra slot-to-instance mapping merged on top of the default model
-            registry before the pipeline is created.
+        additional_models : dict[type[Any], Any] | None, optional
+            Extra interface-to-instance mappings merged into the configured
+            models.
 
         Returns
         -------
-        Pipeline
-            Pipeline instance created from the supplied configuration.
+        Models
+            Model container created from the supplied configuration.
 
         Examples
         --------
-        >>> pipeline = Xtalk.create_pipeline_from_config(
-        ...     pipeline_cls=DefaultPipeline,
+        >>> models = Xtalk.create_models_from_config(
         ...     config_path_or_dict="server_config.json",
-        ...     additional_model_registry={},
+        ...     additional_models={},
         ... )
         """
         config = cls._get_config_dict(config_path_or_dict)
-        pipeline = cls._load_pipeline(pipeline_cls, config, additional_model_registry)
-        return pipeline
+        return cls._load_models(config, additional_models=additional_models)
 
     def set_session_limit(self, limit: int):
         """Set or replace the concurrent session limit.
@@ -245,7 +195,7 @@ class Xtalk:
         """
         if self._service_manager.get_service_count() > 0:
             raise RuntimeError("Cannot add tools after services have been created.")
-        self._pipeline.get_agent().add_tools(tools_or_factories)
+        self._models.require(Agent).add_tools(tools_or_factories)
 
     def _login(self) -> dict[str, Any]:
         user_id = str(uuid.uuid4())
@@ -426,20 +376,28 @@ class Xtalk:
         return bool(value)
 
     @classmethod
-    def _load_pipeline(
+    def _load_models(
         cls,
-        pipeline_cls: Type[Pipeline],
         config: dict,
-        additional_model_registry: dict | None = None,
-    ):
-        model_map: dict[str, Any] = {}
-        for slot, specs in cls.MODEL_REGISTRY.items():
-            model_map[slot] = init_model(
-                model_config=config.get(slot, {}),
-                import_specs=specs,
+        additional_models: dict[type[Any], Any] | None = None,
+    ) -> Models:
+        """Instantiate configured model types into a model container."""
+        ensure_model_types_registered()
+
+        from .models.registry import iter_model_type_infos, resolve_config_slot
+
+        models = Models()
+        for info in iter_model_type_infos():
+            config_slot = resolve_config_slot(info.config_key, config)
+            if config_slot not in config:
+                continue
+            models.set(
+                info.interface,
+                init_configured_model(slot=info.config_key, config=config),
             )
 
-        if additional_model_registry:
-            model_map = model_map | additional_model_registry
+        if additional_models:
+            for interface, model in additional_models.items():
+                models.set(interface, model)
 
-        return pipeline_cls(**model_map)
+        return models

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import inspect
 import json
 import mimetypes
 import uuid
@@ -17,7 +16,6 @@ from fastapi.templating import Jinja2Templates
 
 from xtalk import Xtalk
 from xtalk.log_utils import mute_other_logging
-from xtalk.model_loader import import_candidate
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
@@ -102,51 +100,6 @@ def load_json(path: str) -> dict[str, Any]:
         return json.load(handle)
 
 
-def resolve_agent_class(template_config: dict[str, Any]) -> type[Any]:
-    """Resolve the configured LLM agent class from the shared registry.
-
-    Parameters
-    ----------
-    template_config : dict[str, Any]
-        Template server config passed through ``--config``.
-
-    Returns
-    -------
-    type[Any]
-        Resolved agent class.
-
-    Raises
-    ------
-    ValueError
-        Raised when the configured agent class cannot be found.
-    """
-
-    llm_agent_config = template_config.get("llm_agent")
-    if not isinstance(llm_agent_config, dict):
-        raise ValueError("Template config must define llm_agent.")
-    model_type = llm_agent_config.get("type")
-    if not isinstance(model_type, str) or not model_type.strip():
-        raise ValueError("Template config llm_agent.type must be a non-empty string.")
-
-    errors: list[str] = []
-    for spec in Xtalk.MODEL_REGISTRY["llm_agent"]:
-        try:
-            container = import_candidate(spec)
-        except Exception as exc:
-            errors.append(f"{spec!r} import failed: {exc!r}")
-            continue
-
-        agent_class = getattr(container, model_type, None)
-        if isinstance(agent_class, type):
-            return agent_class
-
-    detail = "\n  - " + "\n  - ".join(errors) if errors else ""
-    raise ValueError(
-        f"Configured llm agent class {model_type!r} not found in registry."
-        f"{detail}"
-    )
-
-
 def validate_template_vad_config(template_config: dict[str, Any]) -> None:
     """Ensure the bot2bot template config defines a backend VAD model.
 
@@ -174,34 +127,6 @@ def validate_template_vad_config(template_config: dict[str, Any]) -> None:
         '    "params": {}\n'
         "}"
     )
-
-
-def validate_agent_class(agent_class: type[Any]) -> None:
-    """Ensure the selected agent supports the demo overrides.
-
-    Parameters
-    ----------
-    agent_class : type[Any]
-        Resolved agent class from the configured template.
-
-    Raises
-    ------
-    ValueError
-        Raised when the agent does not accept ``system_prompt`` or
-        ``proactive`` constructor parameters.
-    """
-
-    signature = inspect.signature(agent_class.__init__)
-    missing = [
-        name
-        for name in ("system_prompt", "proactive")
-        if name not in signature.parameters
-    ]
-    if missing:
-        raise ValueError(
-            "The configured llm agent must support the following constructor "
-            f"parameters for bot2bot: {', '.join(missing)}."
-        )
 
 
 def parse_bot_drafts(payload: dict[str, Any]) -> list[BotDraft]:
@@ -556,11 +481,15 @@ def create_app(config_path: str) -> FastAPI:
 
     template_config = load_json(config_path)
     validate_template_vad_config(template_config)
-    agent_class = resolve_agent_class(template_config)
-    validate_agent_class(agent_class)
+    llm_agent_config = template_config.get("llm_agent")
+    agent_type = ""
+    if isinstance(llm_agent_config, dict):
+        raw_agent_type = llm_agent_config.get("type")
+        if isinstance(raw_agent_type, str):
+            agent_type = raw_agent_type
     manager = Bot2BotRuntimeManager(
         template_config=template_config,
-        agent_type=agent_class.__name__,
+        agent_type=agent_type,
     )
 
     app = FastAPI(title="Xtalk Bot2Bot Demo")
@@ -594,7 +523,7 @@ def create_app(config_path: str) -> FastAPI:
             Rendered demo HTML.
         """
 
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request=request, name="index.html")
 
     @app.get("/api/bot2bot/template")
     async def read_template() -> dict[str, Any]:
@@ -635,7 +564,10 @@ def create_app(config_path: str) -> FastAPI:
             bots = parse_bot_drafts(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return manager.start(bots)
+        try:
+            return manager.start(bots)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/bot2bot/stop")
     async def stop_bot2bot() -> dict[str, str]:

@@ -1,266 +1,914 @@
+<!-- 此文件由 generate_server_docs.py 自动生成。 -->
 # xtalk.events
 
-## BaseEvent
+## Event
 
-_定义于 `xtalk.serving.events`。_
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
 
 ```python
 @dataclass
-class BaseEvent
+class Event
 ```
 
-所有 Xtalk 事件的基础 dataclass。
+Base dataclass for all Xtalk events.
 
-### Parameters
+### 参数
 
 - `session_id` (`str`)
-  与该事件关联的会话标识符。
+  Session identifier associated with the event.
 
-### Attributes
+### 属性
 
 - `timestamp` (`float`)
-  事件实例创建时记录的 Unix 时间戳。
+  Unix timestamp recorded when the event instance is created.
 - `session_id` (`str`)
-  与该事件关联的会话标识符。
+  Session identifier associated with the event.
 - `TYPE` (`str`)
-  事件总线使用的稳定事件类型字符串。
+  Stable event type string used by the event bus.
+
+### 类字段
+
+- `timestamp: float` = `field(init=False)`
+- `session_id: str`
+- `TYPE: ClassVar[str]` = `'base'`
+
+### 方法
+
+#### event_type
+
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+def event_type(self) -> str
+```
 
 ## create_event_class
 
-_定义于 `xtalk.serving.events`。_
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
 
 ```python
-def create_event_class(*, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None) -> Type[BaseEvent]
+def create_event_class(*, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None) -> Type[Event]
 ```
 
-动态创建 `BaseEvent` 子类。
+Create an ``Event`` subclass dynamically.
 
-### Parameters
+### 参数
 
 - `name` (`str`)
-  生成事件类型的 dataclass 名称。
+  Dataclass name for the generated event type.
 - `fields` (`dict[str, Any] | None, optional`)
-  字段名到默认值的映射，值类型会从默认值推断。
+  Mapping of field names to default values. Value types are inferred from
+  the defaults.
 - `type_name` (`str | None, optional`)
-  事件总线类型字符串。省略时默认使用 `name.lower()`。
+  Event bus type string. Defaults to ``name.lower()`` when omitted.
 
-### Returns
+### 返回
 
-- `Type[BaseEvent]`
-  继承自 `BaseEvent` 的 dataclass 类型。
+- `Type[Event]`
+  Generated dataclass type inheriting from ``Event``.
+
+### 示例
+
+```pycon
+>>> CustomEvent = create_event_class(
+...     name="CustomEvent",
+...     fields={"text": ""},
+... )
+```
 
 ## WebSocketMessageReceived
 
-收到的 WebSocket 消息。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class WebSocketMessageReceived(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'websocket.message_received'`
+- `message: str` = `''`
 
 ## AudioFrameReceived
 
-收到的音频帧。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class AudioFrameReceived(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'audio.frame_received'`
+- `audio_data: bytes`
+- `sample_rate: int` = `16000`
 
 ## EnhancedAudioFrameReceived
 
-供下游 ASR/VAD 使用的增强音频帧。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class EnhancedAudioFrameReceived(Event)
+```
+
+Enhanced audio frame for downstream ASR/VAD.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'audio.enhanced_frame_received'`
+- `audio_data: bytes`
+- `sample_rate: int` = `16000`
 
 ## VADSpeechStart
 
-VAD 检测到语音开始。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class VADSpeechStart(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'vad.speech_start'`
+- `origin: str` = `'client'`
 
 ## VADSpeechEnd
 
-VAD 检测到语音结束。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class VADSpeechEnd(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'vad.speech_end'`
+- `origin: str` = `'client'`
 
 ## ASRResultPartial
 
-ASR 增量识别结果。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ASRResultPartial(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'asr.result_partial'`
+- `text: str` = `''`
+- `display_text: str` = `''`
+- `speech_pause: bool` = `False`
 
 ## ASRResultFinal
 
-ASR 最终识别结果。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ASRResultFinal(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'asr.result_final'`
+- `text: str` = `''`
+- `display_text: str` = `''`
 
 ## LLMFirstChunk
 
-第一个 LLM 片段或工具调用事件，用于度量首 token 延迟。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMFirstChunk(Event)
+```
+
+Event for first LLM chunk/tool call (measure first token latency).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm.first_chunk'`
 
 ## LLMFirstSentence
 
-第一个可合成句子事件，用于度量句级延迟。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMFirstSentence(Event)
+```
+
+Event for first synthesizable sentence (measure sentence latency).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm.sentence_ready'`
 
 ## TTSStarted
 
-TTS 开始事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSStarted(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.started'`
 
 ## TTSStopped
 
-TTS 停止事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSStopped(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.stopped'`
 
 ## TTSPaused
 
-TTS 暂停事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSPaused(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.paused'`
 
 ## TTSResumed
 
-TTS 恢复事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSResumed(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.resumed'`
 
 ## TTSFinished
 
-TTS 完成事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSFinished(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.finished'`
 
 ## LLMAgentResponseUpdate
 
-Agent 响应增量更新事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMAgentResponseUpdate(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm_agent.response_update'`
+- `text: str` = `''`
 
 ## LLMAgentResponseFinish
 
-某一轮中的 Agent 最终文本。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMAgentResponseFinish(Event)
+```
+
+Final text emitted by the agent for one response.
+
+### 属性
+
+- `text` (`str`)
+  Final response text.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm_agent.response_finish'`
+- `text: str` = `''`
 
 ## ResponseUpdate
 
-对外统一的响应增量事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ResponseUpdate(Event)
+```
+
+Text prefix whose corresponding TTS playback progress has been confirmed.
+
+### 属性
+
+- `text` (`str`)
+  Text prefix that has been played to the user.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'response.update'`
+- `text: str` = `''`
 
 ## ResponseFinish
 
-对外统一的响应完成事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ResponseFinish(Event)
+```
+
+Final text whose corresponding TTS playback has finished.
+
+### 属性
+
+- `text` (`str`)
+  Final response text whose playback completed.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'response.finish'`
+- `text: str` = `''`
 
 ## TTSTextSynthesized
 
-一段文本已经完成 TTS 合成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSTextSynthesized(Event)
+```
+
+Text marker emitted after one synthesized text segment is fully produced.
+
+### 属性
+
+- `text` (`str`)
+  Text segment that was synthesized.
+- `audio_duration` (`float`)
+  Estimated playback duration of the synthesized audio in milliseconds.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.text_synthesized'`
+- `text: str` = `''`
+- `audio_duration: float` = `0.0`
 
 ## TTSVoiceChange
 
-TTS 参考音频切换事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSVoiceChange(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.reference_audio_changed'`
+- `voice_name: str` = `''`
 
 ## TTSEmotionChange
 
-TTS 情绪切换事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSEmotionChange(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.emotion_changed'`
+- `emotion_name: str` = `''`
+- `emotion_vector: list` = `None`
 
 ## TTSSpeedChange
 
-TTS 语速切换事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSSpeedChange(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.speed_changed'`
+- `speed: float` = `1.0`
 
 ## TTSChunkReady
 
-TTS 音频块已就绪。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSChunkReady(Event)
+```
+
+Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.chunk_ready'`
+- `audio_chunk: bytes` = `b''`
+- `sample_rate: int` = `48000`
 
 ## TTSChunkPlayed
 
-前端确认某个 TTS 音频块已经播放完成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSChunkPlayed(Event)
+```
+
+Frontend confirmed playback completion for a TTS audio chunk.
+
+InputGateway publishes this after receiving tts_chunk_played so downstream
+listeners can observe frontend playback completion in FIFO order.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.chunk_played_confirm'`
 
 ## TTSPlaybackFinished
 
-TTS 播放完成事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSPlaybackFinished(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.playback_finished'`
 
 ## FullAudioFrameReady
 
-完整音频帧准备就绪事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class FullAudioFrameReady(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'audio.full_frame_ready'`
+- `audio_chunk: bytes` = `b''`
+- `sample_rate: int` = `48000`
+- `channels: int` = `2`
+- `format: str` = `'pcm_s16le'`
 
 ## ErrorOccurred
 
-错误事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ErrorOccurred(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'error.occurred'`
+- `error_type: str` = `''`
+- `error_message: str` = `''`
 
 ## CaptionUpdated
 
-Caption 更新事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class CaptionUpdated(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'caption.updated'`
+- `text: str` = `''`
+- `is_final: bool` = `False`
+- `reason: str` = `''`
 
 ## ToolCallOccurred
 
-LLM 或 Agent 工具调用通知。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ToolCallOccurred(Event)
+```
+
+LLM/Agent tool invocation notification.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'agent.tool_called'`
+- `name: str` = `''`
+- `args: Dict[str, Any]` = `field(default_factory=dict)`
 
 ## RetrievalUpdated
 
-检索结果更新事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class RetrievalUpdated(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'retrieval.updated'`
+- `text: str` = `''`
+- `is_final: bool` = `False`
 
 ## EmbeddingStatusUpdated
 
-嵌入写入状态更新事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class EmbeddingStatusUpdated(Event)
+```
+
+Embedding lifecycle update consumed by the LLM agent context manager.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'embedding.status_updated'`
+- `status: str` = `''`
+- `text: str | None` = `None`
+- `vector_store_instance: Any` = `None`
 
 ## LLMAgentLoop
 
-驱动 Agent 循环处理的事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMAgentLoop(Event)
+```
+
+Request one agent-context accept loop iteration for the session.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm.agent_loop'`
 
 ## TextForEmbeddingReady
 
-待写入嵌入存储的文本事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TextForEmbeddingReady(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'embeddings.text_ready'`
+- `text: str` = `''`
 
 ## LatencyMetricsUpdated
 
-细粒度后端延迟指标事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LatencyMetricsUpdated(Event)
+```
+
+Fine-grained backend latency metrics (milliseconds).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'metrics.latency_updated'`
+- `network_latency_ms: int` = `0`
+- `asr_latency_ms: int` = `0`
+- `llm_first_token_ms: int` = `0`
+- `llm_sentence_ms: int` = `0`
+- `tts_first_chunk_ms: int` = `0`
 
 ## TurnTTSStartRequested
 
-请求启动 TTS。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSStartRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_start_requested'`
 
 ## TurnTTSPauseRequested
 
-请求暂停 TTS。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSPauseRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_pause_requested'`
 
 ## TurnTTSResumeRequested
 
-请求恢复 TTS。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSResumeRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_resume_requested'`
 
 ## TurnTTSStopRequested
 
-请求停止 TTS。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSStopRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_stop_requested'`
+- `reason: str` = `''`
 
 ## TurnTTSFlushRequested
 
-请求刷出 TTS 缓冲。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSFlushRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_flush_requested'`
 
 ## ConsumeLLMAgentGenerationRequested
 
-请求消费 Agent 已生成的内容。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ConsumeLLMAgentGenerationRequested(Event)
+```
+
+Request consumption of one LLM-agent output stream.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm_agent.consume_generation_requested'`
+- `stream: AsyncIterator[AgentOutput]`
 
 ## TurnLLMAgentResumeRequested
 
-请求恢复 LLM Agent 生成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnLLMAgentResumeRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.llm_agent_resume_requested'`
 
 ## TurnLLMAgentPauseRequested
 
-请求暂停 LLM Agent 生成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnLLMAgentPauseRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.llm_agent_pause_requested'`
 
 ## TurnLLMAgentStopRequested
 
-请求停止 LLM Agent 生成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnLLMAgentStopRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.llm_agent_stop_requested'`
+- `reason: str` = `''`
 
 ## TurnASRStartRequested
 
-请求启动 ASR。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnASRStartRequested(Event)
+```
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.asr_start_requested'`
 
 ## TurnASREndRequested
 
-请求结束 ASR。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnASREndRequested(Event)
+```
+
+Indicates hard turn end. ASR model state is reset. Turn moves to next.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.asr_end_requested'`
 
 ## TurnASRPauseRequested
 
-请求暂停 ASR。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnASRPauseRequested(Event)
+```
+
+Used when user indicates a wait, or pauses in the speech. Triggers recognition once. ASR model state is preserved; turn unchanged.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.asr_pause_requested'`
 
 ## TurnTTSTextAppendRequested
 
-请求向当前 TTS 缓冲追加文本。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnTTSTextAppendRequested(Event)
+```
+
+Request to append text into ongoing TTS stream (sim-trans).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn.tts_text_append_requested'`
+- `text: str` = `''`
 
 ## SpeakerRecognized
 
-说话人识别结果事件。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class SpeakerRecognized(Event)
+```
+
+Speaker-recognition result for frontend display.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'speaker.recognized'`
+- `speaker_id: str | None` = `None`
+- `reason: str` = `''`
 
 ## TTSModelSwitchRequested
 
-请求切换 TTS 模型。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TTSModelSwitchRequested(Event)
+```
+
+Request to switch the IndexTTS protocol version.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'tts.model_switch_requested'`
+- `model_type: str` = `''`
+- `config: Dict[str, Any]` = `field(default_factory=dict)`
 
 ## LLMModelSwitchRequested
 
-请求切换 LLM 模型。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class LLMModelSwitchRequested(Event)
+```
+
+Request to switch LLM configuration (ChatOpenAI model/base_url).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'llm.model_switch_requested'`
+- `model_name: str` = `''`
+- `base_url: str` = `''`
+- `api_key: str` = `''`
+- `extra_body: dict | None` = `None`
 
 ## ClockSyncReceived
 
-收到时钟同步信息。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class ClockSyncReceived(Event)
+```
+
+Clock-sync event for offset calculation.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'clock.sync_received'`
+- `client_send_ts: float` = `0.0`
+- `server_recv_ts: float` = `0.0`
+- `client_recv_ts: float` = `0.0`
 
 ## SessionConfigReceived
 
-收到会话配置。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class SessionConfigReceived(Event)
+```
+
+Client sent per-session configuration (e.g., recording path).
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'session.config_received'`
+- `recording_path: str | None` = `None`
 
 ## TurnDetectorStopSpeaking
 
-轮次检测器判定 AI 应停止说话。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnDetectorStopSpeaking(Event)
+```
+
+Turn detector determined ai should stop speaking.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn_detector.stop_speaking'`
 
 ## TurnDetectorStartGeneration
 
-轮次检测器判定 AI 应开始生成。
+_定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)。_
+
+```python
+@dataclass
+class TurnDetectorStartGeneration(Event)
+```
+
+Turn detector determined ai should start generation.
+
+### 类字段
+
+- `TYPE: ClassVar[str]` = `'turn_detector.start_generation'`

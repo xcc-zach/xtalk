@@ -27,18 +27,18 @@ from .modules.recording_manager import RecordingManager
 from .modules.turn_detector_manager import TurnDetectorManager
 from .modules.tts_playback_manager import TTSPlaybackManager
 from .modules.persistence_manager import PersistenceManager
-from .events import BaseEvent, LLMAgentLoop
-from ..pipelines import Pipeline
+from .events import Event, LLMAgentLoop
+from ..models import Agent, Models
 from .interfaces import EventListenerMixin, EventOverrides
 
 
 class Service:
-    """Orchestrate a session-scoped pipeline and manager stack.
+    """Orchestrate a session-scoped model container and manager stack.
 
     Parameters
     ----------
-    pipeline : Pipeline
-        Pipeline prototype that will be cloned for the session.
+    models : Models
+        Model container prototype that will be cloned for the session.
     service_config : dict[str, Any] | None, optional
         Session configuration shared with managers and gateways.
     manager_classes : list[Type[Manager]] | None, optional
@@ -53,7 +53,7 @@ class Service:
     def __init__(
         self,
         *,
-        pipeline: Pipeline,
+        models: Models,
         service_config: dict[str, Any] | None = None,
         manager_classes: list[Type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
@@ -61,8 +61,8 @@ class Service:
         _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
     ):
         self.session_id = _session_id or str(uuid.uuid4())
-        pipeline = pipeline.clone()
-        self.pipeline = pipeline  # Keep pipeline reference for later model switches
+        models = models.clone()
+        self.models = models
         # Per-session config (shared with managers/gateways)
         base_config: dict[str, Any] = dict(service_config) if service_config else {}
         # Default data directory inside current workspace
@@ -116,7 +116,7 @@ class Service:
         self,
         *,
         event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         method_name: str | None = None,
     ) -> None:
         """Disable an automatic event subscription for a listener class.
@@ -125,7 +125,7 @@ class Service:
         ----------
         event_listener_cls : Type[EventListenerMixin]
             Listener class whose subscription should be disabled.
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event type to unsubscribe.
         method_name : str | None, optional
             Specific method name to disable. If omitted, every handler for the
@@ -142,13 +142,13 @@ class Service:
         self,
         *,
         event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[BaseEvent],
+        event_type: Type[Event],
         method_or_handler: (
             str
-            | Callable[[EventListenerMixin, BaseEvent], Any]
-            | Callable[[BaseEvent], Any]
-            | Callable[[EventListenerMixin, BaseEvent], Coroutine[Any, Any, Any]]
-            | Callable[[BaseEvent], Coroutine[Any, Any, Any]]
+            | Callable[[EventListenerMixin, Event], Any]
+            | Callable[[Event], Any]
+            | Callable[[EventListenerMixin, Event], Coroutine[Any, Any, Any]]
+            | Callable[[Event], Coroutine[Any, Any, Any]]
         ),
         priority: int = 0,
         enabled_if: Callable[[EventListenerMixin], bool] | None = None,
@@ -159,7 +159,7 @@ class Service:
         ----------
         event_listener_cls : Type[EventListenerMixin]
             Listener class that should receive the event.
-        event_type : Type[BaseEvent]
+        event_type : Type[Event]
             Event type to subscribe to.
         method_or_handler : str | Callable
             Method name on the listener instance or an external sync/async
@@ -201,12 +201,12 @@ class Service:
         # Locate overrides for this manager class
         overrides = self._event_overrides.get(manager_cls)
 
-        # Determine whether pipeline is needed
-        if "pipeline" in signature(manager_cls.__init__).parameters:
+        # Determine whether models are needed
+        if "models" in signature(manager_cls.__init__).parameters:
             kwargs: dict[str, Any] = dict(
                 event_bus=self.event_bus,
                 session_id=self.session_id,
-                pipeline=self.pipeline,
+                models=self.models,
                 config=self.service_config,
             )
         else:
@@ -294,7 +294,7 @@ class Service:
 
     def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None:
         """Restore persisted conversation history into the session agent."""
-        agent = self.pipeline.get_agent()
+        agent = self.models.get(Agent)
         if agent is None:
             return
         agent.restore_history(messages)
@@ -344,7 +344,7 @@ class Service:
         if service_config_overrides:
             cloned_service_config.update(service_config_overrides)
         new_service = type(self)(
-            pipeline=self.pipeline,
+            models=self.models,
             service_config=cloned_service_config,
             manager_classes=self._manager_classes,
             _websocket=new_websocket,
@@ -409,7 +409,7 @@ class DefaultService(Service):
     def __init__(
         self,
         *,
-        pipeline: Pipeline,
+        models: Models,
         service_config: dict[str, Any] | None = None,
         manager_classes: list[Type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
@@ -417,7 +417,7 @@ class DefaultService(Service):
         _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
     ):
         super().__init__(
-            pipeline=pipeline,
+            models=models,
             service_config=service_config,
             manager_classes=(
                 self.MANAGER_CLASSES if manager_classes is None else manager_classes

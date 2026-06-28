@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Any
 import argparse
 import mimetypes
 
@@ -8,12 +7,11 @@ mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
 from xtalk import (
     Xtalk,
-    DefaultPipeline,
     DefaultService,
     create_event_class,
     Manager,
     EventBus,
-    Pipeline,
+    Models,
 )
 from xtalk.events import *
 from xtalk.model_types import *
@@ -38,60 +36,9 @@ class LLMOutputRefactorModel:
         return LLMOutputRefactorModel()
 
 
-# Define a custom pipeline that includes the custom model
-@dataclass(init=False)
-class CustomPipeline(DefaultPipeline):
-    llm_output_refactor_model: Optional["LLMOutputRefactorModel"] = field(
-        default=None,
-        metadata={"init_key": "llm_output_refactor_model", "clone": True},
-    )
-
-    def __init__(
-        self,
-        asr: ASR,
-        llm_agent: Agent,
-        tts: TTS,
-        captioner: Optional[Captioner] = None,
-        punt_restorer_model: Optional[PuntRestorer] = None,
-        caption_rewriter: Optional[Rewriter | BaseChatModel] = None,
-        vad: Optional[VAD] = None,
-        speech_enhancer: Optional[SpeechEnhancer] = None,
-        speaker_encoder: Optional[SpeakerEncoder] = None,
-        speech_speed_controller: Optional[SpeechSpeedController] = None,
-        embeddings: Optional[Embeddings] = None,
-        llm_output_refactor_model: Optional["LLMOutputRefactorModel"] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            asr=asr,
-            llm_agent=llm_agent,
-            tts=tts,
-            captioner=captioner,
-            punt_restorer_model=punt_restorer_model,
-            caption_rewriter=caption_rewriter,
-            vad=vad,
-            speech_enhancer=speech_enhancer,
-            speaker_encoder=speaker_encoder,
-            speech_speed_controller=speech_speed_controller,
-            embeddings=embeddings,
-            **kwargs,
-        )
-        self.llm_output_refactor_model = llm_output_refactor_model
-
-    def get_llm_output_refactor_model(
-        self,
-    ) -> Optional["LLMOutputRefactorModel"]:
-        return self.llm_output_refactor_model
-
-
-# Instantiate the Pipeline
-pipeline = Xtalk.create_pipeline_from_config(
-    pipeline_cls=CustomPipeline,
-    config_path_or_dict=args.config,
-    additional_model_registry={
-        "llm_output_refactor_model": LLMOutputRefactorModel(),
-    },
-)
+# Instantiate the model container
+models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
+models.set(LLMOutputRefactorModel, LLMOutputRefactorModel())
 
 # Define custom events and manager
 LLMOutputRefactoredFinal = create_event_class(
@@ -105,15 +52,15 @@ class LLMOutputRefactorManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any],
     ):
         self.event_bus = event_bus
-        self.pipeline = pipeline
+        self.models = models
 
     @Manager.event_handler(LLMAgentResponseFinish)
     async def handle_llm_response_finish(self, event: LLMAgentResponseFinish):
-        refactor_model = self.pipeline.get_llm_output_refactor_model()
+        refactor_model = self.models.get(LLMOutputRefactorModel)
         if refactor_model:
             refactored_output = refactor_model.refactor(event.text)
             new_event = LLMOutputRefactoredFinal(
@@ -128,7 +75,7 @@ class LLMOutputRefactorManager(Manager):
 
 
 # Create a Service and register the custom manager
-custom_service = DefaultService(pipeline=pipeline)
+custom_service = DefaultService(models=models)
 custom_service.register_manager(LLMOutputRefactorManager)
 
 # Rewire event listeners of existing managers if needed
@@ -191,7 +138,7 @@ except:
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 if __name__ == "__main__":
     import uvicorn
 

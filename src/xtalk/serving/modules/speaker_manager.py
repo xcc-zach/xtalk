@@ -23,7 +23,7 @@ from ..events import (
     SpeakerRecognized,
 )
 from ..interfaces import Manager
-from ...pipelines import Pipeline
+from ...models import Models, SpeakerEncoder
 
 
 @dataclass
@@ -49,7 +49,7 @@ class SpeakerManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         """Initialize the speaker manager.
@@ -57,7 +57,7 @@ class SpeakerManager(Manager):
         Args:
             event_bus: shared event bus
             session_id: unique session identifier
-            pipeline: pipeline providing a speaker encoder
+            models: model container providing a speaker encoder
             config: optional parameters
                 - similarity_threshold: cosine threshold (default 0.4)
                 - min_audio_length_sec: minimum audio length (default 0.5s)
@@ -65,11 +65,10 @@ class SpeakerManager(Manager):
         """
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config = config or {}
 
         # Obtain speaker encoder
-        self.speaker_encoder = self.pipeline.get_speaker_encoder()
+        self.speaker_encoder = models.get(SpeakerEncoder)
 
         self.similarity_threshold = self.config.get("similarity_threshold", 0.4)
         self.min_audio_length_sec = float(self.config.get("min_audio_length_sec", 0.5))
