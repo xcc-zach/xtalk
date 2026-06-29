@@ -55,6 +55,7 @@ class Finished(Generic[TO]):
 
 
 ToolResult: TypeAlias = Running[str] | Finished[TO]
+ToolEngineState: TypeAlias = Any
 
 
 _SENTINEL = object()
@@ -94,7 +95,7 @@ class AsyncTool(ABC):
             "emit_updates",
             "aemit_updates",
             "status",
-            "close",
+            "stop",
             "subscribe",
             "unsubscribe",
         ):
@@ -153,31 +154,31 @@ class AsyncTool(ABC):
 
     @classmethod
     @abstractmethod
-    def emit_initial(cls, tool_input: ToolInput, tool_state: ToolState) -> Running[str]:
+    def emit_initial(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> Running[str]:
         # 异步工具被调用时必须立刻返回一条信息以满足”异步调用后立刻返回一条结果塞入LLM历史以兼容部分LLM tool call后紧跟ToolMessage的要求“
         pass
 
     @classmethod
     async def aemit_initial(
-        cls, tool_input: ToolInput, tool_state: ToolState
+        cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState
     ) -> Running[str]:
         # 默认将同步emit_initial放入线程池执行；异步工具可覆写此方法
-        return await asyncio.to_thread(cls.emit_initial, tool_input, tool_state)
+        return await asyncio.to_thread(cls.emit_initial, tool_input, tool_state, global_state)
 
     @classmethod
     @abstractmethod
     def emit_updates(
-        cls, tool_input: ToolInput, tool_state: ToolState
+        cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState
     ) -> Iterator[ToolResult[ToolOutput]]:
         # 主动yield中间结果
         pass
 
     @classmethod
     async def aemit_updates(
-        cls, tool_input: ToolInput, tool_state: ToolState
+        cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState
     ) -> AsyncIterator[ToolResult[ToolOutput]]:
         # 默认将同步emit_updates的next放入线程池，避免阻塞event loop
-        iterator = cls.emit_updates(tool_input, tool_state)
+        iterator = cls.emit_updates(tool_input, tool_state, global_state)
         while True:
             item = await asyncio.to_thread(_next_or_sentinel, iterator)
             if item is _SENTINEL:
@@ -185,40 +186,98 @@ class AsyncTool(ABC):
             yield item
 
     @classmethod
-    def status(cls, tool_input: ToolInput, tool_state: ToolState) -> str:
+    def status(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> str:
         # LLM查询时返回
         return ""
 
     @classmethod
-    async def astatus(cls, tool_input: ToolInput, tool_state: ToolState) -> str:
-        return await asyncio.to_thread(cls.status, tool_input, tool_state)
+    async def astatus(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> str:
+        return await asyncio.to_thread(cls.status, tool_input, tool_state, global_state)
 
     @classmethod
-    def stop(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
+    def stop(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
         # 终止工具调用
         pass
 
     @classmethod
-    async def astop(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
-        await asyncio.to_thread(cls.close, tool_input, tool_state)
+    async def astop(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
+        await asyncio.to_thread(cls.stop, tool_input, tool_state, global_state)
 
     @classmethod
-    def subscribe(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
+    def subscribe(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
         # 启用emit监听时的额外逻辑
         pass
 
     @classmethod
-    async def asubscribe(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
-        await asyncio.to_thread(cls.subscribe, tool_input, tool_state)
+    async def asubscribe(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
+        await asyncio.to_thread(cls.subscribe, tool_input, tool_state, global_state)
 
     @classmethod
-    def unsubscribe(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
+    def unsubscribe(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
         # 关闭emit监听时的额外逻辑
         pass
 
     @classmethod
-    async def aunsubscribe(cls, tool_input: ToolInput, tool_state: ToolState) -> None:
-        await asyncio.to_thread(cls.unsubscribe, tool_input, tool_state)
+    async def aunsubscribe(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> None:
+        await asyncio.to_thread(cls.unsubscribe, tool_input, tool_state, global_state)
+
+
+class SyncTool(ABC):
+    name: ClassVar[Optional[str]] # 不设置时使用工具类名
+    input_type: ClassVar[type[ToolInput]]
+    output_type: ClassVar[type[ToolOutput]]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.input_type, cls.output_type = (
+            cls._infer_types_from_method_annotations()
+        )
+
+    @classmethod
+    def _infer_types_from_method_annotations(
+        cls,
+    ) -> tuple[type[ToolInput], type[ToolOutput]]:
+        raw_method = cls.__dict__.get("invoke")
+        if raw_method is None:
+            raise TypeError(f"{cls.__name__} must define invoke")
+
+        method = raw_method.__func__ if isinstance(raw_method, classmethod) else raw_method
+        hints = get_type_hints(method)
+
+        if "tool_input" not in hints:
+            raise TypeError(f"{cls.__name__} must annotate tool_input")
+        if "return" not in hints:
+            raise TypeError(f"{cls.__name__} must annotate a ToolOutput return type")
+
+        return (
+            cls._validate_input_type(hints["tool_input"]),
+            cls._validate_output_type(hints["return"]),
+        )
+
+    @staticmethod
+    def _validate_input_type(value: Any) -> type[ToolInput]:
+        if isinstance(value, type) and issubclass(value, ToolInput):
+            return value
+        raise TypeError("tool_input must be annotated as a ToolInput subclass")
+
+    @staticmethod
+    def _validate_output_type(value: Any) -> type[ToolOutput]:
+        if isinstance(value, type) and issubclass(value, ToolOutput):
+            return value
+        raise TypeError("return must be annotated as a ToolOutput subclass")
+
+    @classmethod
+    @abstractmethod
+    def invoke(
+        cls, tool_input: ToolInput, global_state: ToolEngineState
+    ) -> ToolOutput:
+        pass
+
+    @classmethod
+    async def ainvoke(
+        cls, tool_input: ToolInput, global_state: ToolEngineState
+    ) -> ToolOutput:
+        return await asyncio.to_thread(cls.invoke, tool_input, global_state)
 ```
 
 子类通过方法参数与返回值注解自动推断`input_type`、`state_type`和`output_type`：
@@ -243,25 +302,47 @@ class SearchTool(AsyncTool):
 
     @classmethod
     def emit_initial(
-        cls, tool_input: SearchInput, tool_state: SearchState
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
     ) -> Running[str]:
         return Running(f"开始搜索：{tool_input.query}")
 
     @classmethod
     def emit_updates(
-        cls, tool_input: SearchInput, tool_state: SearchState
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
     ) -> Iterator[ToolResult[SearchOutput]]:
         yield Running("正在检索")
         yield Finished(SearchOutput(content="搜索完成"))
+
+
+class SyncSearchTool(SyncTool):
+    name = "sync_search"
+
+    @classmethod
+    def invoke(
+        cls,
+        tool_input: SearchInput,
+        global_state: ToolEngineState,
+    ) -> SearchOutput:
+        return SearchOutput(content=f"搜索完成：{tool_input.query}")
 ```
 
 ## 实现
 
 ### 同步异步兼容
 
-- 如果是langchain Tool则为同步工具
-- 如果是`AsyncTool`则为异步工具
-- 定义类型`Tool`为两者联合
+```python
+Tool = BaseTool | type[SyncTool] | type[AsyncTool]
+```
+
+- BaseTool：外部 LangChain 工具，保持兼容，不承诺能访问 ToolEngineState
+- SyncTool：XTalk 原生同步工具，可访问 ToolEngineState
+- AsyncTool：XTalk 原生异步工具，可访问 ToolEngineState
 
 ### ToolEngine
 
