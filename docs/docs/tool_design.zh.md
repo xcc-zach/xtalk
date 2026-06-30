@@ -350,7 +350,46 @@ Tool = BaseTool | type[SyncTool] | type[AsyncTool]
 - 将含有异步工具时额外绑定的工具绑定到model
 - 负责管理工具订阅状态
 - 反馈Tool主动触发的ToolMessage
-- 控制异步工具的调用时机：触发异步工具时先调用`aemit_initial`生成必须立即回填的`ToolMessage`，随后启动工具执行并按订阅状态消费`aemit_updates`
+    - 控制异步工具的调用时机：触发异步工具时先调用`aemit_initial`生成必须立即回填的`ToolMessage`，随后启动工具执行并按订阅状态消费`aemit_updates`
+
+```python
+class ToolEngine:
+    def __init__(self, tools: list[Tool]):
+        # 复制一份tools挂载到self.tools
+        # 若工具中有异步工具，额外绑定工具，并附加系统提示
+        pass
+    def bind(self, model: ChatOpenAI) -> ChatOpenAI:
+        # 把tools绑定到model并返回绑定后的model
+        pass
+    def on_async_tool_update(self, cb: Callable[[ToolCall, ToolMessage], None]):
+        # 异步工具主动发ToolMessage且被订阅时触发cb
+        pass
+    async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
+        # 触发工具并产生ToolMessage(同步工具直接产出，异步工具emit_initial产出)
+        pass
+    def invoke(self, tool_call: ToolCall) -> ToolMessage:
+        pass
+    @staticmethod
+    def extract_tool_calls(gathered: AIMessageChunk) -> list[ToolCall]:
+        pass
+    # 耦合messages的处理逻辑的方法：
+    async def ainvoke_and_append(self, tool_call: ToolCall, messages: list[BaseMessage]):
+        # ainvoke并调用append_tool_message
+        pass
+    def invoke_and_append(self, tool_call: ToolCall, messages: list[BaseMessage]):
+        # invoke并调用append_tool_message
+        pass
+    @staticmethod
+    def append_tool_message(tool_call: ToolCall, tool_message: ToolMessage, list[BaseMessage]):
+        # 先调用_append_tool_call，然后将ToolMessage append到messages
+        pass
+    def on_default_async_tool_update(self, messages: list[BaseMessage]):
+        self.on_async_tool_update((tool_call, tool_message) => self.append_tool_message(tool_call, tool_message, messages))
+    @staticmethod
+    def _append_tool_call(tool_call: ToolCall, messages: list[BaseMessage]) -> None:
+        # 将tool_call无重复追加到最后一条AIMessage的tool_calls或者新建一条空的AIMessage(tool_calls=tool_calls)
+        pass
+```
 
 ### LLM Agent调用接口
 
@@ -358,37 +397,27 @@ Tool = BaseTool | type[SyncTool] | type[AsyncTool]
 
 - 含有异步工具时额外绑定的工具：按照id获取工具调用运行状态的工具、异步工具上报结果时自动注入到上一条AIMessage的工具（该工具描述中说明不要主动调用，有新的工具主动反馈时会自动触发）、按照id订阅/取消订阅/关闭的工具
 
-```python
-def bind_tools(model: ChatOpenAI, tools: list[Tool]) -> None:
-    pass
-```
-
 #### 从模型回复中提取tool_calls
-
-```python
-def extract_tool_calls(gathered: AIMessageChunk) -> list[ToolCall]:
-    pass
-def append_tool_calls(tool_calls: list[ToolCall]) -> None:
-    # 将tool_calls放到最后一条AIMessage的tool_calls或者新建一条空的AIMessage(tool_calls=tool_calls)
-    pass
-```
 
 #### 触发工具，工具调用结果作为ToolMessage回填对话历史
 
-- 同步工具强制工具调用结果出来后塞入ToolMessage后插入一条空AIMeessage对话历史才能接下一条用户消息
-- 异步工具强制emit_inital塞入ToolMessage后插入一条空AIMeessage对话历史才能接下一条用户消息
-
-```python
-async def atrigger_tool_call(tool_call: ToolCall, tool: Tool, on_async_tool_update: Optional[Callable[[ToolCall, ToolResult], Awaitable[None]]]=None):
-    pass
-# 同时写一个同步版本trigger_tool_call
-```
+- 同步工具强制工具调用结果出来后塞入ToolMessage
+- 异步工具强制emit_inital塞入ToolMessage
 
 #### 工具主动产生的ToolMessage
+
+额外系统提示：
+```
+SystemMessage(content=(
+        "If the conversation history contains a ToolMessage whose result has not yet "
+        "been reported to the user, your next response must mention that tool result. "
+        "If there is also a newer HumanMessage, answer both: first report the tool "
+        "update briefly, then answer the user's latest message."
+    ))
+```
 
 - 在上一条AIMessage回填工具调用，然后插入ToolMessage
 
 ## 未来拓展
 
 - LLM可更新tool的运行状态（“二次输入”）
-- 带状态的同步/异步工具
