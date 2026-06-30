@@ -361,6 +361,11 @@ class ToolRun:
 @dataclass
 class AsyncToolRun(ToolRun):
     task: asyncio.Task[Any]
+    tool_class: type[AsyncTool]
+    tool_input: ToolInput
+    tool_state: ToolState
+    subscribed: bool
+    running: bool
 
 class ToolEngine:
     def __init__(self, tools: list[Tool], state: ToolEngineState):
@@ -379,8 +384,8 @@ class ToolEngine:
         pass
     async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
         # 触发工具并产生ToolMessage(同步工具直接产出，异步工具emit_initial产出)
-        # 同步工具调用把Result填到self._id_to_tool_runs；异步工具用AsyncToolRun额外带一个task：
-        # 不断从aemit_updates中yield并调用self._async_tool_update_callback
+        # 同步工具调用把Result填到self._id_to_tool_runs；异步工具用AsyncToolRun额外所需参数：
+        # task为不断从aemit_updates中yield并调用self._async_tool_update_callback（被订阅的工具调用会把Running和Finished的yield都调用callback，未被订阅的工具调用只会把Finished调用callback)，并注意锁住global_state
         pass
     def invoke(self, tool_call: ToolCall) -> ToolMessage:
         pass
@@ -409,87 +414,113 @@ class ToolEngine:
     # ------
     def _create_assist_tools(self):
         return [
-            self._create_id_to_async_tool_status_tool(),
             self._create_async_tool_updated_tool(),
+            self._create_id_to_async_tool_status_tool(),
             self._create_subscribe_tool(),
             self._create_unsubscribe_tool(),
             self._create_stop_tool(),
         ]
 
-    def _create_id_to_async_tool_status_tool(self) -> BaseTool:
-        @tool("id_to_async_tool_status")
-        def id_to_async_tool_status(source_call_id: str) -> str:
-            """查询异步工具调用的最新运行状态。
-
-            Args:
-                source_call_id: 原始异步工具调用的tool_call id。
-            """
-            return f"Async tool status for {source_call_id} is not implemented."
-
-        return id_to_async_tool_status
-
     def _create_async_tool_updated_tool(self) -> BaseTool:
         @tool("async_tool_updated")
         def async_tool_updated(
             source_call_id: str,
-            source_tool_name: str,
-            sequence: int,
-            final: bool,
         ) -> str:
-            """系统自动注入异步工具主动更新时使用，LLM不要主动调用。
+            """部分工具被调用时会返回tool_call id，这些工具为异步工具。异步工具会不断通过该工具产生新的输出：该工具输入异步工具被调用时返回的tool_call id，输出对应异步工具新的输出。该工具由系统调用，你不能主动调用该工具。如果对话历史中包含一条工具消息，并且该工具消息的结果尚未汇报给用户，那么你的下一次回复必须提到这个工具结果。如果同时还有一条更新的用户消息，那么需要同时回应两者：先简要汇报工具更新，再对用户消息作出回复。
 
             Args:
-                source_call_id: 原始异步工具调用的tool_call id。
-                source_tool_name: 原始异步工具名称。
-                sequence: 同一个原始异步工具调用下的更新序号。
-                final: 这条更新是否为最终结果。
+                source_call_id: 异步工具调用的tool_call id。
             """
-            return (
-                "Async tool update injection is handled by ToolEngine; "
-                "this tool is a protocol placeholder."
-            )
+            # 系统中创建ToolMessage时包含 {"running": bool, "tool_output": str}
+            return "这个工具不能被主动调用。"
 
         return async_tool_updated
 
+    def _create_id_to_async_tool_status_tool(self) -> BaseTool:
+        @tool("id_to_async_tool_status")
+        async def id_to_async_tool_status(source_call_id: str) -> str:
+            """查询异步工具调用的最新运行状态。
+
+            Args:
+                source_call_id: 异步工具调用的tool_call id。
+            """
+            run = self._id_to_tool_runs.get(source_call_id)
+            if run is None or not isinstance(run, AsyncToolRun):
+                return f"异步工具调用{source_call_id不存在}"
+            tool_status = await run.tool_class.astatus(
+                run.tool_input,
+                run.tool_state,
+                self.state,
+            )
+            return {
+                "running": run.running
+                "status": tool_status
+            }
+
+        return id_to_async_tool_status
+
     def _create_subscribe_tool(self) -> BaseTool:
         @tool("subscribe_async_tool")
-        def subscribe_async_tool(source_call_id: str) -> str:
-            """订阅异步工具调用的后续主动更新。
+        async def subscribe_async_tool(source_call_id: str) -> str:
+            """订阅异步工具调用的后续主动更新。被订阅的异步工具会使用async_tool_updated返回过程性输出。
 
             Args:
                 source_call_id: 原始异步工具调用的tool_call id。
             """
-            return f"Subscribe async tool {source_call_id} is not implemented."
+            run = self._id_to_tool_runs.get(source_call_id)
+            if run is None or not isinstance(run, AsyncToolRun):
+                return f"异步工具调用{source_call_id不存在}"
+            run.subscribed = True
+            await run.tool_class.asubscribe(
+                run.tool_input,
+                run.tool_state,
+                self.state,
+            )
+            return f"订阅了异步工具{source_call_id}"
 
         return subscribe_async_tool
 
     def _create_unsubscribe_tool(self) -> BaseTool:
         @tool("unsubscribe_async_tool")
-        def unsubscribe_async_tool(source_call_id: str) -> str:
-            """取消订阅异步工具调用的后续主动更新。
+        async def unsubscribe_async_tool(source_call_id: str) -> str:
+            """取消订阅异步工具调用的后续主动更新。取消订阅的异步工具只会使用async_tool_updated返回其最终结果。
 
             Args:
                 source_call_id: 原始异步工具调用的tool_call id。
             """
-            return f"Unsubscribe async tool {source_call_id} is not implemented."
+            run = self._id_to_tool_runs.get(source_call_id)
+            if run is None or not isinstance(run, AsyncToolRun):
+                return f"异步工具调用{source_call_id不存在}"
+            run.subscribed = False
+            await run.tool_class.aunsubscribe(
+                run.tool_input,
+                run.tool_state,
+                self.state,
+            )
+            return f"取消订阅了异步工具{source_call_id}"
 
         return unsubscribe_async_tool
 
     def _create_stop_tool(self) -> BaseTool:
         @tool("stop_async_tool")
-        def stop_async_tool(source_call_id: str) -> str:
+        async def stop_async_tool(source_call_id: str) -> str:
             """终止仍在运行的异步工具调用。
 
             Args:
                 source_call_id: 原始异步工具调用的tool_call id。
             """
-            return f"Stop async tool {source_call_id} is not implemented."
+            run = self._id_to_tool_runs.get(source_call_id)
+            if run is None or not isinstance(run, AsyncToolRun):
+                return f"异步工具调用{source_call_id不存在}"
+            await run.tool_class.astop(
+                run.tool_input,
+                run.tool_state,
+                self.state,
+            )
+            run.task.cancel()
+            return f"终止了异步工具{source_call_id}"
 
         return stop_async_tool
-```
-
-#### 额外工具
-```python
 ```
 
 ### LLM Agent调用接口
