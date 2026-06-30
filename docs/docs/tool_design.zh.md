@@ -12,6 +12,8 @@
 
 ## 接口设计
 
+### Tool
+
 ```python
 import asyncio
 import types
@@ -333,8 +335,6 @@ class SyncSearchTool(SyncTool):
         return SearchOutput(content=f"搜索完成：{tool_input.query}")
 ```
 
-## 实现
-
 ### 同步异步兼容
 
 ```python
@@ -372,44 +372,63 @@ class ToolEngine:
         # 复制一份tools挂载到self.tools；复制一份state挂载到self.state
         # 初始化id到工具运行的字典self._id_to_tool_runs: dict[str, ToolRun]
         # 若工具中有异步工具，self.tools额外添加工具self._create_assist_tools
+        # TODO
         pass
 
     def bind(self, model: ChatOpenAI) -> ChatOpenAI:
         # 把tools绑定到model并返回绑定后的model
+        # TODO
         pass
     def on_async_tool_update(self, cb: Callable[[ToolCall, ToolMessage], None]):
         # 异步工具主动发ToolMessage且被订阅时触发cb
         # self._async_tool_update_callback = cb
         # 客户端推荐挂载的cb:调用append_tool_message后触发生成/如果append前最后一条是未完的HumanMessage则先不生成
+        # partial HumanMessage也要在历史中;用一个bool变量标记是否说完;partial消息被插入的AI+工具消息打断后,后续来的asr partial更新如果以前一段partial为前缀则新增的HumanMessage仅包含不在前缀中的后缀,否则包含完整的新的partial
+        # TODO
+
         pass
     async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
         # 触发工具并产生ToolMessage(同步工具直接产出，异步工具emit_initial产出)
         # 同步工具调用把Result填到self._id_to_tool_runs；异步工具用AsyncToolRun额外所需参数：
         # task为不断从aemit_updates中yield并调用self._async_tool_update_callback（被订阅的工具调用会把Running和Finished的yield都调用callback，未被订阅的工具调用只会把Finished调用callback)，并注意锁住global_state
+        # TODO
+
         pass
     def invoke(self, tool_call: ToolCall) -> ToolMessage:
+        # TODO
+
         pass
     @staticmethod
     def extract_tool_calls(gathered: AIMessageChunk) -> list[ToolCall]:
+        # TODO
+
         pass
     # 耦合messages的处理逻辑的方法：------
     async def ainvoke_and_append(self, tool_call: ToolCall, messages: list[BaseMessage]):
         # ainvoke并调用append_tool_message
+        # TODO
+
         pass
     def invoke_and_append(self, tool_call: ToolCall, messages: list[BaseMessage]):
         # invoke并调用append_tool_message
+        # TODO
+
         pass
     @staticmethod
     def append_tool_message(tool_call: ToolCall, tool_message: ToolMessage, list[BaseMessage]):
         # 先调用_append_tool_call，然后根据其返回ToolCall决定下一步
         # 为透传的同步工具调用：tool_message append到messages
         # 为async_tool_updated调用：用tool_message的content创建符合async_tool_updated产出的ToolMessage的消息然后append到messages
+        # TODO
+
         pass
     @staticmethod
     def _append_tool_call(tool_call: ToolCall, messages: list[BaseMessage]) -> ToolCall:
         # 将tool_call无重复追加到最后一条AIMessage的tool_calls或者新建一条空的AIMessage(tool_calls=tool_calls)
         # 对于对应同步工具的tool_call,直接追加tool_call本身；对于对应异步工具的tool_call, 追加的tool_call的name应为async_tool_updated，id为原始tool_call id加一段辨识字符串，args应为{"source_call_id":原始tool_call id}
         # 返回实际被追加的工具调用
+        # TODO
+
         pass
     # ------
     def _create_assist_tools(self):
@@ -522,23 +541,176 @@ class ToolEngine:
 
         return stop_async_tool
 ```
+# 实现
 
-### LLM Agent调用接口
+### 实现位置
 
-#### 工具绑定到模型
+Tool和ToolEngine及相关类型都放到`src/xtalk/models/agents/tools/core.py`，并在`src/xtalk/models/agents/tools/__init__.py`中导出必要类型（用于新建工具的类型、Agent会用的类型）；`src/xtalk/models/agents/tools/utils.py`中必要内容也迁移到core.py；然后根据 `### LLM Agent如何用ToolEngine` 更新src/xtalk/models/agents/experimental.py
 
-- 含有异步工具时额外绑定的工具：按照id获取异步工具调用运行状态的工具、异步工具上报结果时自动注入到上一条AIMessage的工具（该工具描述中说明不要主动调用，有新的工具主动反馈时会自动触发）、按照id订阅/取消订阅/关闭的工具
+### LLM Agent如何用ToolEngine
 
-#### 从模型回复中提取tool_calls
+#### # __init__
 
-#### 触发工具，工具调用结果作为ToolMessage回填对话历史
+```python
+self._base_tools = tools
+self.tool_engine = ToolEngine(
+    tools=tools or [],
+    state={},
+)
+self.model_with_tools = self.tool_engine.bind(self.model)
 
-- 同步工具强制工具调用结果出来后塞入ToolMessage
-- 异步工具强制emit_inital塞入ToolMessage
+self._human_input_finished = True
+self._last_partial_human_text = ""
+self._active_partial_human_index: int | None = None
+self._active_partial_human_prefix = ""
 
-#### 工具主动产生的ToolMessage
+self._async_tool_update_queue: asyncio.Queue[AgentOutput] = asyncio.Queue()
+self.tool_engine.on_async_tool_update(self._on_async_tool_update)
+```
 
-- 在上一条AIMessage回填工具调用，然后插入ToolMessage
+#### # _stream_messages
+
+```python
+async def _stream_messages(self) -> AsyncIterator[AgentOutput]:
+    while True:
+        gathered = None
+
+        async for chunk in self.model_with_tools.astream(self.messages):
+            text = self.content_to_text(chunk.content)
+            if text:
+                yield text
+            gathered = chunk if gathered is None else gathered + chunk
+
+        tool_calls = ToolEngine.extract_tool_calls(gathered)
+        if not tool_calls:
+            return
+
+        for tool_call in tool_calls:
+            yield tool_call
+
+            tool_message = await self.tool_engine.ainvoke_and_append(
+                tool_call,
+                self._chat_history.messages,
+            )
+
+            yield build_tool_call_result(
+                tool_call=tool_call,
+                result_content=str(tool_message.content),
+            )
+```
+
+#### # async tool update callback
+
+```python
+def _on_async_tool_update(
+    self,
+    tool_call: ToolCall,
+    tool_message: ToolMessage,
+) -> None:
+    ToolEngine.append_tool_message(
+        tool_call,
+        tool_message,
+        self._chat_history.messages,
+    )
+
+    if not self._human_input_finished:
+        return
+
+    self._async_tool_update_queue.put_nowait(
+        build_tool_call_result(
+            tool_call=tool_call,
+            result_content=str(tool_message.content),
+        )
+    )
+```
+
+#### # _loop_runner
+
+```python
+async def _loop_runner(self) -> AsyncIterator[AgentOutput]:
+    while True:
+        if self.proactive and len(self.messages) == 1:
+            self._chat_history.append_message(HumanMessage(content="你好。"))
+            async for item in self._stream_greeting():
+                yield item
+            break
+
+        try:
+            item = await asyncio.wait_for(
+                self._async_tool_update_queue.get(),
+                timeout=0.2,
+            )
+            yield item
+        except asyncio.TimeoutError:
+            pass
+```
+
+#### # deal with human message
+
+```python
+def _append_or_update_partial_human_message(
+    self,
+    text: str,
+    *,
+    final: bool,
+) -> None:
+    if not text:
+        return
+
+    messages = self._chat_history.messages
+    active_message_is_last = (
+        self._active_partial_human_index is not None
+        and self._active_partial_human_index == len(messages) - 1
+        and isinstance(messages[-1], HumanMessage)
+    )
+
+    if active_message_is_last:
+        if text.startswith(self._active_partial_human_prefix):
+            messages[-1].content = text[len(self._active_partial_human_prefix):]
+        else:
+            messages[-1].content = text
+            self._active_partial_human_prefix = ""
+    else:
+        if self._last_partial_human_text and text.startswith(
+            self._last_partial_human_text
+        ):
+            content = text[len(self._last_partial_human_text):]
+            self._active_partial_human_prefix = self._last_partial_human_text
+        else:
+            content = text
+            self._active_partial_human_prefix = ""
+
+        self._chat_history.append_message(HumanMessage(content=content))
+        self._active_partial_human_index = len(messages) - 1
+
+    self._last_partial_human_text = text
+    self._human_input_finished = final
+
+    if final:
+        self._active_partial_human_index = None
+        self._active_partial_human_prefix = ""
+        self._last_partial_human_text = ""
+
+
+async def _handle_asr_partial(self, asr_text: str) -> AsyncIterator[AgentOutput]:
+    self._append_or_update_partial_human_message(asr_text, final=False)
+
+    if self.backchannel_model is None or self.backchannel_source_dir is None:
+        return
+
+    ...
+
+
+async def _handle_asr_final(self, asr_text: str) -> AsyncIterator[AgentOutput]:
+    self._append_or_update_partial_human_message(asr_text, final=True)
+
+    async for item in self._stream_messages():
+        yield item
+
+    self._already_backchanneled_text = ""
+    self._turn_already_to_backchannel_response = {}
+```
+
 
 ## 未来拓展
 
