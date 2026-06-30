@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, Optional, TypeAlias, TypeVar, Union, get_args, get_origin, get_type_hints
 
+from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
 
@@ -41,12 +42,11 @@ class ToolState:
 TI = TypeVar("TI", bound=ToolInput)
 TS = TypeVar("TS", bound=ToolState)
 TO = TypeVar("TO", bound=ToolOutput)
-TR = TypeVar("TR")
 
 
 @dataclass(frozen=True)
-class Running(Generic[TR]):
-    content: TR
+class Running:
+    content: str
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class Finished(Generic[TO]):
     content: TO
 
 
-ToolResult: TypeAlias = Running[str] | Finished[TO]
+ToolResult: TypeAlias = Running | Finished[TO]
 ToolEngineState: TypeAlias = Any
 
 
@@ -154,14 +154,15 @@ class AsyncTool(ABC):
 
     @classmethod
     @abstractmethod
-    def emit_initial(cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> Running[str]:
+    def emit_initial(cls, tool_call_id: str, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState) -> Running:
         # 异步工具被调用时必须立刻返回一条信息以满足”异步调用后立刻返回一条结果塞入LLM历史以兼容部分LLM tool call后紧跟ToolMessage的要求“
+        # 运行时强制检查返回的Running str中带有tool_call_id，以供async_tool_updated工具区分
         pass
 
     @classmethod
     async def aemit_initial(
-        cls, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState
-    ) -> Running[str]:
+        cls, tool_call_id: str, tool_input: ToolInput, tool_state: ToolState, global_state: ToolEngineState
+    ) -> Running:
         # 默认将同步emit_initial放入线程池执行；异步工具可覆写此方法
         return await asyncio.to_thread(cls.emit_initial, tool_input, tool_state, global_state)
 
@@ -306,7 +307,7 @@ class SearchTool(AsyncTool):
         tool_input: SearchInput,
         tool_state: SearchState,
         global_state: ToolEngineState,
-    ) -> Running[str]:
+    ) -> Running:
         return Running(f"开始搜索：{tool_input.query}")
 
     @classmethod
@@ -353,26 +354,40 @@ Tool = BaseTool | type[SyncTool] | type[AsyncTool]
     - 控制异步工具的调用时机：触发异步工具时先调用`aemit_initial`生成必须立即回填的`ToolMessage`，随后启动工具执行并按订阅状态消费`aemit_updates`
 
 ```python
+@dataclass
+class ToolRun:
+    result: ToolResult
+
+@dataclass
+class AsyncToolRun(ToolRun):
+    task: asyncio.Task[Any]
+
 class ToolEngine:
-    def __init__(self, tools: list[Tool]):
-        # 复制一份tools挂载到self.tools
-        # 若工具中有异步工具，额外绑定工具，并附加系统提示
+    def __init__(self, tools: list[Tool], state: ToolEngineState):
+        # 复制一份tools挂载到self.tools；复制一份state挂载到self.state
+        # 初始化id到工具运行的字典self._id_to_tool_runs: dict[str, ToolRun]
+        # 若工具中有异步工具，self.tools额外添加工具self._create_assist_tools
         pass
+
     def bind(self, model: ChatOpenAI) -> ChatOpenAI:
         # 把tools绑定到model并返回绑定后的model
         pass
     def on_async_tool_update(self, cb: Callable[[ToolCall, ToolMessage], None]):
         # 异步工具主动发ToolMessage且被订阅时触发cb
+        # self._async_tool_update_callback = cb
+        # 客户端推荐挂载的cb:调用append_tool_message后触发生成/如果append前最后一条是未完的HumanMessage则先不生成
         pass
     async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
         # 触发工具并产生ToolMessage(同步工具直接产出，异步工具emit_initial产出)
+        # 同步工具调用把Result填到self._id_to_tool_runs；异步工具用AsyncToolRun额外带一个task：
+        # 不断从aemit_updates中yield并调用self._async_tool_update_callback
         pass
     def invoke(self, tool_call: ToolCall) -> ToolMessage:
         pass
     @staticmethod
     def extract_tool_calls(gathered: AIMessageChunk) -> list[ToolCall]:
         pass
-    # 耦合messages的处理逻辑的方法：
+    # 耦合messages的处理逻辑的方法：------
     async def ainvoke_and_append(self, tool_call: ToolCall, messages: list[BaseMessage]):
         # ainvoke并调用append_tool_message
         pass
@@ -381,21 +396,107 @@ class ToolEngine:
         pass
     @staticmethod
     def append_tool_message(tool_call: ToolCall, tool_message: ToolMessage, list[BaseMessage]):
-        # 先调用_append_tool_call，然后将ToolMessage append到messages
+        # 先调用_append_tool_call，然后根据其返回ToolCall决定下一步
+        # 为透传的同步工具调用：tool_message append到messages
+        # 为async_tool_updated调用：用tool_message的content创建符合async_tool_updated产出的ToolMessage的消息然后append到messages
         pass
-    def on_default_async_tool_update(self, messages: list[BaseMessage]):
-        self.on_async_tool_update((tool_call, tool_message) => self.append_tool_message(tool_call, tool_message, messages))
     @staticmethod
-    def _append_tool_call(tool_call: ToolCall, messages: list[BaseMessage]) -> None:
+    def _append_tool_call(tool_call: ToolCall, messages: list[BaseMessage]) -> ToolCall:
         # 将tool_call无重复追加到最后一条AIMessage的tool_calls或者新建一条空的AIMessage(tool_calls=tool_calls)
+        # 对于对应同步工具的tool_call,直接追加tool_call本身；对于对应异步工具的tool_call, 追加的tool_call的name应为async_tool_updated，id为原始tool_call id加一段辨识字符串，args应为{"source_call_id":原始tool_call id}
+        # 返回实际被追加的工具调用
         pass
+    # ------
+    def _create_assist_tools(self):
+        return [
+            self._create_id_to_async_tool_status_tool(),
+            self._create_async_tool_updated_tool(),
+            self._create_subscribe_tool(),
+            self._create_unsubscribe_tool(),
+            self._create_stop_tool(),
+        ]
+
+    def _create_id_to_async_tool_status_tool(self) -> BaseTool:
+        @tool("id_to_async_tool_status")
+        def id_to_async_tool_status(source_call_id: str) -> str:
+            """查询异步工具调用的最新运行状态。
+
+            Args:
+                source_call_id: 原始异步工具调用的tool_call id。
+            """
+            return f"Async tool status for {source_call_id} is not implemented."
+
+        return id_to_async_tool_status
+
+    def _create_async_tool_updated_tool(self) -> BaseTool:
+        @tool("async_tool_updated")
+        def async_tool_updated(
+            source_call_id: str,
+            source_tool_name: str,
+            sequence: int,
+            final: bool,
+        ) -> str:
+            """系统自动注入异步工具主动更新时使用，LLM不要主动调用。
+
+            Args:
+                source_call_id: 原始异步工具调用的tool_call id。
+                source_tool_name: 原始异步工具名称。
+                sequence: 同一个原始异步工具调用下的更新序号。
+                final: 这条更新是否为最终结果。
+            """
+            return (
+                "Async tool update injection is handled by ToolEngine; "
+                "this tool is a protocol placeholder."
+            )
+
+        return async_tool_updated
+
+    def _create_subscribe_tool(self) -> BaseTool:
+        @tool("subscribe_async_tool")
+        def subscribe_async_tool(source_call_id: str) -> str:
+            """订阅异步工具调用的后续主动更新。
+
+            Args:
+                source_call_id: 原始异步工具调用的tool_call id。
+            """
+            return f"Subscribe async tool {source_call_id} is not implemented."
+
+        return subscribe_async_tool
+
+    def _create_unsubscribe_tool(self) -> BaseTool:
+        @tool("unsubscribe_async_tool")
+        def unsubscribe_async_tool(source_call_id: str) -> str:
+            """取消订阅异步工具调用的后续主动更新。
+
+            Args:
+                source_call_id: 原始异步工具调用的tool_call id。
+            """
+            return f"Unsubscribe async tool {source_call_id} is not implemented."
+
+        return unsubscribe_async_tool
+
+    def _create_stop_tool(self) -> BaseTool:
+        @tool("stop_async_tool")
+        def stop_async_tool(source_call_id: str) -> str:
+            """终止仍在运行的异步工具调用。
+
+            Args:
+                source_call_id: 原始异步工具调用的tool_call id。
+            """
+            return f"Stop async tool {source_call_id} is not implemented."
+
+        return stop_async_tool
+```
+
+#### 额外工具
+```python
 ```
 
 ### LLM Agent调用接口
 
 #### 工具绑定到模型
 
-- 含有异步工具时额外绑定的工具：按照id获取工具调用运行状态的工具、异步工具上报结果时自动注入到上一条AIMessage的工具（该工具描述中说明不要主动调用，有新的工具主动反馈时会自动触发）、按照id订阅/取消订阅/关闭的工具
+- 含有异步工具时额外绑定的工具：按照id获取异步工具调用运行状态的工具、异步工具上报结果时自动注入到上一条AIMessage的工具（该工具描述中说明不要主动调用，有新的工具主动反馈时会自动触发）、按照id订阅/取消订阅/关闭的工具
 
 #### 从模型回复中提取tool_calls
 
@@ -405,16 +506,6 @@ class ToolEngine:
 - 异步工具强制emit_inital塞入ToolMessage
 
 #### 工具主动产生的ToolMessage
-
-额外系统提示：
-```
-SystemMessage(content=(
-        "If the conversation history contains a ToolMessage whose result has not yet "
-        "been reported to the user, your next response must mention that tool result. "
-        "If there is also a newer HumanMessage, answer both: first report the tool "
-        "update briefly, then answer the user's latest message."
-    ))
-```
 
 - 在上一条AIMessage回填工具调用，然后插入ToolMessage
 
