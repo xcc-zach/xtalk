@@ -127,11 +127,13 @@ edge-tts = [
 silero-vad = [
   "numpy",
   "onnxruntime",
+  "websockets",
 ]
 fast-enhancer = [
   "numpy",
   "requests",
   "onnxruntime",
+  "websockets",
 ]
 rubberband = [
   "pyrubberband"
