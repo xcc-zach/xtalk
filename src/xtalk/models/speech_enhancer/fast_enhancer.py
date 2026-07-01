@@ -9,21 +9,69 @@ Implements streaming enhancement based on the FastEnhancer-S ONNX model:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
 import socket
 import sys
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
-import requests
 
 try:
     import onnxruntime
 except ImportError:  # pragma: no cover - remote mode does not need ONNX Runtime.
     onnxruntime = None  # type: ignore[assignment]
 
+try:
+    import websockets
+except ImportError:  # pragma: no cover - local mode does not need websockets.
+    websockets = None
+
 from .interfaces import SpeechEnhancer
 from ..registry import model
+
+
+_REMOTE_WS_PATH = "/ws/fastenhancer/realtime"
+_REMOTE_TIMEOUT_SECONDS = 10.0
+_REMOTE_FRAME_SAMPLES = 512
+
+
+def _resolve_remote_enhancer_url(base_url: str) -> tuple[str, str]:
+    """Resolve the remote FastEnhancer base URL and WebSocket URL."""
+    normalized_base_url = base_url.strip().rstrip("/")
+    if not normalized_base_url:
+        raise ValueError("base_url must not be empty")
+
+    parts = urlsplit(normalized_base_url)
+    if parts.scheme in {"http", "https"}:
+        scheme = "ws" if parts.scheme == "http" else "wss"
+    elif parts.scheme in {"ws", "wss"}:
+        scheme = parts.scheme
+    else:
+        raise ValueError("remote FastEnhancer base_url must use http(s) or ws(s)")
+
+    path = parts.path.rstrip("/") or _REMOTE_WS_PATH
+    websocket_url = urlunsplit((scheme, parts.netloc, path, parts.query, ""))
+    return normalized_base_url, websocket_url
+
+
+def _remote_json_payload(message: object) -> dict[str, object]:
+    """Decode one remote FastEnhancer JSON message."""
+    if isinstance(message, bytes):
+        message = message.decode("utf-8")
+    if not isinstance(message, str):
+        raise ValueError(
+            f"remote FastEnhancer returned unsupported message type: {type(message)}"
+        )
+    payload = json.loads(message)
+    if not isinstance(payload, dict):
+        raise ValueError("remote FastEnhancer JSON message must be an object")
+    if payload.get("type") == "error":
+        detail = str(payload.get("message") or payload)
+        raise RuntimeError(f"remote FastEnhancer error: {detail}")
+    return payload
 
 
 @model(aliases=["FastEnhancerS", "speech_enhancer"])
@@ -33,8 +81,7 @@ class FastEnhancer(SpeechEnhancer):
     Notes
     -----
     When ``base_url`` is provided, all other initialization parameters are
-    ignored and audio is enhanced by the FastEnhancer HTTP service at
-    ``POST /v1/enhance/pcm``.
+    ignored and audio is enhanced by a FastEnhancer WebSocket service.
     """
 
     def __init__(
@@ -58,18 +105,30 @@ class FastEnhancer(SpeechEnhancer):
         _shared_session : object | None, optional
             Existing ONNX Runtime session reused by local clones.
         base_url : str | None, optional
-            Base URL of a running FastEnhancer HTTP service. When set,
+            Base URL of a running FastEnhancer WebSocket service. When set,
             ``model_path``, ``n_fft``, ``hop_size``, and ``_shared_session`` are
             ignored and no local ONNX model is loaded.
         """
-        self.base_url = base_url.rstrip("/") if base_url else None
         self.sample_rate = 16000
+        self.n_fft = n_fft
+        self.hop_size = hop_size
+        self.base_url: str | None = None
+        self._remote_enhancer_url: str | None = None
+        self._remote_frame_samples = _REMOTE_FRAME_SAMPLES
+        self._remote_pending_audio = bytearray()
+        self._remote_ws: object | None = None
+        self._remote_loop: asyncio.AbstractEventLoop | None = None
+        self._remote_lock: asyncio.Lock | None = None
+        if base_url is not None:
+            self.base_url, self._remote_enhancer_url = _resolve_remote_enhancer_url(
+                base_url
+            )
+        else:
+            self.base_url = None
         if self.base_url is not None:
             self.model_path = None
             return
 
-        self.n_fft = n_fft
-        self.hop_size = hop_size
         self.model_path = model_path
 
         # Reuse shared session if provided
@@ -152,6 +211,8 @@ class FastEnhancer(SpeechEnhancer):
     def reset(self) -> None:
         """Reset enhancer state."""
         if self.base_url is not None:
+            self._remote_pending_audio.clear()
+            self._schedule_remote_close()
             return
 
         self._init_cache()
@@ -196,7 +257,7 @@ class FastEnhancer(SpeechEnhancer):
         if not pcm_bytes:
             return b""
         if self.base_url is not None:
-            return self._enhance_remote(pcm_bytes)
+            return self._enhance_remote_sync(pcm_bytes)
 
         # Convert to float32 [-1, 1]
         pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -263,7 +324,7 @@ class FastEnhancer(SpeechEnhancer):
             Remaining enhanced PCM audio bytes.
         """
         if self.base_url is not None:
-            return b""
+            return self._flush_remote_sync()
 
         # Pad silence to process leftover input (similar to official pad-right)
         padding_needed = self.n_fft
@@ -308,19 +369,215 @@ class FastEnhancer(SpeechEnhancer):
         output_int16 = (output_samples * 32768.0).astype(np.int16)
         return output_int16.tobytes()
 
-    def _enhance_remote(self, pcm_bytes: bytes) -> bytes:
-        """Enhance one PCM payload by calling the FastEnhancer HTTP service."""
-        response = requests.post(
-            f"{self.base_url}/v1/enhance/pcm",
-            params={"input_dtype": "int16", "response_format": "pcm"},
-            data=pcm_bytes,
-            headers={"Content-Type": "application/octet-stream"},
-            timeout=30,
+    async def async_enhance(self, audio: bytes) -> bytes:
+        """Asynchronously enhance audio."""
+        if self.base_url is not None:
+            return await self._enhance_remote_async(audio)
+        return await SpeechEnhancer.async_enhance(self, audio)
+
+    async def async_flush(self) -> bytes:
+        """Asynchronously flush buffered remote or local audio."""
+        if self.base_url is not None:
+            return await self._flush_remote()
+        return await SpeechEnhancer.async_flush(self)
+
+    def _enhance_remote_sync(self, pcm_bytes: bytes) -> bytes:
+        """Synchronously enhance PCM through a short-lived WebSocket."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._enhance_remote_once(pcm_bytes))
+        raise RuntimeError(
+            "remote FastEnhancer.enhance() cannot run inside an active event loop; "
+            "use async_enhance() instead"
         )
-        response.raise_for_status()
-        return response.content
 
+    async def _enhance_remote_once(self, pcm_bytes: bytes) -> bytes:
+        """Run one synchronous compatibility request with a temporary connection."""
+        try:
+            return await self._enhance_remote_async(pcm_bytes)
+        finally:
+            await self._close_remote_connection()
 
+    async def _enhance_remote_async(self, pcm_bytes: bytes) -> bytes:
+        """Enhance PCM through the remote FastEnhancer WebSocket."""
+        if self._remote_enhancer_url is None:
+            raise RuntimeError("remote FastEnhancer URL is not configured")
+        if not pcm_bytes:
+            return b""
+        if websockets is None:
+            raise RuntimeError(
+                "websockets is required for remote FastEnhancer inference; "
+                "install xtalk[fast-enhancer]"
+            )
+
+        lock = self._get_remote_lock()
+        async with lock:
+            self._remote_pending_audio.extend(pcm_bytes)
+            frame_bytes = self._remote_frame_samples * 2
+            chunks: list[bytes] = []
+            while len(self._remote_pending_audio) >= frame_bytes:
+                frame = bytes(self._remote_pending_audio[:frame_bytes])
+                output = await self._send_remote_frame_with_retry(frame)
+                del self._remote_pending_audio[:frame_bytes]
+                chunks.append(output)
+            return b"".join(chunks)
+
+    def _flush_remote_sync(self) -> bytes:
+        """Synchronously flush remote audio."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._flush_remote())
+        raise RuntimeError(
+            "remote FastEnhancer.flush() cannot run inside an active event loop; "
+            "use async_flush() instead"
+        )
+
+    async def _flush_remote(self) -> bytes:
+        """Send a best-effort remote flush command and return tail audio."""
+        lock = self._get_remote_lock()
+        async with lock:
+            if self._remote_enhancer_url is None:
+                return b""
+            chunks: list[bytes] = []
+            try:
+                websocket = await self._ensure_remote_connection()
+                if self._remote_pending_audio:
+                    pending_len = len(self._remote_pending_audio)
+                    frame_bytes = self._remote_frame_samples * 2
+                    padding_len = frame_bytes - pending_len
+                    frame = bytes(self._remote_pending_audio) + bytes(padding_len)
+                    output = await self._send_remote_frame(websocket, frame)
+                    chunks.append(output[:pending_len])
+                    self._remote_pending_audio.clear()
+                await websocket.send(json.dumps({"type": "flush"}))
+                while True:
+                    message = await asyncio.wait_for(
+                        websocket.recv(),
+                        timeout=_REMOTE_TIMEOUT_SECONDS,
+                    )
+                    if isinstance(message, bytes):
+                        chunks.append(message)
+                        continue
+                    payload = _remote_json_payload(message)
+                    if payload.get("type") == "flush_ack":
+                        return b"".join(chunks)
+            except Exception:
+                await self._close_remote_connection()
+                raise
+
+    async def _send_remote_frame_with_retry(self, pcm_bytes: bytes) -> bytes:
+        """Send one complete remote frame and retry once after reconnecting."""
+        for attempt in range(2):
+            try:
+                websocket = await self._ensure_remote_connection()
+                return await self._send_remote_frame(websocket, pcm_bytes)
+            except Exception:
+                await self._close_remote_connection()
+                if attempt == 0:
+                    continue
+                raise
+        return b""
+
+    async def _send_remote_frame(self, websocket: object, pcm_bytes: bytes) -> bytes:
+        """Send one complete remote frame and return enhanced PCM bytes."""
+        await websocket.send(pcm_bytes)
+        while True:
+            message = await asyncio.wait_for(
+                websocket.recv(),
+                timeout=_REMOTE_TIMEOUT_SECONDS,
+            )
+            if isinstance(message, bytes):
+                return message
+            payload = _remote_json_payload(message)
+            if payload.get("type") == "audio":
+                audio = payload.get("audio")
+                if isinstance(audio, str):
+                    import base64
+
+                    return base64.b64decode(audio)
+                raise ValueError(
+                    "remote FastEnhancer audio message missing base64 audio"
+                )
+
+    def _get_remote_lock(self) -> asyncio.Lock:
+        """Return the remote WebSocket lock for the current event loop."""
+        loop = asyncio.get_running_loop()
+        if self._remote_lock is None or self._remote_loop is not loop:
+            self._remote_loop = loop
+            self._remote_lock = asyncio.Lock()
+            self._remote_ws = None
+        return self._remote_lock
+
+    async def _ensure_remote_connection(self) -> object:
+        """Open and initialize the remote FastEnhancer WebSocket when needed."""
+        if self._remote_enhancer_url is None:
+            raise RuntimeError("remote FastEnhancer URL is not configured")
+        if self._remote_ws is not None:
+            return self._remote_ws
+        if websockets is None:
+            raise RuntimeError(
+                "websockets is required for remote FastEnhancer inference; "
+                "install xtalk[fast-enhancer]"
+            )
+
+        try:
+            websocket = await websockets.connect(
+                self._remote_enhancer_url,
+                open_timeout=_REMOTE_TIMEOUT_SECONDS,
+                close_timeout=_REMOTE_TIMEOUT_SECONDS,
+            )
+            self._remote_ws = websocket
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "start",
+                        "sample_rate": self.sample_rate,
+                        "frame_samples": self._remote_frame_samples,
+                        "encoding": "pcm_s16le",
+                        "channels": 1,
+                    }
+                )
+            )
+            message = await asyncio.wait_for(
+                websocket.recv(),
+                timeout=_REMOTE_TIMEOUT_SECONDS,
+            )
+            payload = _remote_json_payload(message)
+            if payload.get("type") != "start_ack":
+                raise ValueError(
+                    "remote FastEnhancer expected start_ack, "
+                    f"got {payload.get('type')!r}"
+                )
+            return websocket
+        except Exception:
+            await self._close_remote_connection()
+            raise
+
+    async def _close_remote_connection(self) -> None:
+        """Close the active remote FastEnhancer WebSocket connection."""
+        websocket = self._remote_ws
+        self._remote_ws = None
+        if websocket is not None:
+            await websocket.close()
+
+    def _schedule_remote_close(self) -> None:
+        """Best-effort close for the active remote FastEnhancer connection."""
+        websocket = self._remote_ws
+        self._remote_ws = None
+        if websocket is None:
+            return
+        loop = self._remote_loop
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not None and running_loop is loop:
+            running_loop.create_task(websocket.close())
+            return
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(loop.create_task, websocket.close())
 
 def _is_tcp_port_open(host: str, port: int, timeout: float) -> bool:
     """Return whether a TCP listener accepts connections at host:port."""
@@ -342,7 +599,7 @@ def _build_test_pcm(sample_rate: int, duration_seconds: float) -> bytes:
 def _run_remote_smoke_test() -> int:
     """Run a simple client request against a running FastEnhancer service."""
     parser = argparse.ArgumentParser(
-        description="Smoke test the FastEnhancer HTTP client."
+        description="Smoke test the FastEnhancer WebSocket client."
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
@@ -357,12 +614,12 @@ def _run_remote_smoke_test() -> int:
         )
         return 2
 
-    base_url = f"http://{args.host}:{args.port}"
+    base_url = f"ws://{args.host}:{args.port}{_REMOTE_WS_PATH}"
     enhancer = FastEnhancer(base_url=base_url)
     pcm_bytes = _build_test_pcm(enhancer.sample_rate, args.duration_seconds)
     try:
         enhanced_bytes = enhancer.enhance(pcm_bytes)
-    except requests.RequestException as exc:
+    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
         print(
             f"FastEnhancer client request failed for {base_url}: {exc}",
             file=sys.stderr,

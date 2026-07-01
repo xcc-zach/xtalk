@@ -9,6 +9,7 @@ state into each other.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from dataclasses import dataclass, field
 import json
 import os
@@ -18,8 +19,8 @@ import sys
 import tempfile
 import threading
 from typing import Any
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import urlopen
 
 import numpy as np
 
@@ -27,6 +28,11 @@ try:
     import onnxruntime as ort
 except ImportError:
     ort = None
+
+try:
+    import websockets
+except ImportError:
+    websockets = None
 
 from .interfaces import VAD
 from ..registry import model
@@ -43,17 +49,7 @@ SILERO_VAD_ONNX_URL = (
 _CACHE_SUBDIR = "xtalk/models"
 _CACHE_FILENAME = "silero_vad.onnx"
 _REMOTE_TIMEOUT_SECONDS = 10.0
-_REMOTE_VAD_QUERY = urlencode(
-    {
-        "sample_rate": SAMPLE_RATE,
-        "encoding": "pcm_s16le",
-        "channels": 1,
-        "min_speech_duration_ms": 0,
-        "min_silence_duration_ms": 0,
-        "speech_pad_ms": 0,
-        "return_seconds": "true",
-    }
-)
+_REMOTE_WS_PATH = "/ws/vad"
 
 _MODEL_FILE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
@@ -154,23 +150,50 @@ def _get_shared_session(model_path: str | None) -> tuple[ort.InferenceSession, s
 
 
 def _resolve_remote_vad_url(base_url: str) -> tuple[str, str]:
-    """Resolve the remote Silero VAD base URL and inference URL."""
+    """Resolve the remote Silero VAD base URL and WebSocket URL."""
     normalized_base_url = base_url.strip().rstrip("/")
     if not normalized_base_url:
         raise ValueError("base_url must not be empty")
-    if normalized_base_url.endswith("/v1/vad"):
-        endpoint_url = normalized_base_url
+
+    parts = urlsplit(normalized_base_url)
+    if parts.scheme in {"http", "https"}:
+        scheme = "ws" if parts.scheme == "http" else "wss"
+    elif parts.scheme in {"ws", "wss"}:
+        scheme = parts.scheme
     else:
-        endpoint_url = f"{normalized_base_url}/v1/vad"
-    return normalized_base_url, f"{endpoint_url}?{_REMOTE_VAD_QUERY}"
+        raise ValueError("remote Silero VAD base_url must use http(s) or ws(s)")
+
+    path = parts.path.rstrip("/") or _REMOTE_WS_PATH
+    websocket_url = urlunsplit((scheme, parts.netloc, path, parts.query, ""))
+    return normalized_base_url, websocket_url
 
 
-def _remote_response_has_speech(payload: dict[str, Any]) -> bool:
-    """Return whether a remote Silero VAD response contains speech segments."""
-    segments = payload["segments"]
-    if not isinstance(segments, list):
-        raise ValueError("remote VAD response field 'segments' must be a list")
-    return bool(segments)
+def _remote_json_payload(message: Any) -> dict[str, Any]:
+    """Decode one remote VAD JSON message."""
+    if isinstance(message, bytes):
+        message = message.decode("utf-8")
+    if not isinstance(message, str):
+        raise ValueError(f"remote VAD returned unsupported message type: {type(message)}")
+    payload = json.loads(message)
+    if not isinstance(payload, dict):
+        raise ValueError("remote VAD JSON message must be an object")
+    message_type = payload.get("type")
+    if message_type == "error":
+        detail = str(payload.get("message") or payload)
+        raise RuntimeError(f"remote VAD error: {detail}")
+    return payload
+
+
+def _remote_frame_has_speech(payload: dict[str, Any], threshold: float) -> bool:
+    """Return the boolean speech decision from one remote VAD frame payload."""
+    if payload.get("type") != "frame":
+        raise ValueError(f"remote VAD expected frame message, got {payload.get('type')!r}")
+    if "is_speech" in payload:
+        return bool(payload["is_speech"])
+    speech_prob = payload.get("speech_prob")
+    if isinstance(speech_prob, (int, float)):
+        return float(speech_prob) >= threshold
+    raise ValueError("remote VAD frame missing 'is_speech' or numeric 'speech_prob'")
 
 
 @dataclass
@@ -211,9 +234,9 @@ class SileroVAD(VAD):
         Parameters
         ----------
         base_url : str | None, optional
-            Optional base URL of an external Silero VAD HTTP service. When set,
-            this instance sends frames to ``/v1/vad`` and ignores all local
-            inference parameters.
+            Optional base URL of an external Silero VAD WebSocket service. When
+            set, this instance sends PCM frames over a persistent WebSocket and
+            ignores local inference parameters.
         threshold : float, optional
             Speech probability threshold used to convert the model output into a
             boolean decision.
@@ -227,15 +250,18 @@ class SileroVAD(VAD):
             Number of trailing samples from the previous frame to prepend as
             model context on the next inference call.
         """
+        self.threshold = float(threshold)
+        self.frame_samples = int(frame_samples)
+        self.context_samples = int(context_samples)
         self.base_url: str | None = None
         self._remote_vad_url: str | None = None
+        self._remote_ws: Any | None = None
+        self._remote_loop: asyncio.AbstractEventLoop | None = None
+        self._remote_lock: asyncio.Lock | None = None
         if base_url is not None:
             self.base_url, self._remote_vad_url = _resolve_remote_vad_url(base_url)
             return
 
-        self.threshold = float(threshold)
-        self.frame_samples = int(frame_samples)
-        self.context_samples = int(context_samples)
         self.session, self.model_path = _get_shared_session(model_path)
         self._inference_lock = threading.Lock()
         self._state = _SileroStreamState()
@@ -247,7 +273,11 @@ class SileroVAD(VAD):
     def clone(self) -> "SileroVAD":
         """Clone the VAD while reusing the shared ONNX session."""
         if self.base_url is not None:
-            return SileroVAD(base_url=self.base_url)
+            return SileroVAD(
+                threshold=self.threshold,
+                frame_samples=self.frame_samples,
+                base_url=self.base_url,
+            )
 
         return SileroVAD(
             threshold=self.threshold,
@@ -259,6 +289,7 @@ class SileroVAD(VAD):
     def reset(self) -> None:
         """Reset this instance's streaming state."""
         if self.base_url is not None:
+            self._schedule_remote_close()
             return
 
         self._state.reset()
@@ -289,7 +320,7 @@ class SileroVAD(VAD):
             return False
 
         if self.base_url is not None:
-            return self._is_speech_remote(frame)
+            return self._is_speech_remote_sync(frame)
 
         audio = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
         if audio.size == 0:
@@ -306,6 +337,12 @@ class SileroVAD(VAD):
         if last_prob is None:
             return False
         return last_prob >= self.threshold
+
+    async def async_is_speech(self, frame: bytes) -> bool:
+        """Asynchronously determine whether the latest frame contains speech."""
+        if self.base_url is not None:
+            return await self._is_speech_remote_async(frame)
+        return await VAD.async_is_speech(self, frame)
 
     def _infer_one_frame(self, frame: np.ndarray) -> float:
         """Run ONNX inference for one complete frame."""
@@ -330,22 +367,134 @@ class SileroVAD(VAD):
         )
         return float(np.asarray(out).squeeze())
 
-    def _is_speech_remote(self, frame: bytes) -> bool:
-        """Send a PCM frame to the remote Silero VAD service."""
+    def _is_speech_remote_sync(self, frame: bytes) -> bool:
+        """Synchronously send a PCM frame through a short-lived WebSocket."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._is_speech_remote_once(frame))
+        raise RuntimeError(
+            "remote SileroVAD.is_speech() cannot run inside an active event loop; "
+            "use async_is_speech() instead"
+        )
+
+    async def _is_speech_remote_once(self, frame: bytes) -> bool:
+        """Run one synchronous compatibility request with a temporary connection."""
+        try:
+            return await self._is_speech_remote_async(frame)
+        finally:
+            await self._close_remote_connection()
+
+    async def _is_speech_remote_async(self, frame: bytes) -> bool:
+        """Send a PCM frame to the remote Silero VAD WebSocket service."""
         if self._remote_vad_url is None:
             raise RuntimeError("remote VAD URL is not configured")
+        if not frame:
+            return False
+        if websockets is None:
+            raise RuntimeError(
+                "websockets is required for remote Silero VAD inference; "
+                "install xtalk[silero-vad]"
+            )
 
-        request = Request(
-            self._remote_vad_url,
-            data=frame,
-            headers={"Content-Type": "application/octet-stream"},
-            method="POST",
-        )
-        with urlopen(request, timeout=_REMOTE_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return _remote_response_has_speech(payload)
+        lock = self._get_remote_lock()
+        async with lock:
+            for attempt in range(2):
+                try:
+                    websocket = await self._ensure_remote_connection()
+                    await websocket.send(frame)
+                    while True:
+                        message = await asyncio.wait_for(
+                            websocket.recv(),
+                            timeout=_REMOTE_TIMEOUT_SECONDS,
+                        )
+                        payload = _remote_json_payload(message)
+                        if payload.get("type") == "frame":
+                            return _remote_frame_has_speech(payload, self.threshold)
+                except Exception:
+                    await self._close_remote_connection()
+                    if attempt == 0:
+                        continue
+                    raise
+            return False
 
+    def _get_remote_lock(self) -> asyncio.Lock:
+        """Return the remote WebSocket lock for the current event loop."""
+        loop = asyncio.get_running_loop()
+        if self._remote_lock is None or self._remote_loop is not loop:
+            self._remote_loop = loop
+            self._remote_lock = asyncio.Lock()
+            self._remote_ws = None
+        return self._remote_lock
 
+    async def _ensure_remote_connection(self) -> Any:
+        """Open and initialize the remote VAD WebSocket when needed."""
+        if self._remote_vad_url is None:
+            raise RuntimeError("remote VAD URL is not configured")
+        if self._remote_ws is not None:
+            return self._remote_ws
+        if websockets is None:
+            raise RuntimeError(
+                "websockets is required for remote Silero VAD inference; "
+                "install xtalk[silero-vad]"
+            )
+
+        try:
+            websocket = await websockets.connect(
+                self._remote_vad_url,
+                open_timeout=_REMOTE_TIMEOUT_SECONDS,
+                close_timeout=_REMOTE_TIMEOUT_SECONDS,
+            )
+            self._remote_ws = websocket
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "start",
+                        "sample_rate": SAMPLE_RATE,
+                        "frame_samples": self.frame_samples,
+                        "encoding": "pcm_s16le",
+                        "channels": 1,
+                        "positive_speech_threshold": self.threshold,
+                    }
+                )
+            )
+            message = await asyncio.wait_for(
+                websocket.recv(),
+                timeout=_REMOTE_TIMEOUT_SECONDS,
+            )
+            payload = _remote_json_payload(message)
+            if payload.get("type") != "start_ack":
+                raise ValueError(
+                    f"remote VAD expected start_ack, got {payload.get('type')!r}"
+                )
+            return websocket
+        except Exception:
+            await self._close_remote_connection()
+            raise
+
+    async def _close_remote_connection(self) -> None:
+        """Close the active remote VAD WebSocket connection."""
+        websocket = self._remote_ws
+        self._remote_ws = None
+        if websocket is not None:
+            await websocket.close()
+
+    def _schedule_remote_close(self) -> None:
+        """Best-effort close for the active remote VAD connection."""
+        websocket = self._remote_ws
+        self._remote_ws = None
+        if websocket is None:
+            return
+        loop = self._remote_loop
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not None and running_loop is loop:
+            running_loop.create_task(websocket.close())
+            return
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(loop.create_task, websocket.close())
 
 def _is_tcp_port_open(host: str, port: int, timeout: float) -> bool:
     """Return whether a TCP listener accepts connections at host:port."""
@@ -366,7 +515,9 @@ def _build_test_pcm(sample_rate: int, duration_seconds: float) -> bytes:
 
 def _run_remote_smoke_test() -> int:
     """Run a simple client request against a running Silero VAD service."""
-    parser = argparse.ArgumentParser(description="Smoke test the Silero VAD HTTP client.")
+    parser = argparse.ArgumentParser(
+        description="Smoke test the Silero VAD WebSocket client."
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--duration-seconds", type=float, default=0.5)
@@ -380,12 +531,12 @@ def _run_remote_smoke_test() -> int:
         )
         return 2
 
-    base_url = f"http://{args.host}:{args.port}"
+    base_url = f"ws://{args.host}:{args.port}{_REMOTE_WS_PATH}"
     vad = SileroVAD(base_url=base_url)
     pcm_bytes = _build_test_pcm(SAMPLE_RATE, args.duration_seconds)
     try:
         is_speech = vad.is_speech(pcm_bytes)
-    except (OSError, TimeoutError, ValueError) as exc:
+    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
         print(f"Silero VAD client request failed for {base_url}: {exc}", file=sys.stderr)
         return 1
 
@@ -398,4 +549,3 @@ def _run_remote_smoke_test() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_run_remote_smoke_test())
-
