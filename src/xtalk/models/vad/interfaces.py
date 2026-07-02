@@ -41,6 +41,10 @@ class VAD(ABC):
         result = await loop.run_in_executor(None, self.is_speech, frame)
         return bool(result)
 
+    def reset(self) -> None:
+        """Reset session-local VAD state and release external resources."""
+        return None
+
     @abstractmethod
     def clone(self) -> "VAD":
         """Clone the VAD instance for a new session.
