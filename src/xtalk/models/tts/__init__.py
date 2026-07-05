@@ -1,3 +1,3 @@
-from .interfaces import TTS
+from .interfaces import StreamingTextTTS, TTS
 
-__all__ = ["TTS"]
+__all__ = ["StreamingTextTTS", "TTS"]

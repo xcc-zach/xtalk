@@ -167,3 +167,74 @@ class TTS(ABC):
             Emotion label or model-specific emotion vector.
         """
         pass
+
+
+class StreamingTextTTS(ABC):
+    """Abstract base class for live text-streaming TTS engines.
+
+    Notes
+    -----
+    This interface models engines that accept text incrementally and emit audio
+    concurrently from the same session. Implementations may also inherit
+    ``TTS`` when they support the regular full-text synthesis API.
+    """
+
+    @abstractmethod
+    async def start(self) -> None:
+        """Start a live text-streaming synthesis session.
+
+        Notes
+        -----
+        Implementations typically open an upstream WebSocket connection and
+        send the provider-specific start event here.
+        """
+        pass
+
+    @abstractmethod
+    async def append_text(self, text: str) -> None:
+        """Append incremental text to the active synthesis session.
+
+        Parameters
+        ----------
+        text : str
+            Text fragment produced by the upstream LLM or agent.
+        """
+        pass
+
+    @abstractmethod
+    async def flush(self) -> None:
+        """Request synthesis of currently buffered upstream text.
+
+        Notes
+        -----
+        ``TTSManager`` calls this when it receives ``TurnTTSFlushRequested``.
+        Implementations should not rely on sentence-boundary flushes.
+        """
+        pass
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """Stop the active synthesis session and release connection resources."""
+        pass
+
+    @abstractmethod
+    def audio_stream(self) -> AsyncIterator[bytes]:
+        """Stream generated PCM audio chunks from the active session.
+
+        Yields
+        ------
+        bytes
+            PCM 16-bit mono audio bytes, preferably at 48 kHz.
+        """
+        pass
+
+    @abstractmethod
+    def clone(self) -> "StreamingTextTTS":
+        """Clone the streaming TTS engine for a new session.
+
+        Returns
+        -------
+        StreamingTextTTS
+            Session-safe clone with independent live connection state.
+        """
+        pass
