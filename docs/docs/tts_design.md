@@ -1,3 +1,7 @@
+# http TTS
+
+This TTS interface is used when input text is not streaming.
+
 ```python
 class TTS(ABC):
     """Abstract base class for text-to-speech engines."""
@@ -106,3 +110,114 @@ Speed adjustment is not part of the `TTS` interface itself. In the current repos
 ## `clone`
 
 See [Semantics of `clone()` and `reset()` on Model Objects](model_clone_reset.md).
+
+# websockets TTS
+
+This TTS interface is used when input text arrives incrementally.
+
+```python
+class StreamingTextTTS(ABC):
+    """Abstract base class for live text-streaming TTS engines."""
+
+    @abstractmethod
+    async def start(self) -> None:
+        """Start one live TTS session."""
+        ...
+
+    @abstractmethod
+    async def append_text(self, text: str) -> None:
+        """Append incremental text to the active TTS session."""
+        ...
+
+    @abstractmethod
+    async def flush(self) -> None:
+        """Request synthesis of text that has been received but not emitted."""
+        ...
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """Stop the active TTS session and release connection resources."""
+        ...
+
+    @abstractmethod
+    def audio_stream(self) -> AsyncIterator[bytes]:
+        """Yield PCM audio chunks as soon as the model generates audio."""
+        ...
+
+    @abstractmethod
+    def clone(self) -> "StreamingTextTTS":
+        """Clone an independent streaming TTS instance for a new service session."""
+        ...
+```
+
+`StreamingTextTTS` is a capability interface separate from `TTS`. Regular
+non-live TTS implementations only need to implement `TTS`; models that support
+incremental text input may inherit both `TTS` and `StreamingTextTTS`.
+
+## Method Semantics
+
+- `start()`: starts an upstream live TTS session, such as opening a WebSocket
+  connection and sending the provider-specific start event.
+- `append_text(text)`: called immediately when an LLM text chunk arrives. This
+  method sends text upstream and does not wait for a complete sentence.
+- `flush()`: called only when the service receives `TurnTTSFlushRequested`.
+  The current design does not automatically flush at complete-sentence
+  boundaries.
+- `stop()`: ends the upstream TTS session and releases connection resources.
+  `stop()` does not implicitly flush; `TTSManager` should explicitly call
+  `flush()` first when residual text should be synthesized.
+- `audio_stream()`: yields audio chunks as soon as the model generates them.
+  `TTSManager` wraps those chunks as `TTSChunkReady` events.
+- `clone()`: clones an instance for a new service session. The cloned instance
+  must have independent upstream connection state, buffers, and background task
+  state, and must not reuse a live TTS connection from another session.
+
+## How the Service Layer Consumes StreamingTextTTS
+
+When the active TTS model is a `StreamingTextTTS`, `TTSManager` does not use the
+regular `pending_sentence_buffer` and sentence-by-sentence synthesis path. It
+uses this event flow instead:
+
+```text
+TurnTTSStartRequested
+  -> StreamingTextTTS.start()
+  -> start a background audio_stream reader task
+
+TurnTTSTextAppendRequested(text)
+  -> StreamingTextTTS.append_text(text)
+
+TurnTTSFlushRequested
+  -> StreamingTextTTS.flush()
+  -> StreamingTextTTS.stop()
+
+TurnTTSStopRequested / shutdown
+  -> StreamingTextTTS.stop()
+```
+
+The background `audio_stream` reader should publish existing events as soon as
+model audio arrives:
+
+```text
+StreamingTextTTS.audio_stream() yields PCM
+  -> TTSManager splits it into about 100 ms chunks
+  -> publish TTSChunkReady(audio_chunk=chunk, sample_rate=...)
+  -> OutputGateway sends it to the frontend
+```
+
+The core goal of `StreamingTextTTS` is that text is sent upstream via
+`append_text` as soon as it arrives, and generated TTS audio is immediately
+wrapped by `TTSManager` as `TTSChunkReady`.
+
+## Audio Format
+
+`audio_stream()` should yield continuous, ordered PCM audio. The recommended
+output format remains the same as regular `TTS`:
+
+- PCM 16-bit
+- mono
+- 48000 Hz
+
+If the upstream WebSocket TTS only supports another sample rate, such as Fish
+Audio PCM output at 44100 Hz but not 48000 Hz, the model implementation should
+resample internally to 48000 Hz before yielding from `audio_stream()`. This
+keeps the existing frontend binary audio protocol unchanged.
