@@ -241,13 +241,15 @@ class FastEnhancer(SpeechEnhancer):
             _shared_session=self.session,  # Shared ONNX session
         )
 
-    def enhance(self, pcm_bytes: bytes) -> bytes:
+    def enhance(self, pcm_bytes: bytes, far: bytes) -> bytes:
         """Enhance audio frames in streaming mode.
 
         Parameters
         ----------
         pcm_bytes : bytes
             PCM 16-bit mono audio bytes at 16 kHz.
+        far : bytes
+            Ignored by FastEnhancer.
 
         Returns
         -------
@@ -369,11 +371,11 @@ class FastEnhancer(SpeechEnhancer):
         output_int16 = (output_samples * 32768.0).astype(np.int16)
         return output_int16.tobytes()
 
-    async def async_enhance(self, audio: bytes) -> bytes:
+    async def async_enhance(self, audio: bytes, far: bytes) -> bytes:
         """Asynchronously enhance audio."""
         if self.base_url is not None:
             return await self._enhance_remote_async(audio)
-        return await SpeechEnhancer.async_enhance(self, audio)
+        return await SpeechEnhancer.async_enhance(self, audio, far)
 
     async def async_flush(self) -> bytes:
         """Asynchronously flush buffered remote or local audio."""
@@ -618,7 +620,7 @@ def _run_remote_smoke_test() -> int:
     enhancer = FastEnhancer(base_url=base_url)
     pcm_bytes = _build_test_pcm(enhancer.sample_rate, args.duration_seconds)
     try:
-        enhanced_bytes = enhancer.enhance(pcm_bytes)
+        enhanced_bytes = enhancer.enhance(pcm_bytes, bytes(len(pcm_bytes)))
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
         print(
             f"FastEnhancer client request failed for {base_url}: {exc}",

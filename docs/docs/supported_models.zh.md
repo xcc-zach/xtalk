@@ -117,3 +117,18 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 [原始仓库](https://github.com/aask1357/fastenhancer)
 
 </details>
+
+<details markdown="1">
+<summary>PyWebRTCAudio</summary>
+
+**依赖：** `pip install "xtalk[pywebrtc-audio] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**路径：** [`src/xtalk/models/speech_enhancer/pywebrtc_audio.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/pywebrtc_audio.py)
+
+**配置参数：** 仅 `base_url`。
+
+[快速开始](https://github.com/xcc-zach/xtalk-pywebrtc-audio)
+
+[原始仓库](https://github.com/strands-labs/pywebrtc-audio)
+
+</details>
