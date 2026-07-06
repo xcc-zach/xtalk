@@ -135,6 +135,9 @@ fast-enhancer = [
   "onnxruntime",
   "websockets",
 ]
+pywebrtc-audio = [
+  "websockets",
+]
 rubberband = [
   "pyrubberband"
 ]

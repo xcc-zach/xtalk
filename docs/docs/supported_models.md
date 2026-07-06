@@ -117,3 +117,18 @@ Turn detector is used to determine whether the user has finished speaking and de
 [Original Repository](https://github.com/aask1357/fastenhancer)
 
 </details>
+
+<details markdown="1">
+<summary>PyWebRTCAudio</summary>
+
+**Dependency:** `pip install "xtalk[pywebrtc-audio] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**Path:** [`src/xtalk/models/speech_enhancer/pywebrtc_audio.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/pywebrtc_audio.py)
+
+**Config params:** only `base_url`.
+
+[Quick Start](https://github.com/xcc-zach/xtalk-pywebrtc-audio)
+
+[Original Repository](https://github.com/strands-labs/pywebrtc-audio)
+
+</details>
