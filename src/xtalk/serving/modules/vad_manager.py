@@ -154,6 +154,10 @@ class VADManager(Manager):
     # Lifecycle
     # ----------------------------
     async def shutdown(self) -> None:  # type: ignore[override]
-        """No-op shutdown hook (kept for extension)."""
-        # Intentionally empty
+        """Reset VAD state and release any remote session resources."""
+        if self.vad is not None:
+            try:
+                self.vad.reset()
+            except Exception as e:
+                logger.error("[VADManager] Reset VAD failed: %s", e)
         return None
