@@ -57,6 +57,7 @@ plugins:
             'Service Configuration': 服务配置项
             'ASR Design': ASR设计
             'TTS Design': TTS设计
+            'Speech Enhancer Design': 语音增强设计
             'VAD Design': VAD设计
             'Turn Detector Design': Turn Detector设计
             'Model clone() and reset()': 模型对象的clone()与reset()语义
@@ -83,6 +84,7 @@ nav:
       - 'Service Configuration': docs/service_config.md
       - 'ASR Design': docs/asr_design.md
       - 'TTS Design': docs/tts_design.md
+      - 'Speech Enhancer Design': docs/speech_enhancer_design.md
       - 'VAD Design': docs/vad_design.md
       - 'Turn Detector Design': docs/turn_detector_design.md
       - 'Model clone() and reset()': docs/model_clone_reset.md

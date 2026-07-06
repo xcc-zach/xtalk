@@ -14,13 +14,17 @@ class SpeechEnhancer(ABC):
     """
 
     @abstractmethod
-    def enhance(self, audio: bytes) -> bytes:
+    def enhance(self, audio: bytes, far: bytes) -> bytes:
         """Enhance an audio frame.
 
         Parameters
         ----------
         audio : bytes
             PCM 16-bit mono audio bytes at 16 kHz.
+        far : bytes
+            Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+            upstream audio pipeline guarantees that it has the same byte length
+            as ``audio``.
 
         Returns
         -------
@@ -39,13 +43,17 @@ class SpeechEnhancer(ABC):
         """
         return b""
 
-    async def async_enhance(self, audio: bytes) -> bytes:
+    async def async_enhance(self, audio: bytes, far: bytes) -> bytes:
         """Asynchronously enhance audio.
 
         Parameters
         ----------
         audio : bytes
             PCM 16-bit mono audio bytes at 16 kHz.
+        far : bytes
+            Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+            upstream audio pipeline guarantees that it has the same byte length
+            as ``audio``.
 
         Returns
         -------
@@ -53,7 +61,7 @@ class SpeechEnhancer(ABC):
             Enhanced PCM audio bytes.
         """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.enhance, audio)
+        return await loop.run_in_executor(None, self.enhance, audio, far)
 
     async def async_flush(self) -> bytes:
         """Asynchronously flush buffered audio.
