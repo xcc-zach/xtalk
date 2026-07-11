@@ -1,4 +1,4 @@
-"""X-Talk 原生同步、异步工具的基础类型。"""
+"""Core types for X-Talk native synchronous and asynchronous tools."""
 
 from __future__ import annotations
 
@@ -36,34 +36,35 @@ from pydantic import BaseModel
 
 
 class ToolInput(BaseModel):
-    """X-Talk 原生工具输入模型的基类。"""
+    """Base input model for X-Talk native tools."""
 
 
 class ToolOutput(BaseModel):
-    """X-Talk 原生工具输出模型的基类。"""
+    """Base output model for X-Talk native tools."""
 
     def to_content(self) -> str:
-        """将结构化结果序列化为 ToolMessage 可保存的文本。"""
+        """Serialize the structured result for storage in a ToolMessage."""
 
         return self.model_dump_json()
 
 
 class _TextToolOutput(ToolOutput):
-    """将外部工具结果包装为原生工具输出。"""
+    """Wrap an external tool result as a native tool output."""
 
     content: str
 
     def to_content(self) -> str:
-        """返回外部工具的文本结果。"""
+        """Return the external tool result as text."""
 
         return self.content
 
 
 @dataclass
 class ToolState:
-    """一次异步工具调用独享的可变状态。
-    call_id 本次工具调用的唯一标识。
-    metadata 供具体工具保存进度等自定义状态的容器。
+    """Mutable state owned by one asynchronous tool call.
+
+    ``call_id`` uniquely identifies the call. ``metadata`` stores custom
+    progress and state owned by the concrete tool.
     """
 
     call_id: str = ""
@@ -75,8 +76,9 @@ TO = TypeVar("TO", bound=ToolOutput)
 
 @dataclass(frozen=True)
 class Running:
-    """异步工具仍在运行时产生的文本更新。
-    content 可写入 ToolMessage 的阶段性状态。
+    """Text update emitted while an asynchronous tool is still running.
+
+    ``content`` contains the intermediate state stored in a ToolMessage.
     """
 
     content: str
@@ -84,8 +86,9 @@ class Running:
 
 @dataclass(frozen=True)
 class Finished(Generic[TO]):
-    """异步工具完成时产生的结构化最终结果。
-    content 具体工具定义的 ``ToolOutput`` 子类实例。
+    """Structured final result emitted by an asynchronous tool.
+
+    ``content`` is the concrete ``ToolOutput`` instance declared by the tool.
     """
 
     content: TO
@@ -94,7 +97,7 @@ class Finished(Generic[TO]):
 ToolResult: TypeAlias = Running | Finished[TO]
 ToolEngineState: TypeAlias = Any
 
-# StopIteration 不能直接通过 asyncio Future 传播，因此用哨兵表示迭代结束。
+# StopIteration cannot cross an asyncio Future, so use a sentinel instead.
 _SENTINEL = object()
 _ASYNC_TOOL_UPDATED_NAME = "async_tool_updated"
 _ASYNC_TOOL_STATUS_NAME = "id_to_async_tool_status"
@@ -104,11 +107,17 @@ _STOP_ASYNC_TOOL_NAME = "stop_async_tool"
 
 
 def _next_or_sentinel(iterator: Iterator[ToolResult[TO]]) -> ToolResult[TO] | object:
-    """取出同步迭代器的下一项，耗尽时返回哨兵对象。
+    """Return the next iterator item or the exhaustion sentinel.
 
-    iterator 同步工具更新迭代器。
+    Parameters
+    ----------
+    iterator : Iterator[ToolResult[TO]]
+        Synchronous tool update iterator.
 
-    ToolResult[TO] 下一项工具结果，或表示迭代结束的 ``_SENTINEL``。
+    Returns
+    -------
+    ToolResult[TO] | object
+        The next result or ``_SENTINEL`` when the iterator is exhausted.
     """
 
     try:
@@ -118,7 +127,7 @@ def _next_or_sentinel(iterator: Iterator[ToolResult[TO]]) -> ToolResult[TO] | ob
 
 
 class _NativeTool(ABC):
-    """同步和异步原生工具共用的内部基类。"""
+    """Internal base class shared by native synchronous and async tools."""
 
     name: ClassVar[str | None] = None
 
@@ -140,11 +149,11 @@ class _NativeTool(ABC):
 
 
 class AsyncTool(_NativeTool):
-    """可产生阶段性更新的长耗时工具基类。
+    """Base class for long-running tools that emit incremental updates.
 
-    子类至少实现 ``emit_initial`` 和 ``emit_updates``。默认的异步方法会
-    在线程中执行对应同步方法；如果底层 SDK 本身提供 async API，子类可
-    覆写相应的 ``a*`` 方法，避免不必要的线程切换。
+    Subclasses implement ``emit_initial`` and ``emit_updates``. Default async
+    methods run their synchronous counterparts in worker threads. Tools backed
+    by native async SDKs may override the corresponding ``a*`` methods.
     """
 
     subscribe_by_default: ClassVar[bool] = False
@@ -153,10 +162,10 @@ class AsyncTool(_NativeTool):
     output_type: ClassVar[type[ToolOutput]]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """在具体子类创建时，从方法注解推断其三种数据类型。
+        """Infer input, state, and output types when a subclass is created.
 
-        工具作者只需写方法注解，无须手动声明 ``input_type``、
-        ``state_type`` 和 ``output_type``。抽象中间类会跳过推断。
+        Tool authors only need method annotations. Abstract intermediate
+        classes skip inference.
         """
 
         super().__init_subclass__(**kwargs)
@@ -193,7 +202,7 @@ class AsyncTool(_NativeTool):
             raw_method = cls.__dict__.get(method_name)
             if raw_method is None:
                 continue
-            # 类字典中的 classmethod 是描述符，需要取出底层函数的注解。
+            # classmethod values are descriptors; inspect the wrapped function.
             method = (
                 raw_method.__func__
                 if isinstance(raw_method, classmethod)
@@ -228,7 +237,7 @@ class AsyncTool(_NativeTool):
 
     @classmethod
     def _infer_output_type(cls, annotation: Any) -> type[ToolOutput] | None:
-        """递归寻找返回注解中包含的具体 ToolOutput 类型。"""
+        """Find the concrete ToolOutput type inside a return annotation."""
 
         if isinstance(annotation, type) and issubclass(annotation, ToolOutput):
             return annotation
@@ -255,10 +264,11 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> Running:
-        """立即生成满足 LLM 工具调用协议的首条结果。
+        """Immediately produce the first protocol-compliant tool result.
 
-        部分模型要求每个 tool call 后立刻出现对应的 ToolMessage，
-        因此这里先返回 ``Running``，真正工作由 ``emit_updates`` 继续执行。
+        Some models require every tool call to be followed immediately by a
+        ToolMessage. This method returns ``Running`` before the actual work
+        continues through ``emit_updates``.
         """
 
         raise NotImplementedError
@@ -271,7 +281,7 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> Running:
-        """在线程中生成首条结果，避免阻塞事件循环。"""
+        """Produce the initial result in a worker thread."""
 
         return await asyncio.to_thread(
             cls.emit_initial,
@@ -289,7 +299,7 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> Iterator[ToolResult[ToolOutput]]:
-        """依次产生阶段性更新，并以一个最终结果结束。"""
+        """Yield incremental updates and end with one final result."""
 
         raise NotImplementedError
 
@@ -300,7 +310,7 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> AsyncIterator[ToolResult[ToolOutput]]:
-        """把同步更新迭代器桥接成非阻塞的异步迭代器。"""
+        """Bridge the synchronous update iterator into an async iterator."""
 
         iterator = cls.emit_updates(tool_input, tool_state, global_state)
         while True:
@@ -316,10 +326,10 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> str:
-        """返回一次异步调用的最新可读状态。
+        """Return the latest human-readable status for one call.
 
-        具体工具可覆写该钩子，为 LLM 的主动状态查询提供信息。默认返回
-        空字符串，表示工具没有额外状态可报告。
+        Concrete tools may override this hook for model-initiated status
+        queries. The default empty string means no extra status is available.
         """
 
         return ""
@@ -342,10 +352,10 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> None:
-        """执行一次调用被终止时所需的工具侧清理。
+        """Perform tool-specific cleanup when a call is stopped.
 
-        默认不做任何事。持有外部任务或连接的工具应覆写它；ToolEngine
-        自身取消后台 Task 的职责不属于这个钩子。
+        Tools that own external tasks or connections should override this hook.
+        Cancelling the ToolEngine background task is handled by ToolEngine.
         """
 
     @classmethod
@@ -366,10 +376,10 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> None:
-        """当一次调用订阅阶段性更新时执行工具侧逻辑。
+        """Perform tool-specific work when progress updates are subscribed.
 
-        默认不做任何事。订阅只影响过程更新，最终结果仍应由 ToolEngine
-        写回消息历史。
+        Subscription affects intermediate updates only. ToolEngine always
+        writes the final result back to message history.
         """
 
     @classmethod
@@ -390,10 +400,10 @@ class AsyncTool(_NativeTool):
         tool_state: ToolState,
         global_state: ToolEngineState,
     ) -> None:
-        """当一次调用取消订阅阶段性更新时执行工具侧逻辑。
+        """Perform tool-specific work when progress updates are unsubscribed.
 
-        默认不做任何事。取消订阅只抑制过程更新，最终结果仍应由
-        ToolEngine 写回消息历史。
+        Unsubscription suppresses intermediate updates only. ToolEngine still
+        writes the final result back to message history.
         """
 
     @classmethod
@@ -409,17 +419,17 @@ class AsyncTool(_NativeTool):
 
 
 class SyncTool(_NativeTool):
-    """只返回一次结构化最终结果的原生工具基类。
+    """Base class for native tools that return one structured final result.
 
-    子类实现 ``invoke``；框架提供的 ``ainvoke`` 会自动把同步调用
-    放入线程，供异步 Agent 安全调用。
+    Subclasses implement ``invoke``. The framework-provided ``ainvoke`` runs
+    the synchronous implementation in a worker thread.
     """
 
     input_type: ClassVar[type[ToolInput]]
     output_type: ClassVar[type[ToolOutput]]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """在具体子类创建时，从 invoke 注解推断输入和输出类型。"""
+        """Infer input and output types from the invoke annotations."""
 
         super().__init_subclass__(**kwargs)
         if inspect.isabstract(cls):
@@ -480,9 +490,9 @@ Tool: TypeAlias = BaseTool | type[SyncTool] | type[AsyncTool]
 
 @dataclass
 class ToolRun:
-    """一次工具调用的结果封装。
+    """Result record for one tool call.
 
-    ``result`` 保存工具目前最新的运行结果。
+    ``result`` stores the latest available tool result.
     """
 
     result: ToolResult
@@ -490,7 +500,7 @@ class ToolRun:
 
 @dataclass
 class AsyncToolRun(ToolRun):
-    """一次异步工具调用的结果封装。"""
+    """Lifecycle record for one asynchronous tool call."""
 
     tool_class: type[AsyncTool]
     tool_input: ToolInput
@@ -503,14 +513,14 @@ class AsyncToolRun(ToolRun):
 
 
 class ToolEngine:
-    """管理 Agent 工具的调用和运行状态。"""
+    """Manage agent tool binding, invocation, and lifecycle state."""
 
     def __init__(
         self,
         tools: list[Tool],
         state: ToolEngineState,
     ) -> None:
-        """初始化工具引擎。"""
+        """Initialize the tool engine."""
         self.tools = list(tools)
         has_async_tool = any(
             isinstance(tool_item, type) and issubclass(tool_item, AsyncTool)
@@ -537,7 +547,7 @@ class ToolEngine:
 
     @staticmethod
     def _tool_name(tool: Tool) -> str:
-        """获取工具的名称。"""
+        """Return the registered name of a tool."""
         if isinstance(tool, BaseTool):
             name = tool.name
         else:
@@ -551,7 +561,7 @@ class ToolEngine:
         source_call_id: str,
         result: ToolResult,
     ) -> tuple[ToolCall, ToolMessage]:
-        """构建一个异步工具更新的 ToolCall 和 ToolMessage。"""
+        """Build the ToolCall and ToolMessage for one async update."""
 
         update_call_id = (
             f"{source_call_id}:{_ASYNC_TOOL_UPDATED_NAME}:{uuid4().hex}"
@@ -574,7 +584,7 @@ class ToolEngine:
 
     @staticmethod
     def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
-        """将工具运行结果转换为可序列化的状态负载。"""
+        """Convert a tool result into a serializable status payload."""
 
         if isinstance(result, Running):
             return {
@@ -591,7 +601,7 @@ class ToolEngine:
         tool_call: ToolCall,
         messages: list[BaseMessage],
     ) -> None:
-        """确保消息历史中存在对应的 AI 工具调用声明。"""
+        """Ensure message history declares the corresponding AI tool call."""
 
         call_id = str(tool_call.get("id", "") or "")
         if not call_id:
@@ -627,7 +637,7 @@ class ToolEngine:
     def _find_pending_tool_call_message(
         messages: list[BaseMessage],
     ) -> tuple[AIMessage, int] | None:
-        """查找最近的未完成 AI 工具调用批次及合成调用插入位置。"""
+        """Find the latest pending AI tool-call batch and insertion index."""
 
         for index in range(len(messages) - 1, -1, -1):
             message = messages[index]
@@ -661,7 +671,7 @@ class ToolEngine:
         tool_message: ToolMessage,
         messages: list[BaseMessage],
     ) -> None:
-        """将工具调用和工具消息追加到消息历史。"""
+        """Append a tool call and its result to message history."""
 
         call_id = str(tool_call.get("id", "") or "")
         if not call_id:
@@ -684,7 +694,7 @@ class ToolEngine:
         tool_call: ToolCall,
         messages: list[BaseMessage],
     ) -> ToolMessage:
-        """异步调用工具并将结果追加到消息历史。"""
+        """Invoke a tool asynchronously and append its result to history."""
 
         tool_message = await self.ainvoke(tool_call)
         self.append_tool_message(tool_call, tool_message, messages)
@@ -695,7 +705,7 @@ class ToolEngine:
         tool_call: ToolCall,
         messages: list[BaseMessage],
     ) -> ToolMessage:
-        """同步调用工具并将结果追加到消息历史。"""
+        """Invoke a tool synchronously and append its result to history."""
 
         tool_message = self.invoke(tool_call)
         self.append_tool_message(tool_call, tool_message, messages)
@@ -703,7 +713,7 @@ class ToolEngine:
 
     @classmethod
     def _to_bindable_tool(cls, tool: Tool) -> BaseTool:
-        """将工具转换为聊天模型可绑定的 LangChain 工具。"""
+        """Convert a native tool into a LangChain-bindable tool schema."""
 
         if isinstance(tool, BaseTool):
             return tool
@@ -711,7 +721,7 @@ class ToolEngine:
         name = cls._tool_name(tool)
 
         def invoke_through_engine(**kwargs: Any) -> str:
-            """阻止绕过 ToolEngine 直接执行原生工具。"""
+            """Prevent native tool execution from bypassing ToolEngine."""
 
             del kwargs
             raise RuntimeError(
@@ -729,7 +739,7 @@ class ToolEngine:
         self,
         model: BaseChatModel,
     ) -> BaseChatModel | Runnable[Any, Any]:
-        """将引擎管理的工具绑定到聊天模型。"""
+        """Bind all engine-managed tools to a chat model."""
 
         if not self.tools:
             return model
@@ -740,12 +750,12 @@ class ToolEngine:
         self,
         callback: Callable[[ToolCall, ToolMessage], None],
     ) -> None:
-        """注册异步工具主动更新回调。"""
+        """Register the callback for proactive asynchronous tool updates."""
 
         self._async_tool_update_callback = callback
 
     def _create_async_tool_updated_tool(self) -> BaseTool:
-        """创建用于接收异步工具更新的系统工具。"""
+        """Create the system-only asynchronous update tool."""
 
         @tool(_ASYNC_TOOL_UPDATED_NAME)
         def async_tool_updated(source_call_id: str) -> str:
@@ -768,11 +778,15 @@ class ToolEngine:
         return async_tool_updated
 
     def _create_async_tool_status_tool(self) -> BaseTool:
-        """创建用于查询异步工具状态的工具。"""
+        """Create the asynchronous tool status query tool."""
 
         @tool(_ASYNC_TOOL_STATUS_NAME)
         async def id_to_async_tool_status(source_call_id: str) -> str:
             """Return the latest status of an asynchronous tool call.
+
+            Use this tool when the latest progress is needed without changing
+            the subscription state. The result reports whether the call is
+            still running, its tool-defined status, and any recorded error.
 
             Parameters
             ----------
@@ -802,11 +816,15 @@ class ToolEngine:
         return id_to_async_tool_status
 
     def _create_subscribe_tool(self) -> BaseTool:
-        """创建用于订阅异步工具更新的工具。"""
+        """Create the asynchronous tool subscription tool."""
 
         @tool(_SUBSCRIBE_ASYNC_TOOL_NAME)
         async def subscribe_async_tool(source_call_id: str) -> str:
             """Subscribe to progress updates from an asynchronous tool call.
+
+            After subscription, the system may deliver intermediate results
+            through ``async_tool_updated``. The subscription response also
+            includes the latest known result. Final results are always sent.
 
             Parameters
             ----------
@@ -850,11 +868,14 @@ class ToolEngine:
         return subscribe_async_tool
 
     def _create_unsubscribe_tool(self) -> BaseTool:
-        """创建用于取消订阅异步工具更新的工具。"""
+        """Create the asynchronous tool unsubscription tool."""
 
         @tool(_UNSUBSCRIBE_ASYNC_TOOL_NAME)
         async def unsubscribe_async_tool(source_call_id: str) -> str:
             """Stop receiving progress updates from an asynchronous tool call.
+
+            Unsubscribing suppresses intermediate updates only. The system
+            still delivers the final result through ``async_tool_updated``.
 
             Parameters
             ----------
@@ -896,11 +917,14 @@ class ToolEngine:
         return unsubscribe_async_tool
 
     def _create_stop_tool(self) -> BaseTool:
-        """创建异步工具停止工具。"""
+        """Create the asynchronous tool stop command."""
 
         @tool(_STOP_ASYNC_TOOL_NAME)
         async def stop_async_tool(source_call_id: str) -> str:
             """Stop an asynchronous tool call and release its resources.
+
+            Use this tool only for a call that is still running. Repeated stop
+            requests are safe and report the call as already stopped.
 
             Parameters
             ----------
@@ -947,7 +971,7 @@ class ToolEngine:
         return stop_async_tool
 
     async def _get_async_run(self, source_call_id: str) -> AsyncToolRun | None:
-        """按调用 ID 查找异步工具运行记录。"""
+        """Find an asynchronous tool run by its source call ID."""
 
         async with self._runs_lock:
             run = self._id_to_tool_runs.get(source_call_id)
@@ -955,7 +979,7 @@ class ToolEngine:
 
     @staticmethod
     def _async_run_not_found_content(source_call_id: str) -> str:
-        """构造异步工具调用不存在时的 JSON 结果。"""
+        """Build the JSON response for an unknown asynchronous tool call."""
 
         return json.dumps(
             {"error": f"Async tool run not found: {source_call_id}"},
@@ -963,7 +987,7 @@ class ToolEngine:
         )
 
     def _create_assist_tools(self) -> list[BaseTool]:
-        """创建异步工具协议所需的辅助工具。"""
+        """Create the assistant tools required by the async tool protocol."""
 
         return [
             self._create_async_tool_updated_tool(),
@@ -974,7 +998,7 @@ class ToolEngine:
         ]
 
     async def _reserve_call_id(self, call_id: str) -> None:
-        """为一次工具调用保留唯一的 call_id。"""
+        """Reserve a unique ID before starting a tool call."""
 
         async with self._runs_lock:
             if self._closed:
@@ -987,7 +1011,7 @@ class ToolEngine:
             self._reserved_call_ids.add(call_id)
 
     async def _store_run(self, call_id: str, run: ToolRun) -> None:
-        """保存工具运行记录并结束调用 ID 的预留状态。"""
+        """Store a tool run and complete its call ID reservation."""
 
         async with self._runs_lock:
             if self._closed:
@@ -996,7 +1020,7 @@ class ToolEngine:
             self._reserved_call_ids.discard(call_id)
 
     async def _release_call_id(self, call_id: str) -> None:
-        """释放一次工具调用的 call_id 预留状态。"""
+        """Release a call ID reserved by a failed tool invocation."""
 
         async with self._runs_lock:
             self._reserved_call_ids.discard(call_id)
@@ -1006,7 +1030,7 @@ class ToolEngine:
         call_id: str,
         run: AsyncToolRun,
     ) -> None:
-        """在引擎仍开放时订阅并启动异步工具的后台更新任务。"""
+        """Subscribe and start an async update task while the engine is open."""
 
         async with run.lifecycle_lock:
             async with self._runs_lock:
@@ -1027,7 +1051,7 @@ class ToolEngine:
                 run.task = task
 
     async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
-        """异步调用工具。"""
+        """Invoke a tool asynchronously."""
 
         if self._closed:
             raise RuntimeError("ToolEngine is closed")
@@ -1093,7 +1117,7 @@ class ToolEngine:
                 name=name,
             )
 
-        # AsyncTool 的调用逻辑
+        # Start the asynchronous tool and return its immediate protocol result.
         if isinstance(selected_tool, type) and issubclass(selected_tool, AsyncTool):
             tool_input = selected_tool.input_type.model_validate(args)
             tool_state = selected_tool.state_type(call_id=call_id)
@@ -1148,10 +1172,11 @@ class ToolEngine:
         raise NotImplementedError("Native tool invocation is not implemented yet")
 
     def invoke(self, tool_call: ToolCall) -> ToolMessage:
-        """从同步上下文调用一个同步工具。
+        """Invoke a synchronous tool from a synchronous context.
 
-        异步工具需要持续运行的事件循环来消费后续更新，因此必须通过
-        ``ainvoke`` 调用。已有事件循环的调用方也应直接等待 ``ainvoke``。
+        AsyncTool requires a persistent event loop for subsequent updates and
+        must use ``ainvoke``. Callers already inside an event loop should also
+        await ``ainvoke`` directly.
         """
 
         name = str(tool_call.get("name", "") or "")
@@ -1182,7 +1207,7 @@ class ToolEngine:
         self,
         call_id: str,
     ) -> None:
-        """持续消费一次异步工具调用的更新。"""
+        """Consume updates from one asynchronous tool call."""
 
         run = self._id_to_tool_runs.get(call_id)
         if not isinstance(run, AsyncToolRun):
@@ -1237,13 +1262,13 @@ class ToolEngine:
 
     @staticmethod
     def _consume_task_exception(task: asyncio.Task[None]) -> None:
-        """读取后台任务异常，避免产生未处理任务警告。"""
+        """Retrieve a background exception to avoid unhandled-task warnings."""
 
         if not task.cancelled():
             task.exception()
 
     async def shutdown(self) -> None:
-        """关闭工具引擎并取消所有仍在运行的异步工具调用。"""
+        """Close the engine and cancel all active asynchronous tool calls."""
 
         async with self._runs_lock:
             if self._closed:
