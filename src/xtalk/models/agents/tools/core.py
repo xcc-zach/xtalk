@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import types
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import (
     Any,
+    Callable,
     ClassVar,
     Generic,
     TypeAlias,
@@ -19,11 +21,17 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import ToolCall, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    ToolCall,
+    ToolMessage,
+)
 from langchain_core.runnables import Runnable
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool, tool
 from pydantic import BaseModel
 
 
@@ -88,6 +96,11 @@ ToolEngineState: TypeAlias = Any
 
 # StopIteration 不能直接通过 asyncio Future 传播，因此用哨兵表示迭代结束。
 _SENTINEL = object()
+_ASYNC_TOOL_UPDATED_NAME = "async_tool_updated"
+_ASYNC_TOOL_STATUS_NAME = "id_to_async_tool_status"
+_SUBSCRIBE_ASYNC_TOOL_NAME = "subscribe_async_tool"
+_UNSUBSCRIBE_ASYNC_TOOL_NAME = "unsubscribe_async_tool"
+_STOP_ASYNC_TOOL_NAME = "stop_async_tool"
 
 
 def _next_or_sentinel(iterator: Iterator[ToolResult[TO]]) -> ToolResult[TO] | object:
@@ -484,6 +497,7 @@ class AsyncToolRun(ToolRun):
     tool_state: ToolState
     subscribed: bool
     running: bool
+    lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
     error: BaseException | None = None
 
@@ -498,6 +512,12 @@ class ToolEngine:
     ) -> None:
         """初始化工具引擎。"""
         self.tools = list(tools)
+        has_async_tool = any(
+            isinstance(tool_item, type) and issubclass(tool_item, AsyncTool)
+            for tool_item in self.tools
+        )
+        if has_async_tool:
+            self.tools.extend(self._create_assist_tools())
         self.state = state
         self._state_lock = asyncio.Lock()
         self._name_to_tool: dict[str, Tool] = {}
@@ -505,12 +525,15 @@ class ToolEngine:
         self._closed = False
         self._runs_lock = asyncio.Lock()
         self._reserved_call_ids: set[str] = set()
+        self._async_tool_update_callback: (
+            Callable[[ToolCall, ToolMessage], None] | None
+        ) = None
 
-        for tool in self.tools:
-            name = self._tool_name(tool)
+        for tool_item in self.tools:
+            name = self._tool_name(tool_item)
             if name in self._name_to_tool:
                 raise ValueError(f"Duplicate tool name: {name}")
-            self._name_to_tool[name] = tool
+            self._name_to_tool[name] = tool_item
 
     @staticmethod
     def _tool_name(tool: Tool) -> str:
@@ -522,6 +545,161 @@ class ToolEngine:
         if not name:
             raise ValueError(f"Tool {tool} must have a name")
         return name
+
+    @staticmethod
+    def _build_async_tool_update(
+        source_call_id: str,
+        result: ToolResult,
+    ) -> tuple[ToolCall, ToolMessage]:
+        """构建一个异步工具更新的 ToolCall 和 ToolMessage。"""
+
+        update_call_id = (
+            f"{source_call_id}:{_ASYNC_TOOL_UPDATED_NAME}:{uuid4().hex}"
+        )
+        tool_call = ToolCall(
+            id=update_call_id,
+            name=_ASYNC_TOOL_UPDATED_NAME,
+            args={"source_call_id": source_call_id},
+        )
+
+        tool_message = ToolMessage(
+            content=json.dumps(
+                ToolEngine._tool_result_payload(result),
+                ensure_ascii=False,
+            ),
+            tool_call_id=update_call_id,
+            name=_ASYNC_TOOL_UPDATED_NAME,
+        )
+        return tool_call, tool_message
+
+    @staticmethod
+    def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
+        """将工具运行结果转换为可序列化的状态负载。"""
+
+        if isinstance(result, Running):
+            return {
+                "running": True,
+                "tool_output": result.content,
+            }
+        return {
+            "running": False,
+            "tool_output": result.content.to_content(),
+        }
+
+    @staticmethod
+    def _append_tool_call(
+        tool_call: ToolCall,
+        messages: list[BaseMessage],
+    ) -> None:
+        """确保消息历史中存在对应的 AI 工具调用声明。"""
+
+        call_id = str(tool_call.get("id", "") or "")
+        if not call_id:
+            raise ValueError("ToolCall must have an id")
+
+        for message in reversed(messages):
+            if not isinstance(message, AIMessage):
+                continue
+            for existing_call in message.tool_calls:
+                if str(existing_call.get("id", "") or "") != call_id:
+                    continue
+                if (
+                    existing_call.get("name") != tool_call.get("name")
+                    or existing_call.get("args", {}) != tool_call.get("args", {})
+                ):
+                    raise ValueError(f"Conflicting ToolCall id: {call_id}")
+                return
+
+        pending_batch = ToolEngine._find_pending_tool_call_message(messages)
+        if pending_batch is not None:
+            pending_message, insertion_index = pending_batch
+            pending_message.tool_calls.insert(insertion_index, tool_call)
+            return
+
+        messages.append(
+            AIMessage(
+                content="",
+                tool_calls=[tool_call],
+            )
+        )
+
+    @staticmethod
+    def _find_pending_tool_call_message(
+        messages: list[BaseMessage],
+    ) -> tuple[AIMessage, int] | None:
+        """查找最近的未完成 AI 工具调用批次及合成调用插入位置。"""
+
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if not isinstance(message, AIMessage):
+                continue
+            if not message.tool_calls:
+                return None
+
+            trailing_messages = messages[index + 1 :]
+            if not all(
+                isinstance(trailing_message, ToolMessage)
+                for trailing_message in trailing_messages
+            ):
+                return None
+
+            answered_ids = {
+                str(trailing_message.tool_call_id or "")
+                for trailing_message in trailing_messages
+            }
+            if any(
+                str(existing_call.get("id", "") or "") not in answered_ids
+                for existing_call in message.tool_calls
+            ):
+                return message, len(trailing_messages)
+            return None
+        return None
+
+    @staticmethod
+    def append_tool_message(
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+        messages: list[BaseMessage],
+    ) -> None:
+        """将工具调用和工具消息追加到消息历史。"""
+
+        call_id = str(tool_call.get("id", "") or "")
+        if not call_id:
+            raise ValueError("ToolCall must have an id")
+        if str(tool_message.tool_call_id or "") != call_id:
+            raise ValueError("ToolMessage tool_call_id must match ToolCall id")
+        if any(
+            isinstance(message, ToolMessage)
+            and str(message.tool_call_id or "") == call_id
+            for message in messages
+        ):
+            raise ValueError(
+                f"ToolMessage for this call id {call_id} already exists"
+            )
+        ToolEngine._append_tool_call(tool_call, messages)
+        messages.append(tool_message)
+
+    async def ainvoke_and_append(
+        self,
+        tool_call: ToolCall,
+        messages: list[BaseMessage],
+    ) -> ToolMessage:
+        """异步调用工具并将结果追加到消息历史。"""
+
+        tool_message = await self.ainvoke(tool_call)
+        self.append_tool_message(tool_call, tool_message, messages)
+        return tool_message
+
+    def invoke_and_append(
+        self,
+        tool_call: ToolCall,
+        messages: list[BaseMessage],
+    ) -> ToolMessage:
+        """同步调用工具并将结果追加到消息历史。"""
+
+        tool_message = self.invoke(tool_call)
+        self.append_tool_message(tool_call, tool_message, messages)
+        return tool_message
 
     @classmethod
     def _to_bindable_tool(cls, tool: Tool) -> BaseTool:
@@ -558,6 +736,243 @@ class ToolEngine:
         bindable_tools = [self._to_bindable_tool(tool) for tool in self.tools]
         return model.bind_tools(bindable_tools)
 
+    def on_async_tool_update(
+        self,
+        callback: Callable[[ToolCall, ToolMessage], None],
+    ) -> None:
+        """注册异步工具主动更新回调。"""
+
+        self._async_tool_update_callback = callback
+
+    def _create_async_tool_updated_tool(self) -> BaseTool:
+        """创建用于接收异步工具更新的系统工具。"""
+
+        @tool(_ASYNC_TOOL_UPDATED_NAME)
+        def async_tool_updated(source_call_id: str) -> str:
+            """Receive an update from an asynchronous tool.
+
+            This tool is called only by the system. Never call it directly.
+            Report any unreported update in the next response. If a new user
+            message is also present, briefly report the update before replying
+            to the user.
+
+            Parameters
+            ----------
+            source_call_id : str
+                The ID returned by the original asynchronous tool call.
+            """
+
+            del source_call_id
+            return "This tool can only be invoked by ToolEngine."
+
+        return async_tool_updated
+
+    def _create_async_tool_status_tool(self) -> BaseTool:
+        """创建用于查询异步工具状态的工具。"""
+
+        @tool(_ASYNC_TOOL_STATUS_NAME)
+        async def id_to_async_tool_status(source_call_id: str) -> str:
+            """Return the latest status of an asynchronous tool call.
+
+            Parameters
+            ----------
+            source_call_id : str
+                The ID returned by the original asynchronous tool call.
+            """
+
+            async with self._runs_lock:
+                run = self._id_to_tool_runs.get(source_call_id)
+
+            if not isinstance(run, AsyncToolRun):
+                return self._async_run_not_found_content(source_call_id)
+            async with self._state_lock:
+                status = await run.tool_class.astatus(
+                    run.tool_input,
+                    run.tool_state,
+                    self.state,
+                )
+            return json.dumps(
+                {
+                    "running": run.running,
+                    "status": status,
+                    "error": str(run.error) if run.error is not None else None,
+                },
+                ensure_ascii=False,
+            )
+        return id_to_async_tool_status
+
+    def _create_subscribe_tool(self) -> BaseTool:
+        """创建用于订阅异步工具更新的工具。"""
+
+        @tool(_SUBSCRIBE_ASYNC_TOOL_NAME)
+        async def subscribe_async_tool(source_call_id: str) -> str:
+            """Subscribe to progress updates from an asynchronous tool call.
+
+            Parameters
+            ----------
+            source_call_id : str
+                The ID returned by the original asynchronous tool call.
+            """
+
+            run = await self._get_async_run(source_call_id)
+            if run is None:
+                return self._async_run_not_found_content(source_call_id)
+
+            async with run.lifecycle_lock:
+                if run.subscribed:
+                    return json.dumps(
+                        {
+                            "subscribed": True,
+                            "running": run.running,
+                            "latest": self._tool_result_payload(run.result),
+                        },
+                        ensure_ascii=False,
+                    )
+                run.subscribed = True
+                try:
+                    async with self._state_lock:
+                        await run.tool_class.asubscribe(
+                            run.tool_input,
+                            run.tool_state,
+                            self.state,
+                        )
+                except BaseException:
+                    run.subscribed = False
+                    raise
+                return json.dumps(
+                    {
+                        "subscribed": True,
+                        "running": run.running,
+                        "latest": self._tool_result_payload(run.result),
+                    },
+                    ensure_ascii=False,
+                )
+        return subscribe_async_tool
+
+    def _create_unsubscribe_tool(self) -> BaseTool:
+        """创建用于取消订阅异步工具更新的工具。"""
+
+        @tool(_UNSUBSCRIBE_ASYNC_TOOL_NAME)
+        async def unsubscribe_async_tool(source_call_id: str) -> str:
+            """Stop receiving progress updates from an asynchronous tool call.
+
+            Parameters
+            ----------
+            source_call_id : str
+                The ID returned by the original asynchronous tool call.
+            """
+
+            run = await self._get_async_run(source_call_id)
+            if run is None:
+                return self._async_run_not_found_content(source_call_id)
+
+            async with run.lifecycle_lock:
+                if not run.subscribed:
+                    return json.dumps(
+                        {
+                            "subscribed": False,
+                            "running": run.running,
+                        },
+                        ensure_ascii=False,
+                    )
+                run.subscribed = False
+                try:
+                    async with self._state_lock:
+                        await run.tool_class.aunsubscribe(
+                            run.tool_input,
+                            run.tool_state,
+                            self.state,
+                        )
+                except BaseException:
+                    run.subscribed = True
+                    raise
+                return json.dumps(
+                    {
+                        "subscribed": False,
+                        "running": run.running,
+                    },
+                    ensure_ascii=False,
+                )
+        return unsubscribe_async_tool
+
+    def _create_stop_tool(self) -> BaseTool:
+        """创建异步工具停止工具。"""
+
+        @tool(_STOP_ASYNC_TOOL_NAME)
+        async def stop_async_tool(source_call_id: str) -> str:
+            """Stop an asynchronous tool call and release its resources.
+
+            Parameters
+            ----------
+            source_call_id : str
+                The ID returned by the original asynchronous tool call.
+            """
+
+            run = await self._get_async_run(source_call_id)
+            if run is None:
+                return self._async_run_not_found_content(source_call_id)
+
+            async with run.lifecycle_lock:
+                if not run.running:
+                    return json.dumps(
+                        {
+                            "running": False,
+                            "stopped": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                run.running = False
+                try:
+                    async with self._state_lock:
+                        await run.tool_class.astop(
+                            run.tool_input,
+                            run.tool_state,
+                            self.state,
+                        )
+                except BaseException as exc:
+                    run.error = exc
+                    raise
+                finally:
+                    if run.task is not None and not run.task.done():
+                        run.task.cancel()
+                    run.running = False
+
+                return json.dumps(
+                    {
+                        "running": False,
+                        "stopped": True,
+                    },
+                    ensure_ascii=False,
+                )
+        return stop_async_tool
+
+    async def _get_async_run(self, source_call_id: str) -> AsyncToolRun | None:
+        """按调用 ID 查找异步工具运行记录。"""
+
+        async with self._runs_lock:
+            run = self._id_to_tool_runs.get(source_call_id)
+        return run if isinstance(run, AsyncToolRun) else None
+
+    @staticmethod
+    def _async_run_not_found_content(source_call_id: str) -> str:
+        """构造异步工具调用不存在时的 JSON 结果。"""
+
+        return json.dumps(
+            {"error": f"Async tool run not found: {source_call_id}"},
+            ensure_ascii=False,
+        )
+
+    def _create_assist_tools(self) -> list[BaseTool]:
+        """创建异步工具协议所需的辅助工具。"""
+
+        return [
+            self._create_async_tool_updated_tool(),
+            self._create_async_tool_status_tool(),
+            self._create_subscribe_tool(),
+            self._create_unsubscribe_tool(),
+            self._create_stop_tool(),
+        ]
+
     async def _reserve_call_id(self, call_id: str) -> None:
         """为一次工具调用保留唯一的 call_id。"""
 
@@ -593,9 +1008,10 @@ class ToolEngine:
     ) -> None:
         """在引擎仍开放时订阅并启动异步工具的后台更新任务。"""
 
-        async with self._runs_lock:
-            if self._closed:
-                raise RuntimeError("ToolEngine is closed")
+        async with run.lifecycle_lock:
+            async with self._runs_lock:
+                if self._closed:
+                    raise RuntimeError("ToolEngine is closed")
             if run.subscribed:
                 async with self._state_lock:
                     await run.tool_class.asubscribe(
@@ -603,12 +1019,15 @@ class ToolEngine:
                         run.tool_state,
                         self.state,
                     )
-            task = asyncio.create_task(self._consume_async_updates(call_id))
-            task.add_done_callback(self._consume_task_exception)
-            run.task = task
+            async with self._runs_lock:
+                if self._closed:
+                    raise RuntimeError("ToolEngine is closed")
+                task = asyncio.create_task(self._consume_async_updates(call_id))
+                task.add_done_callback(self._consume_task_exception)
+                run.task = task
 
     async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
-        """异步调用一个工具。"""
+        """异步调用工具。"""
 
         if self._closed:
             raise RuntimeError("ToolEngine is closed")
@@ -789,6 +1208,19 @@ class ToolEngine:
                     )
 
                 run.result = result
+
+                should_notify = (
+                    run.subscribed
+                    or isinstance(result, Finished)
+                )
+                callback = self._async_tool_update_callback
+                if should_notify and callback is not None:
+                    tool_call, tool_message = self._build_async_tool_update(
+                        call_id,
+                        result,
+                    )
+                    callback(tool_call, tool_message)
+
                 if isinstance(result, Finished):
                     return
 
@@ -811,7 +1243,7 @@ class ToolEngine:
             task.exception()
 
     async def shutdown(self) -> None:
-        """关闭工具引擎，取消所有正在运行的异步工具调用。"""
+        """关闭工具引擎并取消所有仍在运行的异步工具调用。"""
 
         async with self._runs_lock:
             if self._closed:
@@ -824,21 +1256,22 @@ class ToolEngine:
             ]
 
         async def stop_run(run: AsyncToolRun) -> None:
-            if not run.running:
-                return
-            try:
-                async with self._state_lock:
-                    await run.tool_class.astop(
-                        run.tool_input,
-                        run.tool_state,
-                        self.state,
-                    )
-            except BaseException as exc:
-                run.error = exc
-            finally:
-                if run.task is not None and not run.task.done():
-                    run.task.cancel()
-                run.running = False
+            async with run.lifecycle_lock:
+                if not run.running:
+                    return
+                try:
+                    async with self._state_lock:
+                        await run.tool_class.astop(
+                            run.tool_input,
+                            run.tool_state,
+                            self.state,
+                        )
+                except BaseException as exc:
+                    run.error = exc
+                finally:
+                    if run.task is not None and not run.task.done():
+                        run.task.cancel()
+                    run.running = False
 
         await asyncio.gather(*(stop_run(run) for run in runs), return_exceptions=True)
         tasks = [run.task for run in runs if run.task is not None]
