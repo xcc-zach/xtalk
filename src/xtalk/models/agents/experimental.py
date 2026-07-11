@@ -122,6 +122,9 @@ class ExperimentalAgent(Agent):
             state={},
         )
         self.model_with_tools = self.tool_engine.bind(self.model)
+        self.model_for_async_updates = (
+            self.tool_engine.bind_without_tool_calls(self.model)
+        )
         self._human_input_finished = True
         self._last_partial_human_text = ""
         self._active_partial_human_index: int | None = None
@@ -393,7 +396,11 @@ class ExperimentalAgent(Agent):
         *,
         allow_tools: bool,
     ) -> AsyncIterator[AgentOutput]:
-        streaming_model = self.model_with_tools if allow_tools else self.model
+        streaming_model = (
+            self.model_with_tools
+            if allow_tools
+            else self.model_for_async_updates
+        )
         while True:
             response_message = AIMessage(content="")
             gathered = None
