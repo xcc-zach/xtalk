@@ -127,6 +127,10 @@ class ExperimentalAgent(Agent):
         self._active_partial_human_index: int | None = None
         self._active_partial_human_prefix = ""
         self._async_tool_update_queue: asyncio.Queue[AgentOutput] = asyncio.Queue()
+        self._model_generation_lock = asyncio.Lock()
+        self._pending_async_tool_updates: list[
+            tuple[ToolCall, ToolMessage, AgentOutput]
+        ] = []
         self.tool_engine.on_async_tool_update(self._on_async_tool_update)
 
         # every time remove this prefix before judging backchannel
@@ -154,9 +158,11 @@ class ExperimentalAgent(Agent):
                 yield item
         if context_type == "asr_final":
             self._asr_final_response_generating = True
-            async for item in self._handle_asr_final(context_data["text"]):
-                yield item
-            self._asr_final_response_generating = False
+            try:
+                async for item in self._handle_asr_final(context_data["text"]):
+                    yield item
+            finally:
+                self._asr_final_response_generating = False
         if context_type == "asr_partial":
             async for item in self._handle_asr_partial(context_data["text"]):
                 yield item
@@ -216,12 +222,18 @@ class ExperimentalAgent(Agent):
 
         while True:
             item = await self._async_tool_update_queue.get()
-            yield item
+            while True:
+                yield item
 
-            while self._asr_final_response_generating:
-                await asyncio.sleep(0.05)
+                while self._asr_final_response_generating:
+                    await asyncio.sleep(0.05)
 
-            async for generated_item in self._stream_messages():
+                try:
+                    item = self._async_tool_update_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            async for generated_item in self._stream_messages(allow_tools=False):
                 yield generated_item
             yield AgentTurnBoundary()
 
@@ -260,8 +272,11 @@ class ExperimentalAgent(Agent):
                 content = text
                 self._active_partial_human_prefix = ""
 
-            self._chat_history.append_message(HumanMessage(content=content))
-            self._active_partial_human_index = len(messages) - 1
+            if content:
+                self._chat_history.append_message(HumanMessage(content=content))
+                self._active_partial_human_index = len(messages) - 1
+            else:
+                self._active_partial_human_index = None
         self._last_partial_human_text = text
         self._human_input_finished = final
 
@@ -359,11 +374,30 @@ class ExperimentalAgent(Agent):
             if text:
                 yield text
 
-    async def _stream_messages(self) -> AsyncIterator[AgentOutput]:
+    async def _stream_messages(
+        self,
+        *,
+        allow_tools: bool = True,
+    ) -> AsyncIterator[AgentOutput]:
+        async with self._model_generation_lock:
+            try:
+                async for item in self._stream_messages_unlocked(
+                    allow_tools=allow_tools,
+                ):
+                    yield item
+            finally:
+                self._flush_pending_async_tool_updates()
+
+    async def _stream_messages_unlocked(
+        self,
+        *,
+        allow_tools: bool,
+    ) -> AsyncIterator[AgentOutput]:
+        streaming_model = self.model_with_tools if allow_tools else self.model
         while True:
             response_message = AIMessage(content="")
             gathered = None
-            async for chunk in self.model_with_tools.astream(self.messages):
+            async for chunk in streaming_model.astream(self.messages):
                 text = self.content_to_text(chunk.content)
                 if text:
                     response_message.content += text
@@ -409,6 +443,26 @@ class ExperimentalAgent(Agent):
         tool_message: ToolMessage,
     ) -> None:
         """Save an asynchronous tool update and notify the agent loop."""
+
+        output = build_tool_call_result(
+            tool_call=tool_call,
+            result_content=str(tool_message.content),
+        )
+        if self._model_generation_lock.locked():
+            self._pending_async_tool_updates.append(
+                (tool_call, tool_message, output)
+            )
+            return
+        self._record_async_tool_update(tool_call, tool_message, output)
+
+    def _record_async_tool_update(
+        self,
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+        output: AgentOutput,
+    ) -> None:
+        """Append one deferred update and wake the loop when appropriate."""
+
         ToolEngine.append_tool_message(
             tool_call=tool_call,
             tool_message=tool_message,
@@ -416,12 +470,15 @@ class ExperimentalAgent(Agent):
         )
         if not self._human_input_finished:
             return
-        self._async_tool_update_queue.put_nowait(
-            build_tool_call_result(
-                tool_call=tool_call,
-                result_content=str(tool_message.content),
-            )
-        )
+        self._async_tool_update_queue.put_nowait(output)
+
+    def _flush_pending_async_tool_updates(self) -> None:
+        """Move updates deferred during generation into history and the queue."""
+
+        pending_updates = self._pending_async_tool_updates
+        self._pending_async_tool_updates = []
+        for tool_call, tool_message, output in pending_updates:
+            self._record_async_tool_update(tool_call, tool_message, output)
 
     def _load_backchannel_audio(self, backchannel_content: str) -> bytes | None:
         map_path = self.backchannel_source_dir / "map.json"

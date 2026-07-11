@@ -743,7 +743,11 @@ class ToolEngine:
 
         if not self.tools:
             return model
-        bindable_tools = [self._to_bindable_tool(tool) for tool in self.tools]
+        bindable_tools = [
+            self._to_bindable_tool(tool)
+            for tool in self.tools
+            if self._tool_name(tool) != _ASYNC_TOOL_UPDATED_NAME
+        ]
         return model.bind_tools(bindable_tools)
 
     def on_async_tool_update(
@@ -787,6 +791,9 @@ class ToolEngine:
             Use this tool when the latest progress is needed without changing
             the subscription state. The result reports whether the call is
             still running, its tool-defined status, and any recorded error.
+            Call it only when the user explicitly asks for the current status.
+            Never poll it repeatedly; subscribe and wait for system updates
+            when future progress is needed.
 
             Parameters
             ----------
@@ -825,6 +832,8 @@ class ToolEngine:
             After subscription, the system may deliver intermediate results
             through ``async_tool_updated``. The subscription response also
             includes the latest known result. Final results are always sent.
+            After subscribing, stop calling tools and wait for the system to
+            deliver updates. Do not poll the status tool.
 
             Parameters
             ----------
