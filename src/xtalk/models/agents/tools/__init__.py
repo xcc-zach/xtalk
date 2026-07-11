@@ -15,6 +15,9 @@ from .core import (
     ToolOutput,
     ToolResult,
     ToolState,
+    ToolRun,
+    AsyncToolRun,
+    ToolEngine,
 )
 
 from .speech_control import (
@@ -40,6 +43,9 @@ __all__ = [
     "ToolOutput",
     "ToolResult",
     "ToolState",
+    "ToolRun",
+    "AsyncToolRun",
+    "ToolEngine",
     "build_set_voice_tool",
     "build_set_emotion_tool",
     "build_silence_tool",

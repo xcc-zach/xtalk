@@ -20,7 +20,10 @@ from typing import (
     get_type_hints,
 )
 
-from langchain_core.tools import BaseTool
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import ToolCall, ToolMessage
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 
@@ -35,6 +38,17 @@ class ToolOutput(BaseModel):
         """将结构化结果序列化为 ToolMessage 可保存的文本。"""
 
         return self.model_dump_json()
+
+
+class _TextToolOutput(ToolOutput):
+    """将外部工具结果包装为原生工具输出。"""
+
+    content: str
+
+    def to_content(self) -> str:
+        """返回外部工具的文本结果。"""
+
+        return self.content
 
 
 @dataclass
@@ -451,6 +465,387 @@ class SyncTool(_NativeTool):
 Tool: TypeAlias = BaseTool | type[SyncTool] | type[AsyncTool]
 
 
+@dataclass
+class ToolRun:
+    """一次工具调用的结果封装。
+
+    ``result`` 保存工具目前最新的运行结果。
+    """
+
+    result: ToolResult
+
+
+@dataclass
+class AsyncToolRun(ToolRun):
+    """一次异步工具调用的结果封装。"""
+
+    tool_class: type[AsyncTool]
+    tool_input: ToolInput
+    tool_state: ToolState
+    subscribed: bool
+    running: bool
+    task: asyncio.Task[None] | None = None
+    error: BaseException | None = None
+
+
+class ToolEngine:
+    """管理 Agent 工具的调用和运行状态。"""
+
+    def __init__(
+        self,
+        tools: list[Tool],
+        state: ToolEngineState,
+    ) -> None:
+        """初始化工具引擎。"""
+        self.tools = list(tools)
+        self.state = state
+        self._state_lock = asyncio.Lock()
+        self._name_to_tool: dict[str, Tool] = {}
+        self._id_to_tool_runs: dict[str, ToolRun] = {}
+        self._closed = False
+        self._runs_lock = asyncio.Lock()
+        self._reserved_call_ids: set[str] = set()
+
+        for tool in self.tools:
+            name = self._tool_name(tool)
+            if name in self._name_to_tool:
+                raise ValueError(f"Duplicate tool name: {name}")
+            self._name_to_tool[name] = tool
+
+    @staticmethod
+    def _tool_name(tool: Tool) -> str:
+        """获取工具的名称。"""
+        if isinstance(tool, BaseTool):
+            name = tool.name
+        else:
+            name = tool.name or tool.__name__
+        if not name:
+            raise ValueError(f"Tool {tool} must have a name")
+        return name
+
+    @classmethod
+    def _to_bindable_tool(cls, tool: Tool) -> BaseTool:
+        """将工具转换为聊天模型可绑定的 LangChain 工具。"""
+
+        if isinstance(tool, BaseTool):
+            return tool
+
+        name = cls._tool_name(tool)
+
+        def invoke_through_engine(**kwargs: Any) -> str:
+            """阻止绕过 ToolEngine 直接执行原生工具。"""
+
+            del kwargs
+            raise RuntimeError(
+                f"Native tool {name} must be invoked through ToolEngine"
+            )
+
+        return StructuredTool.from_function(
+            func=invoke_through_engine,
+            name=name,
+            description=inspect.getdoc(tool) or f"Call the {name} tool.",
+            args_schema=tool.input_type,
+        )
+
+    def bind(
+        self,
+        model: BaseChatModel,
+    ) -> BaseChatModel | Runnable[Any, Any]:
+        """将引擎管理的工具绑定到聊天模型。"""
+
+        if not self.tools:
+            return model
+        bindable_tools = [self._to_bindable_tool(tool) for tool in self.tools]
+        return model.bind_tools(bindable_tools)
+
+    async def _reserve_call_id(self, call_id: str) -> None:
+        """为一次工具调用保留唯一的 call_id。"""
+
+        async with self._runs_lock:
+            if self._closed:
+                raise RuntimeError("ToolEngine is closed")
+            if (
+                call_id in self._reserved_call_ids
+                or call_id in self._id_to_tool_runs
+            ):
+                raise ValueError(f"Duplicate tool call id: {call_id}")
+            self._reserved_call_ids.add(call_id)
+
+    async def _store_run(self, call_id: str, run: ToolRun) -> None:
+        """保存工具运行记录并结束调用 ID 的预留状态。"""
+
+        async with self._runs_lock:
+            if self._closed:
+                raise RuntimeError("ToolEngine is closed")
+            self._id_to_tool_runs[call_id] = run
+            self._reserved_call_ids.discard(call_id)
+
+    async def _release_call_id(self, call_id: str) -> None:
+        """释放一次工具调用的 call_id 预留状态。"""
+
+        async with self._runs_lock:
+            self._reserved_call_ids.discard(call_id)
+
+    async def _start_async_run(
+        self,
+        call_id: str,
+        run: AsyncToolRun,
+    ) -> None:
+        """在引擎仍开放时订阅并启动异步工具的后台更新任务。"""
+
+        async with self._runs_lock:
+            if self._closed:
+                raise RuntimeError("ToolEngine is closed")
+            if run.subscribed:
+                async with self._state_lock:
+                    await run.tool_class.asubscribe(
+                        run.tool_input,
+                        run.tool_state,
+                        self.state,
+                    )
+            task = asyncio.create_task(self._consume_async_updates(call_id))
+            task.add_done_callback(self._consume_task_exception)
+            run.task = task
+
+    async def ainvoke(self, tool_call: ToolCall) -> ToolMessage:
+        """异步调用一个工具。"""
+
+        if self._closed:
+            raise RuntimeError("ToolEngine is closed")
+        call_id = str(tool_call.get("id", "") or "")
+        name = str(tool_call.get("name", "") or "")
+        args = tool_call.get("args", {})
+
+        if not call_id:
+            raise ValueError("ToolCall must have an id")
+        if not name:
+            raise ValueError("ToolCall must have a name")
+        if not isinstance(args, dict):
+            raise TypeError("ToolCall args must be a dict")
+
+        selected_tool = self._name_to_tool.get(name)
+        if selected_tool is None:
+            raise ValueError(f"Unknown tool: {name}")
+
+        if isinstance(selected_tool, BaseTool):
+            await self._reserve_call_id(call_id)
+
+            try:
+                result = await selected_tool.ainvoke(args)
+                content = result if isinstance(result, str) else str(result)
+                output = _TextToolOutput(content=content)
+                await self._store_run(
+                    call_id,
+                    ToolRun(result=Finished(content=output)),
+                )
+            except BaseException:
+                await self._release_call_id(call_id)
+                raise
+
+            return ToolMessage(
+                content=output.to_content(),
+                tool_call_id=call_id,
+                name=name,
+            )
+
+        if isinstance(selected_tool, type) and issubclass(selected_tool, SyncTool):
+            tool_input = selected_tool.input_type.model_validate(args)
+            await self._reserve_call_id(call_id)
+
+            try:
+                async with self._state_lock:
+                    output = await selected_tool.ainvoke(
+                        tool_input,
+                        self.state,
+                    )
+
+                finished = Finished(content=output)
+                await self._store_run(
+                    call_id,
+                    ToolRun(result=finished),
+                )
+            except BaseException:
+                await self._release_call_id(call_id)
+                raise
+
+            return ToolMessage(
+                content=output.to_content(),
+                tool_call_id=call_id,
+                name=name,
+            )
+
+        # AsyncTool 的调用逻辑
+        if isinstance(selected_tool, type) and issubclass(selected_tool, AsyncTool):
+            tool_input = selected_tool.input_type.model_validate(args)
+            tool_state = selected_tool.state_type(call_id=call_id)
+
+            await self._reserve_call_id(call_id)
+
+            try:
+                async with self._state_lock:
+                    initial = await selected_tool.aemit_initial(
+                        call_id,
+                        tool_input,
+                        tool_state,
+                        self.state,
+                    )
+
+                if not isinstance(initial, Running):
+                    raise TypeError("AsyncTool.aemit_initial() must return Running")
+                if (
+                    not isinstance(initial.content, str)
+                    or call_id not in initial.content
+                ):
+                    raise ValueError(
+                        "AsyncTool initial content must contain its tool call id"
+                    )
+
+                run = AsyncToolRun(
+                    result=initial,
+                    tool_class=selected_tool,
+                    tool_input=tool_input,
+                    tool_state=tool_state,
+                    subscribed=selected_tool.subscribe_by_default,
+                    running=True,
+                )
+                await self._store_run(call_id, run)
+            except BaseException:
+                await self._release_call_id(call_id)
+                raise
+
+            try:
+                await self._start_async_run(call_id, run)
+            except BaseException as exc:
+                run.error = exc
+                run.running = False
+                raise
+
+            return ToolMessage(
+                content=initial.content,
+                tool_call_id=call_id,
+                name=name,
+            )
+
+        raise NotImplementedError("Native tool invocation is not implemented yet")
+
+    def invoke(self, tool_call: ToolCall) -> ToolMessage:
+        """从同步上下文调用一个同步工具。
+
+        异步工具需要持续运行的事件循环来消费后续更新，因此必须通过
+        ``ainvoke`` 调用。已有事件循环的调用方也应直接等待 ``ainvoke``。
+        """
+
+        name = str(tool_call.get("name", "") or "")
+        if not name:
+            raise ValueError("ToolCall must have a name")
+
+        selected_tool = self._name_to_tool.get(name)
+        if selected_tool is None:
+            raise ValueError(f"Unknown tool: {name}")
+        if isinstance(selected_tool, type) and issubclass(
+            selected_tool,
+            AsyncTool,
+        ):
+            raise RuntimeError(
+                "AsyncTool must be invoked with await ToolEngine.ainvoke()"
+            )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.ainvoke(tool_call))
+        raise RuntimeError(
+            "ToolEngine.invoke() cannot run inside an active event loop; "
+            "use await ToolEngine.ainvoke()"
+        )
+
+    async def _consume_async_updates(
+        self,
+        call_id: str,
+    ) -> None:
+        """持续消费一次异步工具调用的更新。"""
+
+        run = self._id_to_tool_runs.get(call_id)
+        if not isinstance(run, AsyncToolRun):
+            raise RuntimeError(f"Async tool run not found: {call_id}")
+
+        updates = run.tool_class.aemit_updates(
+            run.tool_input,
+            run.tool_state,
+            self.state,
+        )
+        try:
+            async for result in updates:
+                if not isinstance(result, (Running, Finished)):
+                    raise TypeError(
+                        "AsyncTool.aemit_updates() must yield Running or Finished"
+                    )
+                if (
+                    isinstance(result, Finished)
+                    and not isinstance(result.content, run.tool_class.output_type)
+                ):
+                    raise TypeError(
+                        "AsyncTool Finished content must match its output_type"
+                    )
+
+                run.result = result
+                if isinstance(result, Finished):
+                    return
+
+            raise RuntimeError(
+                f"Async tool {call_id} ended without a Finished result"
+            )
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            run.error = exc
+            raise
+        finally:
+            run.running = False
+
+    @staticmethod
+    def _consume_task_exception(task: asyncio.Task[None]) -> None:
+        """读取后台任务异常，避免产生未处理任务警告。"""
+
+        if not task.cancelled():
+            task.exception()
+
+    async def shutdown(self) -> None:
+        """关闭工具引擎，取消所有正在运行的异步工具调用。"""
+
+        async with self._runs_lock:
+            if self._closed:
+                return
+            self._closed = True
+            runs = [
+                run
+                for run in self._id_to_tool_runs.values()
+                if isinstance(run, AsyncToolRun)
+            ]
+
+        async def stop_run(run: AsyncToolRun) -> None:
+            if not run.running:
+                return
+            try:
+                async with self._state_lock:
+                    await run.tool_class.astop(
+                        run.tool_input,
+                        run.tool_state,
+                        self.state,
+                    )
+            except BaseException as exc:
+                run.error = exc
+            finally:
+                if run.task is not None and not run.task.done():
+                    run.task.cancel()
+                run.running = False
+
+        await asyncio.gather(*(stop_run(run) for run in runs), return_exceptions=True)
+        tasks = [run.task for run in runs if run.task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 __all__ = [
     "AsyncTool",
     "Finished",
@@ -462,4 +857,7 @@ __all__ = [
     "ToolResult",
     "ToolState",
     "Tool",
+    "ToolRun",
+    "AsyncToolRun",
+    "ToolEngine",
 ]
