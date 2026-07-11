@@ -122,6 +122,10 @@ class ExperimentalAgent(Agent):
             state={},
         )
         self.model_with_tools = self.tool_engine.bind(self.model)
+        self._human_input_finished = True
+        self._last_partial_human_text = ""
+        self._active_partial_human_index: int | None = None
+        self._active_partial_human_prefix = ""
         self._async_tool_update_queue: asyncio.Queue[AgentOutput] = asyncio.Queue()
         self.tool_engine.on_async_tool_update(self._on_async_tool_update)
 
@@ -221,8 +225,53 @@ class ExperimentalAgent(Agent):
                 yield generated_item
             yield AgentTurnBoundary()
 
+    def _append_or_update_partial_human_message(
+        self,
+        text: str,
+        *,
+        final: bool,
+    ) -> None:
+        if not text:
+            self._human_input_finished = final
+            if final:
+                self._active_partial_human_index = None
+                self._active_partial_human_prefix = ""
+                self._last_partial_human_text = ""
+            return
+        messages = self._chat_history.messages
+        active_message_is_last = (
+            self._active_partial_human_index is not None
+            and self._active_partial_human_index == len(messages) - 1
+            and isinstance(messages[-1], HumanMessage)
+        )
+        if active_message_is_last:
+            if text.startswith(self._active_partial_human_prefix):
+                messages[-1].content = text[len(self._active_partial_human_prefix) :]
+            else:
+                messages[-1].content = text
+                self._active_partial_human_prefix = ""
+        else:
+            if self._last_partial_human_text and text.startswith(
+                self._last_partial_human_text
+            ):
+                content = text[len(self._last_partial_human_text) :]
+                self._active_partial_human_prefix = self._last_partial_human_text
+            else:
+                content = text
+                self._active_partial_human_prefix = ""
+
+            self._chat_history.append_message(HumanMessage(content=content))
+            self._active_partial_human_index = len(messages) - 1
+        self._last_partial_human_text = text
+        self._human_input_finished = final
+
+        if final:
+            self._active_partial_human_index = None
+            self._active_partial_human_prefix = ""
+            self._last_partial_human_text = ""
+
     async def _handle_asr_final(self, asr_text: str) -> AsyncIterator[AgentOutput]:
-        self._chat_history.append_message(HumanMessage(content=asr_text))
+        self._append_or_update_partial_human_message(asr_text, final=True)
         async for item in self._stream_messages():
             yield item
         yield AgentTurnBoundary()
@@ -242,6 +291,7 @@ class ExperimentalAgent(Agent):
 
     # backchannel
     async def _handle_asr_partial(self, asr_text: str) -> AsyncIterator[AgentOutput]:
+        self._append_or_update_partial_human_message(asr_text, final=False)
         if self.backchannel_model is None or self.backchannel_source_dir is None:
             return
         # remove prefix from asr text to avoid repeated backchannel for the same content
@@ -364,6 +414,8 @@ class ExperimentalAgent(Agent):
             tool_message=tool_message,
             messages=self._chat_history.messages,
         )
+        if not self._human_input_finished:
+            return
         self._async_tool_update_queue.put_nowait(
             build_tool_call_result(
                 tool_call=tool_call,
