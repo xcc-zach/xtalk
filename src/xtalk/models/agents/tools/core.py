@@ -750,6 +750,23 @@ class ToolEngine:
         ]
         return model.bind_tools(bindable_tools)
 
+    def bind_without_tool_calls(
+        self,
+        model: BaseChatModel,
+    ) -> BaseChatModel | Runnable[Any, Any]:
+        """Bind all tool schemas while preventing model-initiated calls."""
+
+        if not self.tools:
+            return model
+        bindable_tools = [
+            self._to_bindable_tool(tool)
+            for tool in self.tools
+        ]
+        return model.bind_tools(
+            bindable_tools,
+            tool_choice="none",
+        )
+
     def on_async_tool_update(
         self,
         callback: Callable[[ToolCall, ToolMessage], None],
