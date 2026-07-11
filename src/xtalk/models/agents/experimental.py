@@ -1,5 +1,17 @@
-from .interfaces import Agent, AgentContext, AgentOutput, ChatHistory
+from .interfaces import (
+    Agent,
+    AgentContext,
+    AgentOutput,
+    AgentTurnBoundary,
+    ChatHistory,
+)
 from .tools.utils import build_tool_call_result
+from .tools import (
+    AsyncTool,
+    SyncTool,
+    Tool,
+    ToolEngine,
+)
 from langchain.chat_models.base import BaseChatModel
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import (
@@ -62,7 +74,7 @@ class ExperimentalAgent(Agent):
         model: BaseChatModel | dict[str, Any],
         backchannel_model: BaseChatModel | dict[str, Any] | None = None,
         backchannel_source_dir: str | Path | None = None,
-        tools: list[BaseTool | Callable[[], BaseTool]] | None = None,
+        tools: list[Tool | Callable[[], Tool]] | None = None,
         system_prompt: str = "",
         proactive: bool = True,
     ) -> None:
@@ -76,7 +88,7 @@ class ExperimentalAgent(Agent):
             Optional model used to judge backchannel insertion.
         backchannel_source_dir : str | Path | None, optional
             Directory containing backchannel assets.
-        tools : list[BaseTool | Callable[[], BaseTool]] | None, optional
+        tools : list[Tool | Callable[[], Tool]] | None, optional
             Optional tool instances or factories.
         system_prompt : str, optional
             Additional system prompt appended after the base prompt.
@@ -104,7 +116,14 @@ class ExperimentalAgent(Agent):
         )
 
         self._base_tools = tools
-        self.tools = self._init_tools(tools) if tools else []
+        self.tools = self._init_tools(tools or [])
+        self.tool_engine = ToolEngine(
+            tools=self.tools,
+            state={},
+        )
+        self.model_with_tools = self.tool_engine.bind(self.model)
+        self._async_tool_update_queue: asyncio.Queue[AgentOutput] = asyncio.Queue()
+        self.tool_engine.on_async_tool_update(self._on_async_tool_update)
 
         # every time remove this prefix before judging backchannel
         self._already_backchanneled_text = ""
@@ -181,24 +200,32 @@ class ExperimentalAgent(Agent):
     ###
 
     async def _loop_runner(self) -> AsyncIterator[AgentOutput]:
+        # greeting: AI take initiative to call user on session start
+        if self.proactive and len(self.messages) == 1:
+            self._chat_history.append_message(HumanMessage(content="你好。"))
+            collector = TextCollector()
+            async for item in self._stream_and_collect_text(
+                self._stream_greeting(), collector
+            ):
+                yield item
+            yield AgentTurnBoundary()
+
         while True:
-            # greeting: AI take initiative to call user on session start
-            if self.proactive and len(self.messages) == 1:
-                self._chat_history.append_message(HumanMessage(content="你好。"))
-                collector = TextCollector()
-                async for item in self._stream_and_collect_text(
-                    self._stream_greeting(), collector
-                ):
-                    yield item
-                # since this should only be triggered once and no other logic in the loop, break temporarily
-                break
-            # avoid blocking the event loop
-            await asyncio.sleep(0.2)
+            item = await self._async_tool_update_queue.get()
+            yield item
+
+            while self._asr_final_response_generating:
+                await asyncio.sleep(0.05)
+
+            async for generated_item in self._stream_messages():
+                yield generated_item
+            yield AgentTurnBoundary()
 
     async def _handle_asr_final(self, asr_text: str) -> AsyncIterator[AgentOutput]:
         self._chat_history.append_message(HumanMessage(content=asr_text))
         async for item in self._stream_messages():
             yield item
+        yield AgentTurnBoundary()
         # reset backchannel state
         self._already_backchanneled_text = ""
         self._turn_already_to_backchannel_response = {}
@@ -283,11 +310,10 @@ class ExperimentalAgent(Agent):
                 yield text
 
     async def _stream_messages(self) -> AsyncIterator[AgentOutput]:
-        model_with_tools = self.model.bind_tools(self.tools) if self.tools else self.model
         while True:
             response_message = AIMessage(content="")
             gathered = None
-            async for chunk in model_with_tools.astream(self.messages):
+            async for chunk in self.model_with_tools.astream(self.messages):
                 text = self.content_to_text(chunk.content)
                 if text:
                     response_message.content += text
@@ -306,12 +332,44 @@ class ExperimentalAgent(Agent):
             self._chat_history.append_message(response_message)
             for tool_call in tool_calls:
                 yield tool_call
-                tool_result = await self._invoke_tool(tool_call)
-                self._chat_history.append_message(tool_result)
+                try:
+                    tool_result = await self.tool_engine.ainvoke_and_append(
+                        tool_call,
+                        self._chat_history.messages,
+                    )
+                except Exception as exc:
+                    tool_result = ToolMessage(
+                        content=f"Error invoking tool: {exc}",
+                        tool_call_id=tool_call["id"],
+                        name=tool_call["name"],
+                    )
+                    ToolEngine.append_tool_message(
+                        tool_call,
+                        tool_result,
+                        self._chat_history.messages,
+                    )
                 yield build_tool_call_result(
                     tool_call=tool_call,
                     result_content=str(tool_result.content),
                 )
+
+    def _on_async_tool_update(
+        self,
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+    ) -> None:
+        """Save an asynchronous tool update and notify the agent loop."""
+        ToolEngine.append_tool_message(
+            tool_call=tool_call,
+            tool_message=tool_message,
+            messages=self._chat_history.messages,
+        )
+        self._async_tool_update_queue.put_nowait(
+            build_tool_call_result(
+                tool_call=tool_call,
+                result_content=str(tool_message.content),
+            )
+        )
 
     def _load_backchannel_audio(self, backchannel_content: str) -> bytes | None:
         map_path = self.backchannel_source_dir / "map.json"
@@ -340,30 +398,29 @@ class ExperimentalAgent(Agent):
 
     # Tools
     @staticmethod
-    def _init_tools(tools: list[BaseTool | Callable[[], BaseTool]]) -> list[BaseTool]:
-        initialized_tools = []
-        for tool in tools:
-            if isinstance(tool, BaseTool):
-                initialized_tools.append(tool)
-            elif callable(tool):
-                initialized_tools.append(tool())
-        return initialized_tools
+    def _init_tools(
+        tools: list[Tool | Callable[[], Tool]],
+    ) -> list[Tool]:
+        """Initialize tool instances, native tool classes, and factories."""
 
-    async def _invoke_tool(
-        self,
-        tool_call: ToolCall,
-    ):
-        tool = next((t for t in self.tools if t.name == tool_call["name"]), None)
-        if not tool:
-            return ToolMessage(
-                content=f"Tool {tool_call['name']} not found",
-                tool_call_id=tool_call["id"],
-            )
-        try:
-            result: ToolMessage = await tool.ainvoke(tool_call["args"])
-            return result
-        except Exception as e:
-            return ToolMessage(
-                content=f"Error invoking tool {tool_call['name']}: {str(e)}",
-                tool_call_id=tool_call["id"],
-            )
+        initialized_tools: list[Tool] = []
+        for tool_item in tools:
+            if isinstance(tool_item, BaseTool):
+                initialized_tools.append(tool_item)
+                continue
+            if (
+                isinstance(tool_item, type)
+                and issubclass(tool_item, (AsyncTool, SyncTool))
+            ):
+                initialized_tools.append(tool_item)
+                continue
+            if callable(tool_item):
+                initialized_tool = tool_item()
+                if isinstance(initialized_tool, BaseTool) or (
+                    isinstance(initialized_tool, type)
+                    and issubclass(initialized_tool, (SyncTool, AsyncTool))
+                ):
+                    initialized_tools.append(initialized_tool)
+                    continue
+            raise TypeError(f"Unsupported tool: {tool_item!r}")
+        return initialized_tools
