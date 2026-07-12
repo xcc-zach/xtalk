@@ -23,7 +23,12 @@ class AgentContext(TypedDict):
     data: dict[str, Any]
 
 
-AgentOutput = Union[str, ToolCall, ToolCallResult]
+@dataclass(frozen=True)
+class AgentTurnBoundary:
+    """Mark the end of one agent response segment."""
+
+
+AgentOutput = Union[str, ToolCall, ToolCallResult, AgentTurnBoundary]
 T = TypeVar("T")
 
 
