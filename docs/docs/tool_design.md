@@ -117,6 +117,7 @@ types.
 ```python
 from collections.abc import Iterator
 from dataclasses import dataclass
+import time
 
 from xtalk.models.agents.tools import (
     AsyncTool,
@@ -137,6 +138,8 @@ class SearchInput(ToolInput):
 @dataclass
 class SearchState(ToolState):
     pages_done: int = 0
+    subscribed: bool = False
+    stopped: bool = False
 
 
 class SearchOutput(ToolOutput):
@@ -167,11 +170,54 @@ class SearchTool(AsyncTool):
         global_state: ToolEngineState,
     ) -> Iterator[ToolResult[SearchOutput]]:
         del global_state
+        time.sleep(2)  # Simulate slow retrieval; the async bridge runs this in a thread.
         tool_state.pages_done = 1
         yield Running(content="Searching the first page")
+        time.sleep(2)
         yield Finished(
             content=SearchOutput(content=f"Search complete: {tool_input.query}")
         )
+
+    # Optional hooks for status, stopping, and subscription state.
+    @classmethod
+    def status(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> str:
+        del tool_input, global_state
+        return f"Retrieved {tool_state.pages_done} pages"
+
+    @classmethod
+    def stop(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.stopped = True
+
+    @classmethod
+    def subscribe(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.subscribed = True
+
+    @classmethod
+    def unsubscribe(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.subscribed = False
 ```
 
 `emit_initial()` must return `Running` quickly. The current protocol requires
@@ -327,9 +373,10 @@ the current tool-call chain and a later loop cannot consume the same result.
 When several updates arrive before generation starts, every downstream update
 event is preserved while the model generations are coalesced into one. An
 update arriving during generation triggers another generation afterward.
-User requests use the tool-bound model. Proactive reports triggered by
-background updates use the model without bound tools, preventing it from
-calling internal notification or status tools based on synthetic history.
+User requests use a model that may call tools. Proactive reports triggered by
+background updates still bind every tool schema so the model can interpret
+system ToolCalls in history, but set `tool_choice="none"` to prevent tool calls
+during that generation.
 
 ### Concurrent ASR partials
 

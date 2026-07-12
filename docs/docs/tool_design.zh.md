@@ -111,6 +111,7 @@ class AddTool(SyncTool):
 ```python
 from collections.abc import Iterator
 from dataclasses import dataclass
+import time
 
 from xtalk.models.agents.tools import (
     AsyncTool,
@@ -131,6 +132,8 @@ class SearchInput(ToolInput):
 @dataclass
 class SearchState(ToolState):
     pages_done: int = 0
+    subscribed: bool = False
+    stopped: bool = False
 
 
 class SearchOutput(ToolOutput):
@@ -161,11 +164,54 @@ class SearchTool(AsyncTool):
         global_state: ToolEngineState,
     ) -> Iterator[ToolResult[SearchOutput]]:
         del global_state
+        time.sleep(2)  # 模拟耗时检索；默认异步桥接会在线程中执行此方法
         tool_state.pages_done = 1
         yield Running(content="正在检索第一页")
+        time.sleep(2)
         yield Finished(
             content=SearchOutput(content=f"搜索完成：{tool_input.query}")
         )
+
+    # 可选 Hook：查询状态、停止任务，以及同步订阅状态。
+    @classmethod
+    def status(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> str:
+        del tool_input, global_state
+        return f"已检索 {tool_state.pages_done} 页"
+
+    @classmethod
+    def stop(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.stopped = True
+
+    @classmethod
+    def subscribe(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.subscribed = True
+
+    @classmethod
+    def unsubscribe(
+        cls,
+        tool_input: SearchInput,
+        tool_state: SearchState,
+        global_state: ToolEngineState,
+    ) -> None:
+        del tool_input, global_state
+        tool_state.subscribed = False
 ```
 
 `emit_initial()` 必须快速返回 `Running`，且当前协议要求 `content` 包含
@@ -306,8 +352,9 @@ ID，都会抛出 `ValueError`。
 
 当多条工具更新在模型开始生成前连续到达时，Agent 会保留每条下游事件，
 但合并成一次模型生成。生成过程中到达的新更新会触发下一次生成。
-用户请求使用绑定工具的模型；后台更新触发的主动汇报使用不绑定工具的模型，
-避免模型根据历史中的系统 ToolCall 再次调用内部通知或状态工具。
+用户请求使用允许调用工具的模型。后台更新触发主动汇报时仍会绑定完整工具
+schema，使模型能够正确理解历史中的系统 ToolCall，但通过 `tool_choice="none"`
+禁止模型在该轮主动调用工具。
 
 ### 与 ASR partial 并发
 

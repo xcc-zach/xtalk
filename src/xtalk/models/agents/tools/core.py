@@ -754,7 +754,18 @@ class ToolEngine:
         self,
         model: BaseChatModel,
     ) -> BaseChatModel | Runnable[Any, Any]:
-        """Bind all tool schemas while preventing model-initiated calls."""
+        """Bind tool schemas while preventing model-initiated calls.
+
+        Parameters
+        ----------
+        model : BaseChatModel
+            Chat model that should receive the registered tool schemas.
+
+        Returns
+        -------
+        BaseChatModel or Runnable[Any, Any]
+            Model binding that exposes the schemas with tool choice disabled.
+        """
 
         if not self.tools:
             return model
