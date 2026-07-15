@@ -71,6 +71,9 @@ class EchoAgent(Agent):
 - `async_accept` 是运行时主要使用的异步入口。
 - `accept` 桥接到 `async_accept`，用于兼容同步调用路径。
 - `clone()` 要返回新会话可用的模型实例，避免会话之间共享可变状态。
+- 普通输出流结束时会自动结束本轮回复；如果 `loop` 启动的输出流需要持续运行，
+  每次回复后应额外输出 `AgentTurnBoundary()`。它用于触发 TTS flush 和
+  response finish，不会结束输出流本身。
 
 ## 3. 让配置使用新模型
 

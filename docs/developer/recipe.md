@@ -86,7 +86,17 @@ The `accept` method subscribes to external inputs and starts the related process
 
 The `loop` event is triggered once when the connection is established. It can be used for any proactive logic, or to start an output loop. [`src/xtalk/models/agents/experimental.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/experimental.py) uses it to trigger proactive dialogue.
 
-`AgentOutput` can be a string, a tool call, or a tool call result. After a tool call returns, the `Manager` can use it to trigger related logic. For example, in [`src/xtalk/serving/modules/llm_agent_context_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py), the `direct_audio` tool call triggers downstream logic in [`src/xtalk/serving/modules/direct_audio_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py) to generate directly playable audio events.
+`AgentOutput` can be a string, a tool call, a tool call result, or an
+`AgentTurnBoundary`. After a tool call returns, the `Manager` can use it to
+trigger related logic. For example, in
+[`src/xtalk/serving/modules/llm_agent_context_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py),
+the `direct_audio` tool call triggers downstream logic in
+[`src/xtalk/serving/modules/direct_audio_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)
+to generate directly playable audio events.
+
+Finite output streams finish the current response when their iterator ends.
+Long-lived streams started by `loop` should yield `AgentTurnBoundary()` after
+each response to trigger TTS flush and response finish.
 
 From a design perspective, `Agent` is expected to be the main reasoning core of the whole system and to integrate information from other components into output.
 
