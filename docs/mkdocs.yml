@@ -61,6 +61,7 @@ plugins:
             'VAD Design': VAD设计
             'Turn Detector Design': Turn Detector设计
             'Model clone() and reset()': 模型对象的clone()与reset()语义
+            'Tool Design': 工具调用
             # Tabs under API
             'Client': 客户端
             'Server': 服务端
@@ -82,6 +83,7 @@ nav:
       - 'Overall Architecture': docs/system_design.md
       - 'Supported Models': docs/supported_models.md
       - 'Service Configuration': docs/service_config.md
+      - 'Tool Design': docs/tool_design.md
       - 'ASR Design': docs/asr_design.md
       - 'TTS Design': docs/tts_design.md
       - 'Speech Enhancer Design': docs/speech_enhancer_design.md

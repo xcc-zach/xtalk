@@ -7,7 +7,7 @@ import asyncio
 from typing import Any, AsyncIterator
 
 from ...models import Agent, Models
-from ...models.agents import AgentOutput
+from ...models.agents import AgentOutput, AgentTurnBoundary
 from ...log_utils import logger
 from ..event_bus import EventBus
 from ..events import (
@@ -113,6 +113,9 @@ class LLMAgentConsumptionManager(Manager):
             return
 
         agent.model = new_model
+        if hasattr(agent, "tool_engine"):
+            agent.model_with_tools = agent.tool_engine.bind(new_model)
+            return
         if not hasattr(agent, "_model_with_tools"):
             return
 
@@ -136,7 +139,7 @@ class LLMAgentConsumptionManager(Manager):
         iterator = event.stream.__aiter__()
         async with self._streams_lock:
             if not self._active_streams:
-                self._reset_turn_output_state_locked()
+                self._reset_turn_output_state()
 
             task = asyncio.create_task(
                 self._consume_stream(
@@ -240,6 +243,7 @@ class LLMAgentConsumptionManager(Manager):
                 self.session_id,
             )
             await self._publish_error("llm_stream_error", str(exc))
+            await self._finish_current_turn()
         finally:
             await self._finalize_stream(
                 task=task,
@@ -256,6 +260,10 @@ class LLMAgentConsumptionManager(Manager):
 
         async with self._output_lock:
             if task not in self._active_streams:
+                return
+
+            if isinstance(item, AgentTurnBoundary):
+                await self._finish_current_turn_locked()
                 return
 
             if not self._turn_first_chunk_generated:
@@ -304,26 +312,37 @@ class LLMAgentConsumptionManager(Manager):
         """Finalize one stream and emit turn-finish events when it is the last."""
 
         try:
+            should_finish = False
             async with self._streams_lock:
                 popped_iterator = self._active_streams.pop(task, None)
                 if popped_iterator is None:
                     return
-                if self._active_streams:
-                    return
-
-                final_text = self._turn_accumulated_text
-                tts_started = self._turn_tts_started
-                has_text_output = bool(final_text) or tts_started
-                self._reset_turn_output_state_locked()
-                if not has_text_output:
-                    return
-                if tts_started:
-                    await self.event_bus.publish(
-                        TurnTTSFlushRequested(session_id=self.session_id)
-                    )
-                await self._publish_llm_response_finish(final_text)
+                should_finish = not self._active_streams
+            if should_finish:
+                await self._finish_current_turn()
         finally:
             await self._close_iterator(iterator)
+
+    async def _finish_current_turn(self) -> None:
+        """Finish the current shared turn under the output lock."""
+
+        async with self._output_lock:
+            await self._finish_current_turn_locked()
+
+    async def _finish_current_turn_locked(self) -> None:
+        """Flush and finish the current turn while holding the output lock."""
+
+        final_text = self._turn_accumulated_text
+        tts_started = self._turn_tts_started
+        has_text_output = bool(final_text) or tts_started
+        self._reset_turn_output_state()
+        if not has_text_output:
+            return
+        if tts_started:
+            await self.event_bus.publish(
+                TurnTTSFlushRequested(session_id=self.session_id)
+            )
+        await self._publish_llm_response_finish(final_text)
 
     def _detach_all_streams_locked(
         self,
@@ -334,11 +353,11 @@ class LLMAgentConsumptionManager(Manager):
         iterators = list(self._active_streams.values())
         self._active_streams.clear()
         self._resume_event.set()
-        self._reset_turn_output_state_locked()
+        self._reset_turn_output_state()
         return tasks, iterators
 
-    def _reset_turn_output_state_locked(self) -> None:
-        """Reset per-turn shared output state while holding ``_streams_lock``."""
+    def _reset_turn_output_state(self) -> None:
+        """Reset the shared per-turn output state."""
 
         self._turn_accumulated_text = ""
         self._turn_first_chunk_generated = False
@@ -444,3 +463,7 @@ class LLMAgentConsumptionManager(Manager):
             tasks, iterators = self._detach_all_streams_locked()
         await self._cancel_tasks(tasks)
         await self._close_iterators(iterators)
+
+        agent = self.models.get(Agent)
+        if agent is not None and hasattr(agent, "tool_engine"):
+            await agent.tool_engine.shutdown()
