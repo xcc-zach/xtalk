@@ -76,7 +76,15 @@
         <|user|>今天天气<\|user|><|ai|>The weather<\|ai|><|user|>真不错<\|user|><|ai|>today is<\|ai|>
         ```
     - 对于工具调用与工具信息，生成后直接插入对话历史
-
+- 控制流程
+    - ASR delta到来（这部分来自X-Talk ASRResultPartial事件，但是这个事件携带的是累计文本，需要支持增量文本）
+      1. 更新轮次检测器历史
+      2. 同时更新对话LLM历史
+      3. 轮次检测器产出轮次信号
+      4. 对话LLM根据轮次信号开始/结束生成（3. 4. 控制逻辑X-Talk已支持；第4步其他模型也会订阅轮次信号，例如ASR会根据stop信号重置状态）
+    - TTS确认播放的文本到来（这部分来自X-Talk ResponseUpdate事件）
+      1. 更新轮次检测器历史
+      2. 同时更新对话LLM历史
 ### 替代方案：两个模型做成一个
 
 微调的LLM认为不需要生成时直接输出一个end，代码检测到end时停止生成，但是end从不进对话历史；end表示listening时继续listen，或者结束speaking转到listen；listen到speak由LLM生成end以外内容触发
