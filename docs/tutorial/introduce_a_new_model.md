@@ -71,6 +71,10 @@ Notes:
 - `async_accept` is the main async runtime entrypoint.
 - `accept` bridges to `async_accept` for synchronous compatibility.
 - `clone()` should return a model instance suitable for a new session, avoiding shared mutable state across sessions.
+- Finite output streams finish the current response when their iterator ends.
+  A long-lived stream started by `loop` should also yield
+  `AgentTurnBoundary()` after each response. This triggers TTS flush and
+  response finish without ending the stream itself.
 
 ## 3. Use the New Model in Config
 
