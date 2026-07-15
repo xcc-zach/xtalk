@@ -108,6 +108,10 @@
 - 适配回合检测的微调LLM编写LLM Agent接口的实现接入
 
 
+### benchmarking
+
+隔离部分训练数据，人工标记complete/incomplete interrupt/backchannel信号作为评测集
+
 ## 4. 风险
 
 - 对话数据如何清洗打标需进一步明确
@@ -119,6 +123,7 @@
 * [ ] 回合检测模型
 * [ ] 适配回合检测模型的微调LLM
 * [ ] 接入X-Talk可运行demo
+* [ ] benchmarking
 * [ ] 可选进阶：回合检测与对话一体模型
 * [ ] 进阶：带声学辅助信息的微调LLM
 * [ ] 进阶：带声学辅助信息的TTS
