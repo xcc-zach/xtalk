@@ -73,7 +73,10 @@ async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput
 
 `accept`方法订阅外部输入并启动相关处理逻辑；`AgentContext`来自[`src/xtalk/serving/modules/llm_agent_context_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)，目前较为稳定的类型有`asr_partial`、`asr_final`、`loop`。其中`loop`在连接建立时触发一次，可以用于处理任何主动触发逻辑，或者是启动输出循环。[`src/xtalk/models/agents/experimental.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/experimental.py)用于触发主动对话。
 
-`AgentOutput`为字符串、工具调用或工具调用结果；工具调用返回后可用于`Manager`触发相关逻辑，例如[`src/xtalk/serving/modules/llm_agent_context_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)中`direct_audio`的工具调用触发下游[`src/xtalk/serving/modules/direct_audio_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)生成直接播放音频的事件。
+`AgentOutput`可以是字符串、工具调用、工具调用结果或 `AgentTurnBoundary`。工具调用返回后可用于`Manager`触发相关逻辑，例如[`src/xtalk/serving/modules/llm_agent_context_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/llm_agent_context_manager.py)中`direct_audio`的工具调用触发下游[`src/xtalk/serving/modules/direct_audio_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/direct_audio_manager.py)生成直接播放音频的事件。
+
+普通输出流结束时会自动结束本轮回复；由 `loop` 启动的长期输出流应在每次回复
+后输出 `AgentTurnBoundary()`，用于触发 TTS flush 和 response finish。
 
 `Agent`从设计哲学上期望成为整个系统的思考核心，负责整合其他块的信息输出。
 
