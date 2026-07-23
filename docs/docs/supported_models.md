@@ -61,6 +61,41 @@ A high-performance speech recognition framework, and more. It can run many speec
 
 </details>
 
+### Forced Alignment
+
+**Name in config**: `force_aligner`
+
+The force aligner maps confirmed TTS playback time back to character or word
+positions in the assistant response, so the frontend can track which text has
+actually been spoken.
+
+<details markdown="1">
+<summary>Qwen3ForceAligner</summary>
+
+**Dependency:** `pip install "xtalk[qwen3-force-aligner] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**Path:** [`src/xtalk/models/force_aligner/qwen3_force_aligner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/force_aligner/qwen3_force_aligner.py)
+
+**Config example:**
+
+```json
+{
+  "force_aligner": {
+    "type": "Qwen3ForceAligner",
+    "params": {
+      "model": "Qwen/Qwen3-ForcedAligner-0.6B",
+      "language": "Chinese",
+      "device_map": "auto",
+      "dtype": "bfloat16"
+    }
+  }
+}
+```
+
+[Model Repository](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B)
+
+</details>
+
 ### Voice Activity Detection
 
 **Name in config**: `vad`

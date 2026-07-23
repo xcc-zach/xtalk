@@ -149,6 +149,11 @@ turn-sense = [
   "aiohttp",
   "numpy",
 ]
+qwen3-force-aligner = [
+  "qwen-asr",
+  "torch",
+  "numba>=0.60",
+]
 example = [
   "pypdf",
   "fastapi==0.128.0",

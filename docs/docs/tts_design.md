@@ -93,6 +93,18 @@ Therefore:
 - It is enough to ensure that the output PCM audio is continuous and in the correct order.
 - Even if the model naturally emits very large chunks, it will not break the frontend playback protocol, because the service layer will split them again.
 
+## TTS Playback Text Tracking
+
+`TTSPlaybackManager` advances played-audio time from frontend `TTSChunkPlayed`
+confirmations and publishes `ResponseUpdate`. When a `force_aligner` model is
+configured, `TTSManager` buffers each complete synthesized sentence instead of
+sending it immediately. `TTSPlaybackManager` aligns that exact, speed-adjusted
+PCM before the sentence is released to the frontend, then uses the returned
+character or word timestamps to compute the spoken text prefix. This adds
+pre-playback latency but guarantees alignment is ready before playback
+confirmations arrive. If alignment fails, the manager uses the configured
+audio-ratio fallback behavior.
+
 ## `set_voice` and `set_emotion` (Experimental Interfaces)
 
 These two methods are optional control interfaces invoked by `TTSManager` through events:
