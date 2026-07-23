@@ -7,7 +7,11 @@ const outputMap: ActionToFunctionMap = {
         await outputAudioSession.pause();
     },
     "stop_tts": async (data, websocket, conversation, outputAudioSession) => {
-        await outputAudioSession.stop();
+        const result = await outputAudioSession.stop();
+        websocket.sendJson({
+            action: "tts_playback_stopped",
+            played_audio_ms: result.unconfirmedPlayedMs,
+        });
     },
     "resume_tts": async (data, websocket, conversation, outputAudioSession) => {
         await outputAudioSession.resume();
