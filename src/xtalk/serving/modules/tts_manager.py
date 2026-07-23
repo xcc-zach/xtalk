@@ -32,7 +32,13 @@ from ..events import (
 )
 from ..events import TurnTTSTextAppendRequested
 from ..interfaces import Manager
-from ...models import Models, SpeechSpeedController, StreamingTextTTS, TTS
+from ...models import (
+    ForceAligner,
+    Models,
+    SpeechSpeedController,
+    StreamingTextTTS,
+    TTS,
+)
 
 
 class TTSQueueItem(NamedTuple):
@@ -40,6 +46,11 @@ class TTSQueueItem(NamedTuple):
 
     audio_chunk: bytes
     sample_rate: int
+    speed_processed: bool = False
+
+
+class _TTSSynthesisError(RuntimeError):
+    """Signal that one TTS sentence could not produce usable audio."""
 
 
 class TTSManager(Manager):
@@ -97,12 +108,26 @@ class TTSManager(Manager):
         self.speed_controller = self.models.get(SpeechSpeedController)
         self.current_speed: float = 1.0
 
+        force_alignment_config = self.config.get("force_alignment", {})
+        if not isinstance(force_alignment_config, dict):
+            force_alignment_config = {}
+        self._prealign_before_playback = bool(self.models.get(ForceAligner)) and bool(
+            force_alignment_config.get("enabled", True)
+        )
+
         self._resume_event = asyncio.Event()
         self._resume_event.set()
         self._last_chunk_sent_for_tts = False
         self._outstanding_chunk_ms: deque[float] = deque()
         self._outstanding_total_ms = 0.0
         self._outstanding_condition = asyncio.Condition()
+        self._sentence_tasks: set[asyncio.Task[None]] = set()
+        self._sentence_sequence = 0
+        self._next_sentence_to_release = 0
+        self._sentence_release_condition = asyncio.Condition()
+        self._sentence_prepare_semaphore = asyncio.Semaphore(2)
+        self._tts_generation_failure: str | None = None
+
 
     def _ensure_segments_queue(self) -> asyncio.Queue:
         """Ensure a queue exists for sentence segments."""
@@ -370,6 +395,7 @@ class TTSManager(Manager):
         self._last_chunk_sent_for_tts = False
         self._streaming_text = ""
         self._streaming_audio_duration_ms = 0.0
+        self._tts_generation_failure = None
 
         # Stop consumer
         await self._stop_streaming_tts()
@@ -384,6 +410,7 @@ class TTSManager(Manager):
             except asyncio.CancelledError:
                 pass
         self._segments_task = None
+        await self._cancel_sentence_tasks()
 
         # Drain queue
         while True:
@@ -513,7 +540,8 @@ class TTSManager(Manager):
                         # Apply speed control when enabled
                         processed_audio = item.audio_chunk
                         if (
-                            self.speed_controller is not None
+                            not item.speed_processed
+                            and self.speed_controller is not None
                             and self.current_speed != 1.0
                         ):
                             processed_audio = await self.speed_controller.async_process(
@@ -614,55 +642,141 @@ class TTSManager(Manager):
             )
         )
 
+    async def _cancel_sentence_tasks(self) -> None:
+        """Cancel prepared sentences and reset their ordered-release state."""
+
+        tasks = tuple(self._sentence_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._sentence_tasks.clear()
+        async with self._sentence_release_condition:
+            self._sentence_sequence = 0
+            self._next_sentence_to_release = 0
+            self._sentence_release_condition.notify_all()
+
     async def shutdown(self) -> None:
         """Shut down TTS manager and reset state."""
         await self.reset_tts()
 
     async def _add_text_for_tts(self, text: str, *, final: bool) -> None:
-        """Generate TTS audio from text and enqueue sentence segments."""
-        self.pending_sentence_buffer += text
+        """Generate TTS audio and pipeline force-aligned sentence preparation."""
 
+        self.pending_sentence_buffer += text
         sentences, remaining = self._split_text_by_delimiters(
             self.pending_sentence_buffer
         )
-
-        # TODO: split sentence in sentences
         self.pending_sentence_buffer = remaining
 
         if final and self.pending_sentence_buffer.strip():
-            # TODO: split remaining
             sentences.append(self.pending_sentence_buffer.strip())
             self.pending_sentence_buffer = ""
 
-        if len(sentences) > 0 and not self._first_sentence_ready:
+        if sentences and not self._first_sentence_ready:
             self._first_sentence_ready = True
             await self.event_bus.publish(LLMFirstSentence(session_id=self.session_id))
-        for sentence in sentences:
-            await self._enqueue_sentence_stream(sentence)
 
-        # Set the flag AFTER all sentences have been enqueued to avoid a race
-        # where the consumer sees the flag before the last chunks are queued.
+        for sentence in sentences:
+            if self._prealign_before_playback:
+                self._schedule_sentence_preparation(sentence)
+            else:
+                await self._enqueue_sentence_stream(sentence)
+
         if final:
+            if self._prealign_before_playback:
+                await self._wait_for_sentence_tasks()
             self._last_chunk_sent_for_tts = True
 
-    async def _enqueue_sentence_stream(self, sentence: str) -> None:
-        """Run streaming TTS for one sentence and enqueue resulting chunks."""
+    def _schedule_sentence_preparation(self, sentence: str) -> None:
+        """Prepare one force-aligned sentence concurrently and release it in order."""
+
+        sequence = self._sentence_sequence
+        self._sentence_sequence += 1
+        task = asyncio.create_task(
+            self._enqueue_sentence_stream(sentence, sequence=sequence)
+        )
+        self._sentence_tasks.add(task)
+        task.add_done_callback(self._sentence_tasks.discard)
+
+    async def _wait_for_sentence_tasks(self) -> None:
+        """Wait until every scheduled sentence has reached the playback queue."""
+
+        while self._sentence_tasks:
+            await asyncio.gather(
+                *tuple(self._sentence_tasks),
+                return_exceptions=True,
+            )
+
+    async def _enqueue_sentence_stream(
+        self,
+        sentence: str,
+        *,
+        sequence: int | None = None,
+    ) -> None:
+        """Synthesize one sentence and enqueue it after ordered alignment."""
+
         tts_model = self.models.get(TTS)
         if not tts_model:
             await self._publish_error(
                 "tts_model_missing", "TTS model is not configured"
             )
+            await self._skip_sentence_sequence(sequence)
+            return
+        if self._tts_generation_failure is not None:
+            await self._skip_sentence_sequence(sequence)
             return
 
+        sequence_released = False
         try:
-            sample_rate = int(getattr(tts_model, "sample_rate", 48000) or 48000)
-            synthesized_duration_ms = 0.0
-            speed = 1.0
-            if self.speed_controller is not None and self.current_speed != 1.0:
-                speed = max(0.01, float(self.current_speed or 1.0))
-            async for ch in self._synthesize_stream_with_fallback(tts_model, sentence):
-                synthesized_duration_ms += self._chunk_duration_ms(ch, sample_rate)
-                await self.tts_queue.put(TTSQueueItem(ch, sample_rate))
+            async with self._sentence_prepare_semaphore:
+                if self._tts_generation_failure is not None:
+                    raise _TTSSynthesisError(self._tts_generation_failure)
+                sample_rate = int(
+                    getattr(tts_model, "sample_rate", 48000) or 48000
+                )
+                synthesized_duration_ms = 0.0
+                speed = 1.0
+                if (
+                    self.speed_controller is not None
+                    and self.current_speed != 1.0
+                ):
+                    speed = max(0.01, float(self.current_speed or 1.0))
+                buffered_chunks: list[bytes] = []
+                async for ch in self._synthesize_stream_with_fallback(
+                    tts_model,
+                    sentence,
+                ):
+                    synthesized_duration_ms += self._chunk_duration_ms(
+                        ch,
+                        sample_rate,
+                    )
+                    if self._prealign_before_playback:
+                        buffered_chunks.append(ch)
+                    else:
+                        await self.tts_queue.put(TTSQueueItem(ch, sample_rate))
+
+                if synthesized_duration_ms <= 0.0:
+                    raise _TTSSynthesisError("TTS returned no audio data.")
+
+                if self._prealign_before_playback:
+                    playback_chunks = await self._prepare_sentence_audio(
+                        buffered_chunks
+                    )
+                else:
+                    playback_chunks = []
+
+            if self._prealign_before_playback:
+                await self._publish_prepared_sentence(
+                    sequence=sequence,
+                    text=sentence,
+                    chunks=playback_chunks,
+                    sample_rate=sample_rate,
+                )
+                sequence_released = True
+                return
+
             await self.event_bus.publish(
                 TTSTextSynthesized(
                     session_id=self.session_id,
@@ -675,22 +789,106 @@ class TTSManager(Manager):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(
-                "TTS synthesis error: %s - session: %s",
-                e,
-                self.session_id,
+            first_failure = self._tts_generation_failure is None
+            if first_failure:
+                self._tts_generation_failure = str(e)
+                logger.error(
+                    "TTS synthesis failed; blocking remaining sentences in this turn - "
+                    "session: %s, error: %s",
+                    self.session_id,
+                    e,
+                )
+                await self._publish_error("tts_generation_error", str(e))
+            if not sequence_released:
+                await self._skip_sentence_sequence(sequence)
+
+    async def _publish_prepared_sentence(
+        self,
+        *,
+        sequence: int | None,
+        text: str,
+        chunks: list[bytes],
+        sample_rate: int,
+    ) -> None:
+        """Align and enqueue one prepared sentence in original text order."""
+
+        async def publish_and_enqueue() -> None:
+            playback_duration_ms = sum(
+                self._chunk_duration_ms(chunk, sample_rate) for chunk in chunks
             )
-            await self._publish_error("tts_generation_error", str(e))
+            await self.event_bus.publish(
+                TTSTextSynthesized(
+                    session_id=self.session_id,
+                    text=text,
+                    audio_duration=playback_duration_ms,
+                    audio_chunk=b"".join(chunks),
+                    sample_rate=sample_rate,
+                ),
+                wait_for_completion=True,
+            )
+            for chunk in chunks:
+                await self.tts_queue.put(
+                    TTSQueueItem(chunk, sample_rate, speed_processed=True)
+                )
+
+        if sequence is None:
+            await publish_and_enqueue()
+            return
+
+        async with self._sentence_release_condition:
+            await self._sentence_release_condition.wait_for(
+                lambda: sequence == self._next_sentence_to_release
+            )
+            await publish_and_enqueue()
+            self._next_sentence_to_release += 1
+            self._sentence_release_condition.notify_all()
+
+    async def _skip_sentence_sequence(self, sequence: int | None) -> None:
+        """Advance ordered release after one sentence fails to prepare."""
+
+        if sequence is None:
+            return
+        async with self._sentence_release_condition:
+            await self._sentence_release_condition.wait_for(
+                lambda: sequence == self._next_sentence_to_release
+            )
+            self._next_sentence_to_release += 1
+            self._sentence_release_condition.notify_all()
+
+    async def _prepare_sentence_audio(self, chunks: list[bytes]) -> list[bytes]:
+        """Return the exact PCM chunks that will be sent after alignment."""
+
+        if self.speed_controller is None or self.current_speed == 1.0:
+            return chunks
+        return [
+            await self.speed_controller.async_process(chunk, self.current_speed)
+            for chunk in chunks
+        ]
 
     async def _synthesize_stream_with_fallback(self, tts_model: Any, text: str):
         """Call streaming TTS API, falling back to sync methods on failure."""
+
+        yielded_audio = False
         try:
             async for chunk in tts_model.async_synthesize_stream(text):
+                if not chunk:
+                    continue
+                yielded_audio = True
                 yield chunk
             return
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            uses_default_async_wrapper = (
+                type(tts_model).async_synthesize_stream
+                is TTS.async_synthesize_stream
+            )
+            if (
+                yielded_audio
+                or uses_default_async_wrapper
+                or self._is_non_retryable_tts_error(e)
+            ):
+                raise _TTSSynthesisError(str(e)) from e
             logger.warning(
                 "Streaming TTS failed, trying fallback - session: %s, error: %s",
                 self.session_id,
@@ -703,6 +901,8 @@ class TTSManager(Manager):
             try:
                 return list(tts_model.synthesize_stream(text))
             except Exception as err:
+                if self._is_non_retryable_tts_error(err):
+                    raise _TTSSynthesisError(str(err)) from err
                 logger.error(
                     "Synchronous streaming TTS failed - session: %s, error: %s",
                     self.session_id,
@@ -711,16 +911,31 @@ class TTSManager(Manager):
                 try:
                     return [tts_model.synthesize(text)]
                 except Exception as final_err:
-                    logger.error(
-                        "Synchronous TTS fallback failed - session: %s, error: %s",
-                        self.session_id,
-                        final_err,
-                    )
-                    return []
+                    raise _TTSSynthesisError(str(final_err)) from final_err
 
         chunks = await loop.run_in_executor(None, _sync_stream)
         for chunk in chunks:
-            yield chunk
+            if chunk:
+                yield chunk
+
+    @staticmethod
+    def _is_non_retryable_tts_error(error: Exception) -> bool:
+        """Return whether retrying the same TTS request would immediately fail."""
+
+        message = str(error).lower()
+        markers = (
+            "allocationquota",
+            "free tier",
+            "throttling",
+            "rate limit",
+            "ratequota",
+            "invalidapikey",
+            "invalid api key",
+            "authentication",
+            "unauthorized",
+            "insufficient balance",
+        )
+        return any(marker in message for marker in markers)
 
     def _split_text_by_delimiters(self, accumulated_text: str) -> tuple[list[str], str]:
         """Split text by sentence delimiters, returning sentences + residual text."""

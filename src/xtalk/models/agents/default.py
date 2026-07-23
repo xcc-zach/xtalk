@@ -63,6 +63,8 @@ class AgentSession:
 
     messages: list[BaseMessage] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    playback_ai_message: AIMessage | None = field(default=None, repr=False)
+    playback_ai_message_final: bool = True
 
 
 @dataclass
@@ -590,6 +592,7 @@ Caption:
         """
 
         self._session.messages = messages
+        self._reset_playback_message_state()
 
     def _filter_text(self, text: str) -> str:
         """Normalize one response fragment for TTS output."""
@@ -650,6 +653,17 @@ Caption:
         if not isinstance(payload, dict):
             return
 
+        if context_type == "response_update":
+            self._record_playback_response(
+                str(payload.get("text", "") or ""),
+                final=False,
+            )
+        elif context_type == "response_finish":
+            self._record_playback_response(
+                str(payload.get("text", "") or ""),
+                final=True,
+            )
+
         raw_contexts = self._session.metadata.setdefault(_AGENT_CONTEXTS_KEY, {})
         if not isinstance(raw_contexts, dict):
             raw_contexts = {}
@@ -662,6 +676,34 @@ Caption:
         merged = dict(existing)
         merged.update(payload)
         raw_contexts[context_type] = merged
+
+    def _record_playback_response(self, text: str, *, final: bool) -> None:
+        """Record only the assistant text confirmed by frontend playback."""
+
+        if not text:
+            return
+
+        message = self._session.playback_ai_message
+        message_is_active = (
+            message is not None
+            and not self._session.playback_ai_message_final
+            and any(item is message for item in self._session.messages)
+        )
+        current_text = str(message.content) if message_is_active else ""
+        if not message_is_active or not text.startswith(current_text):
+            message = AIMessage(content=text)
+            self._session.messages.append(message)
+        else:
+            message.content = text
+
+        self._session.playback_ai_message = message
+        self._session.playback_ai_message_final = final
+
+    def _reset_playback_message_state(self) -> None:
+        """Forget transient merge state after replacing conversation history."""
+
+        self._session.playback_ai_message = None
+        self._session.playback_ai_message_final = True
 
     def _build_runtime_request(self, context: AgentContext) -> dict[str, Any] | None:
         """Build an internal runtime request from one accepted context update."""
@@ -744,13 +786,11 @@ Caption:
 
         while True:
             response_message = AIMessage(content="")
-            self._session.messages.append(response_message)
 
             gathered = None
             async for chunk in model_with_tools.astream(self._session.messages):
                 text = self._filter_text(str(chunk.content or ""))
                 if text:
-                    response_message.content += text
                     yield text
                 gathered = chunk if gathered is None else gathered + chunk
 
@@ -759,6 +799,7 @@ Caption:
             )
             if tool_calls:
                 response_message.tool_calls = tool_calls
+                self._session.messages.append(response_message)
             if not tool_calls:
                 return
 
@@ -860,6 +901,7 @@ Caption:
                 restored.append(AIMessage(content=content))
 
         self._session.messages = restored
+        self._reset_playback_message_state()
         self._set_system_prompt(self._build_turn_state())
 
     def get_chat_history(self, with_system: bool = False) -> str | None:

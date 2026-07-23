@@ -66,12 +66,16 @@ interface OutputAudioSessionConfig {
     sampleRate: number;
     [key: string]: any;
 }
+interface OutputAudioStopResult {
+    /** Playback time not yet confirmed by completed-chunk callbacks. */
+    unconfirmedPlayedMs: number;
+}
 abstract class BaseOutputAudioSession {
     abstract open(): Promise<void>;
     abstract close(): Promise<void>;
     abstract pause(): Promise<void>;
     abstract resume(): Promise<void>;
-    abstract stop(): Promise<void>;
+    abstract stop(): Promise<OutputAudioStopResult>;
     abstract pushAudioChunk(pcmChunkInt16: ArrayBuffer): Promise<void>;
     /**
      * Marks that the server has finished producing TTS audio for the current turn.
