@@ -1149,10 +1149,10 @@ Return the lock guarding listening state changes.
 _Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
-def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
 ```
 
-Detect conversational turn state from audio and/or text.
+Detect conversational turn state from audio and/or text context.
 
 ##### Parameters
 
@@ -1160,9 +1160,12 @@ Detect conversational turn state from audio and/or text.
   Current PCM 16-bit mono audio frame at 16 kHz.
 - `text` (`str | None, optional`)
   ASR text for the current turn.
+- `assistant_text` (`str | None, optional`)
+  Cumulative AI response text confirmed as played to the user.
+  ``None`` means that this call carries no assistant response update.
 - `speech_start` (`bool, optional`)
   Whether VAD has just detected the start of speech. This may be
-  provided without ``audio`` or ``text``.
+  provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking. This is typically
   provided together with ``text``.
@@ -1177,7 +1180,7 @@ Detect conversational turn state from audio and/or text.
 _Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
-async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
 ```
 
 Asynchronously detect conversational turn state.
@@ -1188,9 +1191,12 @@ Asynchronously detect conversational turn state.
   Current PCM 16-bit mono audio frame at 16 kHz.
 - `text` (`str | None, optional`)
   ASR text for the current turn.
+- `assistant_text` (`str | None, optional`)
+  Cumulative AI response text confirmed as played to the user.
+  ``None`` means that this call carries no assistant response update.
 - `speech_start` (`bool, optional`)
   Whether VAD has just detected the start of speech. This may be
-  provided without ``audio`` or ``text``.
+  provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking.
 
