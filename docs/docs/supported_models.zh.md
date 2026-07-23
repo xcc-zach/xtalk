@@ -89,6 +89,48 @@ X-Talk 已经在客户端侧提供了 VAD，因此您可能不一定需要额外
 Turn detector 用于判断用户是否已经说完，并决定系统何时开始生成回复。
 
 <details markdown="1">
+<summary>XTurnix</summary>
+
+**依赖：** XTurnix 使用 X-Talk 已包含的 `aiohttp` 依赖。
+
+**路径：** [`src/xtalk/models/turn_detector/xturnix.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix.py)
+
+XTurnix 消费累计 ASR 文本，以及已确认播放给用户的累计 AI 回复文本。它连接
+无鉴权的本地 vLLM 服务，并始终请求服务模型名 `xturnix`。
+
+使用 2048 token 上下文启动模型服务：
+
+```bash
+vllm serve /path/to/xturnix-Qwen3-0.6B \
+  --served-model-name xturnix \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype auto \
+  --max-model-len 2048 \
+  --generation-config vllm
+```
+
+配置 X-Talk：
+
+```json
+{
+  "turn_detector": {
+    "type": "XTurnix",
+    "params": {
+      "base_url": "http://127.0.0.1:8000",
+      "timeout": 2.0,
+      "max_model_len": 2048
+    }
+  }
+}
+```
+
+vLLM 服务必须以 `xturnix` 名称暴露模型。适配器没有 `model` 或 `api_key`
+参数，也不会发送 `Authorization` header。
+
+</details>
+
+<details markdown="1">
 <summary>TurnSense</summary>
 
 **依赖：** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`

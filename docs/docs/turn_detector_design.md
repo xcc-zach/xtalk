@@ -180,6 +180,35 @@ In practice:
 When the pipeline does not have an independent VAD configured, the system uses this field to trigger VAD behavior.
 If a frontend or backend VAD is configured, this field is ignored.
 
+## XTurnix
+
+`XTurnix` is a session-aware text detector backed by an XTurnix model deployed
+through vLLM. It records each cumulative `assistant_text` update without
+performing inference. A call containing cumulative user `text` updates the
+dialogue history and requests one constrained action from vLLM.
+
+The detector maps framework state and model actions as follows:
+
+| `listening` | XTurnix state | Model action | Framework result |
+| --- | --- | --- | --- |
+| `True` | `<|listening|>` | `<|start|>` | `START_GENERATION`, `COMPLETE` |
+| `True` | `<|listening|>` | `<|keep|>` | `DO_NOTHING`, `INCOMPLETE` |
+| `False` | `<|speaking|>` | `<|stop|>` | `STOP_SPEAKING`, `INCOMPLETE` |
+| `False` | `<|speaking|>` | `<|keep|>` | `DO_NOTHING`, `IDLE` |
+
+`speech_pause=True` inserts the model's atomic `<|pause|>` marker at the current
+user-text offset. The detector tracks cumulative-source offsets, so an ASR
+correction also removes pause markers invalidated by that correction.
+
+The vLLM request always uses the model name `xturnix`, generates exactly one
+token, and constrains generation to the two actions valid for the current
+state. Action token IDs are resolved and validated through vLLM's `/tokenize`
+endpoint. Long histories are truncated at chat-message boundaries while
+retaining the state-bearing system prompt and newest dialogue.
+
+See [Supported Models](supported_models.md#turn-detection) for deployment and
+configuration.
+
 ## Meaning of `listening`
 
 The `TurnDetector` base class includes a built-in `listening` state and its locks. This state is used to distinguish whether the detector is currently "listening for the user to finish input" or "listening for whether the user interrupts system output".

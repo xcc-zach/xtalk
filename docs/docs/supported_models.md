@@ -89,6 +89,49 @@ X-Talk already provides VAD on the client side, so you may not need to deploy an
 Turn detector is used to determine whether the user has finished speaking and decide when the system should start generating a response.
 
 <details markdown="1">
+<summary>XTurnix</summary>
+
+**Dependency:** XTurnix uses the `aiohttp` dependency included with X-Talk.
+
+**Path:** [`src/xtalk/models/turn_detector/xturnix.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix.py)
+
+XTurnix consumes cumulative ASR text and the cumulative assistant response text
+confirmed as played to the user. It connects to an unauthenticated local vLLM
+server and always requests the served model name `xturnix`.
+
+Start the model service with a 2048-token context:
+
+```bash
+vllm serve /path/to/xturnix-Qwen3-0.6B \
+  --served-model-name xturnix \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype auto \
+  --max-model-len 2048 \
+  --generation-config vllm
+```
+
+Configure X-Talk:
+
+```json
+{
+  "turn_detector": {
+    "type": "XTurnix",
+    "params": {
+      "base_url": "http://127.0.0.1:8000",
+      "timeout": 2.0,
+      "max_model_len": 2048
+    }
+  }
+}
+```
+
+The vLLM service must expose the model as `xturnix`. The adapter has no `model`
+or `api_key` parameter and does not send an `Authorization` header.
+
+</details>
+
+<details markdown="1">
 <summary>TurnSense</summary>
 
 **Dependency:** `pip install "xtalk[turn-sense] @ git+https://github.com/xcc-zach/xtalk.git@main"`

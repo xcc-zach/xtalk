@@ -176,6 +176,32 @@ VAD 侧信号。每次调用都应返回一个 `TurnDetectionResult`，表示当
 当 pipeline 中未配置独立 VAD 时，系统使用该字段触发VAD。
 如果前端或后端配置了独立 VAD，该字段无效。
 
+## XTurnix
+
+`XTurnix` 是通过 vLLM 部署 XTurnix 模型的有状态文本 detector。每次收到累计
+`assistant_text` 时，它只记录上下文而不执行推理；收到累计用户 `text` 时，
+它会更新对话历史，并向 vLLM 请求一个受限动作。
+
+detector 按照下表映射框架状态与模型动作：
+
+| `listening` | XTurnix 状态 | 模型动作 | 框架结果 |
+| --- | --- | --- | --- |
+| `True` | `<|listening|>` | `<|start|>` | `START_GENERATION`、`COMPLETE` |
+| `True` | `<|listening|>` | `<|keep|>` | `DO_NOTHING`、`INCOMPLETE` |
+| `False` | `<|speaking|>` | `<|stop|>` | `STOP_SPEAKING`、`INCOMPLETE` |
+| `False` | `<|speaking|>` | `<|keep|>` | `DO_NOTHING`、`IDLE` |
+
+`speech_pause=True` 会在当前用户文本位置插入模型的原子 `<|pause|>` 标记。
+detector 会记录累计文本的源位置，因此 ASR 回改也会删除被此次回改覆盖的停顿
+标记。
+
+vLLM 请求始终使用模型名 `xturnix`，只生成一个 token，并将生成范围限制为
+当前状态下合法的两个动作。动作 token ID 会通过 vLLM `/tokenize` 接口动态
+解析和校验。长对话会在消息边界截断，同时保留携带当前状态的 system prompt
+和最新对话。
+
+部署和配置方式请参阅[支持的模型](supported_models.zh.md#轮次检测)。
+
 ## `listening`语义
 
 `TurnDetector` 基类内置了 `listening` 状态及其锁。该状态用于区分 detector 当前是在“监听用户完成输入”，还是在“监听用户是否打断系统输出”。
