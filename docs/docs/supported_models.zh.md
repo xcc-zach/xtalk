@@ -61,6 +61,39 @@
 
 </details>
 
+### 强制对齐
+
+**配置中的名称**：`force_aligner`
+
+Force aligner 用于把 TTS 已播放的音频时间映射回回复文本中的字/词位置，从而让前端更准确地跟踪“当前说到哪个字”。
+
+<details markdown="1">
+<summary>Qwen3ForceAligner</summary>
+
+**依赖：** `pip install "xtalk[qwen3-force-aligner] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**路径：** [`src/xtalk/models/force_aligner/qwen3_force_aligner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/force_aligner/qwen3_force_aligner.py)
+
+**配置示例：**
+
+```json
+{
+  "force_aligner": {
+    "type": "Qwen3ForceAligner",
+    "params": {
+      "model": "Qwen/Qwen3-ForcedAligner-0.6B",
+      "language": "Chinese",
+      "device_map": "auto",
+      "dtype": "bfloat16"
+    }
+  }
+}
+```
+
+[模型原始仓库](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B)
+
+</details>
+
 ### 语音活动检测
 
 **配置中的名称**：`vad`

@@ -14,6 +14,7 @@ from ..events import (
     VADSpeechStart,
     VADSpeechEnd,
     TTSPlaybackFinished,
+    TTSPlaybackStopped,
     TTSVoiceChange,
     TTSEmotionChange,
     TTSSpeedChange,
@@ -84,6 +85,7 @@ class TextMsgHandler(EventListenerMixin):
             "vad_speech_start": self._handle_vad_speech_start,
             "vad_speech_end": self._handle_vad_speech_end,
             "tts_playback_finished": self._handle_tts_playback_finished,
+            "tts_playback_stopped": self._handle_tts_playback_stopped,
             "tts_chunk_played": self._handle_tts_chunk_played,
             "change_voice": self._handle_change_voice,
             "change_emotion": self._handle_change_emotion,
@@ -145,6 +147,23 @@ class TextMsgHandler(EventListenerMixin):
         """Handle frontend TTS playback completion and transition to idle."""
         await self._publish(TTSPlaybackFinished(session_id=self.session_id))
 
+    async def _handle_tts_playback_stopped(self, message_data: dict) -> None:
+        """Apply the final partial-chunk playback reported during interruption."""
+        try:
+            played_audio_ms = max(
+                0.0,
+                float(message_data.get("played_audio_ms", 0.0)),
+            )
+        except (TypeError, ValueError):
+            played_audio_ms = 0.0
+        await self.event_bus.publish(
+            TTSPlaybackStopped(
+                session_id=self.session_id,
+                played_audio_ms=played_audio_ms,
+            ),
+            wait_for_completion=True,
+        )
+
     async def _handle_change_voice(self, message_data: dict) -> None:
         """Handle requests to change the reference voice."""
         await self._publish(
@@ -202,7 +221,10 @@ class TextMsgHandler(EventListenerMixin):
 
     async def _handle_tts_chunk_played(self, message_data: dict) -> None:
         """Handle frontend confirmation that a TTS chunk finished playback."""
-        await self._publish(TTSChunkPlayed(session_id=self.session_id))
+        await self.event_bus.publish(
+            TTSChunkPlayed(session_id=self.session_id),
+            wait_for_completion=True,
+        )
 
     async def _handle_session_config(self, message_data: dict) -> None:
         """Handle per-session configuration from client."""

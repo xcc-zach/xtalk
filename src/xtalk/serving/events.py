@@ -198,12 +198,12 @@ class ResponseUpdate(Event):
 
 @dataclass
 class ResponseFinish(Event):
-    """Final text whose corresponding TTS playback has finished.
+    """Final playback-confirmed text for a completed or interrupted TTS turn.
 
     Attributes
     ----------
     text : str
-        Final response text whose playback completed.
+        Final response prefix that was actually played to the user.
     """
 
     TYPE: ClassVar[str] = "response.finish"
@@ -220,11 +220,17 @@ class TTSTextSynthesized(Event):
         Text segment that was synthesized.
     audio_duration : float
         Estimated playback duration of the synthesized audio in milliseconds.
+    audio_chunk : bytes
+        Optional complete PCM 16-bit mono audio for pre-playback alignment.
+    sample_rate : int
+        Sample rate of ``audio_chunk``. Zero when no audio is attached.
     """
 
     TYPE: ClassVar[str] = "tts.text_synthesized"
     text: str = ""
     audio_duration: float = 0.0
+    audio_chunk: bytes = b""
+    sample_rate: int = 0
 
 
 @dataclass
@@ -268,6 +274,18 @@ class TTSChunkPlayed(Event):
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
+
+
+@dataclass
+class TTSPlaybackStopped(Event):
+    """Frontend confirmed how much active audio played before an early stop.
+
+    ``played_audio_ms`` contains only playback time not already represented by
+    preceding ``TTSChunkPlayed`` events.
+    """
+
+    TYPE: ClassVar[str] = "tts.playback_stopped"
+    played_audio_ms: float = 0.0
 
 
 @dataclass

@@ -782,6 +782,10 @@ function createPausableTimeout(
 class WebOutputAudioSession extends BaseOutputAudioSession {
     private audioContext: AudioContext | null = null;
     private audioBufferSources: AudioBufferSourceNode[] = [];
+    private audioBufferSourceTimes = new Map<
+        AudioBufferSourceNode,
+        { start: number; end: number }
+    >();
     private audioTimeToPlay = 0;
     private audioChunkStartedTimeouts: ReturnType<typeof createPausableTimeout>[] = [];
     private audioChunksPaused: ArrayBuffer[] = [];
@@ -834,21 +838,33 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         }
         this.audioChunksPaused.length = 0;
     }
-    async stop(): Promise<void> {
+    async stop(): Promise<{ unconfirmedPlayedMs: number }> {
+        const currentTime = this.audioContext?.currentTime ?? 0;
+        let unconfirmedPlayedMs = 0;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.cancel();
         });
         this.audioChunkStartedTimeouts.length = 0;
         this.audioBufferSources.forEach(source => {
+            const timing = this.audioBufferSourceTimes.get(source);
+            if (timing && currentTime > timing.start) {
+                unconfirmedPlayedMs += Math.max(
+                    0,
+                    Math.min(currentTime, timing.end) - timing.start,
+                ) * 1000;
+            }
             source.onended = null;
-            source.disconnect();
+            try { source.stop(); } catch { }
+            try { source.disconnect(); } catch { }
         });
         this.audioBufferSources.length = 0;
+        this.audioBufferSourceTimes.clear();
         this.audioTimeToPlay = 0;
         this.audioChunksPaused.length = 0;
         this.serverTtsFinished = false;
         // DO NOT suspend to avoid pop sounds after restart
         // await this.audioContext?.suspend();
+        return { unconfirmedPlayedMs };
     }
     async notifyTTSFinished(): Promise<void> {
         this.serverTtsFinished = true;
@@ -890,6 +906,7 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             // Remove this source from the list
             const idx = this.audioBufferSources.indexOf(source);
             if (idx !== -1) this.audioBufferSources.splice(idx, 1);
+            this.audioBufferSourceTimes.delete(source);
             void this.maybeNotifyPlaybackFinished();
         };
 
@@ -901,7 +918,13 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         if (this.audioTimeToPlay < currentTime) {
             this.audioTimeToPlay = currentTime;
         }
-        source.start(this.audioTimeToPlay);
+        const chunkStartTime = this.audioTimeToPlay;
+        const chunkEndTime = chunkStartTime + buffer.duration / source.playbackRate.value;
+        this.audioBufferSourceTimes.set(source, {
+            start: chunkStartTime,
+            end: chunkEndTime,
+        });
+        source.start(chunkStartTime);
 
         // Mount onstarted
         const msForChunkStart = (this.audioTimeToPlay - currentTime) * 1000;
