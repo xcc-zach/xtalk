@@ -25,6 +25,7 @@ _START_ACTION = "<|start|>"
 _KEEP_ACTION = "<|keep|>"
 _STOP_ACTION = "<|stop|>"
 _PAUSE_TOKEN = "<|pause|>"
+_PARTIAL_TERMINAL_PUNCTUATION = "。！？.!?；;…．"
 _ALLOWED_ACTIONS = {
     _LISTENING_STATE: (_START_ACTION, _KEEP_ACTION),
     _SPEAKING_STATE: (_STOP_ACTION, _KEEP_ACTION),
@@ -50,6 +51,7 @@ class _StreamState:
     epoch: int = 0
     text: str = ""
     pause_offsets: set[int] = field(default_factory=set)
+    pending_pause_offset: int | None = None
     active: bool = False
 
 
@@ -259,7 +261,7 @@ class XTurnix(TurnDetector):
                     text,
                 )
                 if speech_pause:
-                    changed = self._append_user_pause_locked() or changed
+                    changed = self._mark_user_pause_locked() or changed
                 if changed:
                     self._user_revision += 1
 
@@ -286,11 +288,12 @@ class XTurnix(TurnDetector):
         if self._processed_listening_revision == self._listening_revision:
             return
 
-        self._assistant_stream.active = False
         if self._listening:
             self._stop_latched = False
         else:
+            self._assistant_stream.active = False
             self._user_stream.active = False
+            self._user_stream.pending_pause_offset = None
             self._start_latched = False
         self._processed_listening_revision = self._listening_revision
 
@@ -300,6 +303,7 @@ class XTurnix(TurnDetector):
         stream.epoch += 1
         stream.text = ""
         stream.pause_offsets = set()
+        stream.pending_pause_offset = None
         stream.active = True
 
     def _ensure_user_stream_locked(self) -> None:
@@ -333,6 +337,32 @@ class XTurnix(TurnDetector):
         stream.pause_offsets = {
             offset for offset in stream.pause_offsets if offset <= common_length
         }
+
+        if (
+            role == "user"
+            and stream.pending_pause_offset is not None
+            and common_length < stream.pending_pause_offset
+        ):
+            stream.pending_pause_offset = None
+        if (
+            role == "user"
+            and stream.pending_pause_offset is not None
+            and len(text) > stream.pending_pause_offset
+        ):
+            pause_offset = stream.pending_pause_offset
+            if pause_offset not in stream.pause_offsets:
+                stream.pause_offsets.add(pause_offset)
+                self._segments.append(
+                    _DialogueSegment(
+                        role="user",
+                        epoch=stream.epoch,
+                        source_start=pause_offset,
+                        source_end=pause_offset,
+                        content=_PAUSE_TOKEN,
+                        is_pause=True,
+                    )
+                )
+            stream.pending_pause_offset = None
 
         suffix = text[common_length:]
         if suffix:
@@ -378,25 +408,15 @@ class XTurnix(TurnDetector):
                 )
         self._segments = retained
 
-    def _append_user_pause_locked(self) -> bool:
-        """Append one deduplicated XTurnix user-pause marker."""
+    def _mark_user_pause_locked(self) -> bool:
+        """Remember a pause until later user text confirms continuation."""
         self._ensure_user_stream_locked()
-        pause_offsets = self._user_stream.pause_offsets
         offset = len(self._user_stream.text)
-        if offset in pause_offsets:
+        if offset == 0:
             return False
-
-        pause_offsets.add(offset)
-        self._segments.append(
-            _DialogueSegment(
-                role="user",
-                epoch=self._user_stream.epoch,
-                source_start=offset,
-                source_end=offset,
-                content=_PAUSE_TOKEN,
-                is_pause=True,
-            )
-        )
+        if self._user_stream.pending_pause_offset == offset:
+            return False
+        self._user_stream.pending_pause_offset = offset
         return True
 
     def _render_dialogue_locked(self) -> list[dict[str, str]]:
@@ -411,6 +431,22 @@ class XTurnix(TurnDetector):
                 messages.append({"role": segment.role, "content": segment.content})
         return messages
 
+    def _render_model_dialogue_locked(self) -> list[dict[str, str]]:
+        """Render dialogue while hiding provisional ASR sentence endings."""
+        messages = self._render_dialogue_locked()
+        if not self._user_stream.active:
+            return messages
+
+        for message in reversed(messages):
+            if message["role"] != "user":
+                continue
+            normalized = message["content"].rstrip()
+            normalized = normalized.rstrip(_PARTIAL_TERMINAL_PUNCTUATION).rstrip()
+            if normalized:
+                message["content"] = normalized
+            break
+        return messages
+
     async def _infer_latest_user_revision(self) -> TurnDetectionResult:
         """Coalesce queued partials and return only the latest valid decision."""
         async with self._inference_lock:
@@ -423,7 +459,7 @@ class XTurnix(TurnDetector):
                     )
                     if inference_key == self._last_inferred_key:
                         return _IDLE_RESULT
-                    dialogue = self._render_dialogue_locked()
+                    dialogue = self._render_model_dialogue_locked()
                     listening = self._listening
 
                 if not any(message["role"] == "user" for message in dialogue):

@@ -196,9 +196,12 @@ The detector maps framework state and model actions as follows:
 | `False` | `<|speaking|>` | `<|stop|>` | `STOP_SPEAKING`, `INCOMPLETE` |
 | `False` | `<|speaking|>` | `<|keep|>` | `DO_NOTHING`, `IDLE` |
 
-`speech_pause=True` inserts the model's atomic `<|pause|>` marker at the current
-user-text offset. The detector tracks cumulative-source offsets, so an ASR
-correction also removes pause markers invalidated by that correction.
+`speech_pause=True` records a pending pause offset. The model's atomic
+`<|pause|>` marker is inserted only when later text extends the same user
+stream, placing it between the text before and after the pause. Dialogue
+history never ends with `<|pause|>`. The detector tracks cumulative-source
+offsets, so an ASR correction also removes pause markers invalidated by that
+correction.
 
 The vLLM request always uses the model name `xturnix`, generates exactly one
 token, and constrains generation to the two actions valid for the current

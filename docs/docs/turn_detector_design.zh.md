@@ -191,9 +191,10 @@ detector 按照下表映射框架状态与模型动作：
 | `False` | `<|speaking|>` | `<|stop|>` | `STOP_SPEAKING`、`INCOMPLETE` |
 | `False` | `<|speaking|>` | `<|keep|>` | `DO_NOTHING`、`IDLE` |
 
-`speech_pause=True` 会在当前用户文本位置插入模型的原子 `<|pause|>` 标记。
-detector 会记录累计文本的源位置，因此 ASR 回改也会删除被此次回改覆盖的停顿
-标记。
+`speech_pause=True` 只记录一个待确认停顿位置。只有同一 user 流随后出现新增
+文本时，才会在停顿前后的文本之间插入模型的原子 `<|pause|>` 标记，对话历史
+不会以 `<|pause|>` 结尾。detector 会记录累计文本的源位置，因此 ASR 回改也
+会删除被此次回改覆盖的停顿标记。
 
 vLLM 请求始终使用模型名 `xturnix`，只生成一个 token，并将生成范围限制为
 当前状态下合法的两个动作。动作 token ID 会通过 vLLM `/tokenize` 接口动态
