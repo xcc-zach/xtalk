@@ -1,5 +1,17 @@
-from .interfaces import Agent, AgentContext, AgentOutput, ChatHistory
+from .interfaces import (
+    Agent,
+    AgentContext,
+    AgentOutput,
+    AgentTurnBoundary,
+    ChatHistory,
+)
 from .tools.utils import build_tool_call_result
+from .tools import (
+    AsyncTool,
+    SyncTool,
+    Tool,
+    ToolEngine,
+)
 from langchain.chat_models.base import BaseChatModel
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import (
@@ -62,7 +74,7 @@ class ExperimentalAgent(Agent):
         model: BaseChatModel | dict[str, Any],
         backchannel_model: BaseChatModel | dict[str, Any] | None = None,
         backchannel_source_dir: str | Path | None = None,
-        tools: list[BaseTool | Callable[[], BaseTool]] | None = None,
+        tools: list[Tool | Callable[[], Tool]] | None = None,
         system_prompt: str = "",
         proactive: bool = True,
     ) -> None:
@@ -76,7 +88,7 @@ class ExperimentalAgent(Agent):
             Optional model used to judge backchannel insertion.
         backchannel_source_dir : str | Path | None, optional
             Directory containing backchannel assets.
-        tools : list[BaseTool | Callable[[], BaseTool]] | None, optional
+        tools : list[Tool | Callable[[], Tool]] | None, optional
             Optional tool instances or factories.
         system_prompt : str, optional
             Additional system prompt appended after the base prompt.
@@ -104,7 +116,25 @@ class ExperimentalAgent(Agent):
         )
 
         self._base_tools = tools
-        self.tools = self._init_tools(tools) if tools else []
+        self.tools = self._init_tools(tools or [])
+        self.tool_engine = ToolEngine(
+            tools=self.tools,
+            state={},
+        )
+        self.model_with_tools = self.tool_engine.bind(self.model)
+        self.model_for_async_updates = (
+            self.tool_engine.bind_without_tool_calls(self.model)
+        )
+        self._human_input_finished = True
+        self._last_partial_human_text = ""
+        self._active_partial_human_index: int | None = None
+        self._active_partial_human_prefix = ""
+        self._async_tool_update_queue: asyncio.Queue[AgentOutput] = asyncio.Queue()
+        self._model_generation_lock = asyncio.Lock()
+        self._pending_async_tool_updates: list[
+            tuple[ToolCall, ToolMessage, AgentOutput]
+        ] = []
+        self.tool_engine.on_async_tool_update(self._on_async_tool_update)
 
         # every time remove this prefix before judging backchannel
         self._already_backchanneled_text = ""
@@ -131,9 +161,11 @@ class ExperimentalAgent(Agent):
                 yield item
         if context_type == "asr_final":
             self._asr_final_response_generating = True
-            async for item in self._handle_asr_final(context_data["text"]):
-                yield item
-            self._asr_final_response_generating = False
+            try:
+                async for item in self._handle_asr_final(context_data["text"]):
+                    yield item
+            finally:
+                self._asr_final_response_generating = False
         if context_type == "asr_partial":
             async for item in self._handle_asr_partial(context_data["text"]):
                 yield item
@@ -181,24 +213,86 @@ class ExperimentalAgent(Agent):
     ###
 
     async def _loop_runner(self) -> AsyncIterator[AgentOutput]:
+        # greeting: AI take initiative to call user on session start
+        if self.proactive and len(self.messages) == 1:
+            self._chat_history.append_message(HumanMessage(content="你好。"))
+            collector = TextCollector()
+            async for item in self._stream_and_collect_text(
+                self._stream_greeting(), collector
+            ):
+                yield item
+            yield AgentTurnBoundary()
+
         while True:
-            # greeting: AI take initiative to call user on session start
-            if self.proactive and len(self.messages) == 1:
-                self._chat_history.append_message(HumanMessage(content="你好。"))
-                collector = TextCollector()
-                async for item in self._stream_and_collect_text(
-                    self._stream_greeting(), collector
-                ):
-                    yield item
-                # since this should only be triggered once and no other logic in the loop, break temporarily
-                break
-            # avoid blocking the event loop
-            await asyncio.sleep(0.2)
+            item = await self._async_tool_update_queue.get()
+            while True:
+                yield item
+
+                while self._asr_final_response_generating:
+                    await asyncio.sleep(0.05)
+
+                try:
+                    item = self._async_tool_update_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            async for generated_item in self._stream_messages(allow_tools=False):
+                yield generated_item
+            yield AgentTurnBoundary()
+
+    def _append_or_update_partial_human_message(
+        self,
+        text: str,
+        *,
+        final: bool,
+    ) -> None:
+        if not text:
+            self._human_input_finished = final
+            if final:
+                self._active_partial_human_index = None
+                self._active_partial_human_prefix = ""
+                self._last_partial_human_text = ""
+            return
+        messages = self._chat_history.messages
+        active_message_is_last = (
+            self._active_partial_human_index is not None
+            and self._active_partial_human_index == len(messages) - 1
+            and isinstance(messages[-1], HumanMessage)
+        )
+        if active_message_is_last:
+            if text.startswith(self._active_partial_human_prefix):
+                messages[-1].content = text[len(self._active_partial_human_prefix) :]
+            else:
+                messages[-1].content = text
+                self._active_partial_human_prefix = ""
+        else:
+            if self._last_partial_human_text and text.startswith(
+                self._last_partial_human_text
+            ):
+                content = text[len(self._last_partial_human_text) :]
+                self._active_partial_human_prefix = self._last_partial_human_text
+            else:
+                content = text
+                self._active_partial_human_prefix = ""
+
+            if content:
+                self._chat_history.append_message(HumanMessage(content=content))
+                self._active_partial_human_index = len(messages) - 1
+            else:
+                self._active_partial_human_index = None
+        self._last_partial_human_text = text
+        self._human_input_finished = final
+
+        if final:
+            self._active_partial_human_index = None
+            self._active_partial_human_prefix = ""
+            self._last_partial_human_text = ""
 
     async def _handle_asr_final(self, asr_text: str) -> AsyncIterator[AgentOutput]:
-        self._chat_history.append_message(HumanMessage(content=asr_text))
+        self._append_or_update_partial_human_message(asr_text, final=True)
         async for item in self._stream_messages():
             yield item
+        yield AgentTurnBoundary()
         # reset backchannel state
         self._already_backchanneled_text = ""
         self._turn_already_to_backchannel_response = {}
@@ -215,6 +309,7 @@ class ExperimentalAgent(Agent):
 
     # backchannel
     async def _handle_asr_partial(self, asr_text: str) -> AsyncIterator[AgentOutput]:
+        self._append_or_update_partial_human_message(asr_text, final=False)
         if self.backchannel_model is None or self.backchannel_source_dir is None:
             return
         # remove prefix from asr text to avoid repeated backchannel for the same content
@@ -282,12 +377,34 @@ class ExperimentalAgent(Agent):
             if text:
                 yield text
 
-    async def _stream_messages(self) -> AsyncIterator[AgentOutput]:
-        model_with_tools = self.model.bind_tools(self.tools) if self.tools else self.model
+    async def _stream_messages(
+        self,
+        *,
+        allow_tools: bool = True,
+    ) -> AsyncIterator[AgentOutput]:
+        async with self._model_generation_lock:
+            try:
+                async for item in self._stream_messages_unlocked(
+                    allow_tools=allow_tools,
+                ):
+                    yield item
+            finally:
+                self._flush_pending_async_tool_updates()
+
+    async def _stream_messages_unlocked(
+        self,
+        *,
+        allow_tools: bool,
+    ) -> AsyncIterator[AgentOutput]:
+        streaming_model = (
+            self.model_with_tools
+            if allow_tools
+            else self.model_for_async_updates
+        )
         while True:
             response_message = AIMessage(content="")
             gathered = None
-            async for chunk in model_with_tools.astream(self.messages):
+            async for chunk in streaming_model.astream(self.messages):
                 text = self.content_to_text(chunk.content)
                 if text:
                     response_message.content += text
@@ -306,12 +423,69 @@ class ExperimentalAgent(Agent):
             self._chat_history.append_message(response_message)
             for tool_call in tool_calls:
                 yield tool_call
-                tool_result = await self._invoke_tool(tool_call)
-                self._chat_history.append_message(tool_result)
+                try:
+                    tool_result = await self.tool_engine.ainvoke_and_append(
+                        tool_call,
+                        self._chat_history.messages,
+                    )
+                except Exception as exc:
+                    tool_result = ToolMessage(
+                        content=f"Error invoking tool: {exc}",
+                        tool_call_id=tool_call["id"],
+                        name=tool_call["name"],
+                    )
+                    ToolEngine.append_tool_message(
+                        tool_call,
+                        tool_result,
+                        self._chat_history.messages,
+                    )
                 yield build_tool_call_result(
                     tool_call=tool_call,
                     result_content=str(tool_result.content),
                 )
+
+    def _on_async_tool_update(
+        self,
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+    ) -> None:
+        """Save an asynchronous tool update and notify the agent loop."""
+
+        output = build_tool_call_result(
+            tool_call=tool_call,
+            result_content=str(tool_message.content),
+        )
+        if self._model_generation_lock.locked():
+            self._pending_async_tool_updates.append(
+                (tool_call, tool_message, output)
+            )
+            return
+        self._record_async_tool_update(tool_call, tool_message, output)
+
+    def _record_async_tool_update(
+        self,
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+        output: AgentOutput,
+    ) -> None:
+        """Append one deferred update and wake the loop when appropriate."""
+
+        ToolEngine.append_tool_message(
+            tool_call=tool_call,
+            tool_message=tool_message,
+            messages=self._chat_history.messages,
+        )
+        if not self._human_input_finished:
+            return
+        self._async_tool_update_queue.put_nowait(output)
+
+    def _flush_pending_async_tool_updates(self) -> None:
+        """Move updates deferred during generation into history and the queue."""
+
+        pending_updates = self._pending_async_tool_updates
+        self._pending_async_tool_updates = []
+        for tool_call, tool_message, output in pending_updates:
+            self._record_async_tool_update(tool_call, tool_message, output)
 
     def _load_backchannel_audio(self, backchannel_content: str) -> bytes | None:
         map_path = self.backchannel_source_dir / "map.json"
@@ -340,30 +514,29 @@ class ExperimentalAgent(Agent):
 
     # Tools
     @staticmethod
-    def _init_tools(tools: list[BaseTool | Callable[[], BaseTool]]) -> list[BaseTool]:
-        initialized_tools = []
-        for tool in tools:
-            if isinstance(tool, BaseTool):
-                initialized_tools.append(tool)
-            elif callable(tool):
-                initialized_tools.append(tool())
-        return initialized_tools
+    def _init_tools(
+        tools: list[Tool | Callable[[], Tool]],
+    ) -> list[Tool]:
+        """Initialize tool instances, native tool classes, and factories."""
 
-    async def _invoke_tool(
-        self,
-        tool_call: ToolCall,
-    ):
-        tool = next((t for t in self.tools if t.name == tool_call["name"]), None)
-        if not tool:
-            return ToolMessage(
-                content=f"Tool {tool_call['name']} not found",
-                tool_call_id=tool_call["id"],
-            )
-        try:
-            result: ToolMessage = await tool.ainvoke(tool_call["args"])
-            return result
-        except Exception as e:
-            return ToolMessage(
-                content=f"Error invoking tool {tool_call['name']}: {str(e)}",
-                tool_call_id=tool_call["id"],
-            )
+        initialized_tools: list[Tool] = []
+        for tool_item in tools:
+            if isinstance(tool_item, BaseTool):
+                initialized_tools.append(tool_item)
+                continue
+            if (
+                isinstance(tool_item, type)
+                and issubclass(tool_item, (AsyncTool, SyncTool))
+            ):
+                initialized_tools.append(tool_item)
+                continue
+            if callable(tool_item):
+                initialized_tool = tool_item()
+                if isinstance(initialized_tool, BaseTool) or (
+                    isinstance(initialized_tool, type)
+                    and issubclass(initialized_tool, (SyncTool, AsyncTool))
+                ):
+                    initialized_tools.append(initialized_tool)
+                    continue
+            raise TypeError(f"Unsupported tool: {tool_item!r}")
+        return initialized_tools
