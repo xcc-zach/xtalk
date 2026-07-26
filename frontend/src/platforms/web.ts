@@ -307,8 +307,8 @@ class WebInputAudioSession extends BaseInputAudioSession {
         vadFrameSamples: 512,
         vadNegativeFramesBeforeEnd: 50,
         vadConfig: {
-            positiveSpeechThreshold: 0.8,
-            negativeSpeechThreshold: 0.2,
+            positiveSpeechThreshold: 0.2,
+            negativeSpeechThreshold: 0.1,
             preSpeechPadMs: 30,
             redemptionMs: 500,
             minSpeechMs: 250,
