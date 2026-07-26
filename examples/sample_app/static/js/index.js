@@ -1,14 +1,4 @@
-async function loadXtalk() {
-    try {
-        console
-        return await import("../../xtalk/index.js");
-    } catch (e) {
-        console.log("Failed to load local xtalk-client, falling back to CDN:", e)
-        return await import("https://unpkg.com/xtalk-client@latest/dist/index.js");
-    }
-}
-
-const { createSession } = await loadXtalk();
+const { createSession } = await import("../../xtalk/index.js");
 
 function resolveAppURL(path) {
     const baseURL = new URL("./", window.location.href);
@@ -28,39 +18,45 @@ const session = createSession(getWebSocketURL(), {
     },
 });
 
-const $btnStart = document.getElementById('btn-start');
-const $btnStop = document.getElementById('btn-stop');
+const $btnCall = document.getElementById('btn-call');
 const $btnMute = document.getElementById('btn-mute');
 const $btnNewSession = document.getElementById('btn-new-session');
 const $btnRefreshSessions = document.getElementById('btn-refresh-sessions');
-const $voiceSelect = document.getElementById('voice-select');
 const $btnUploadFile = document.getElementById('btn-upload-file');
 const $fileInput = document.getElementById('file-input');
+const $voiceSelect = document.getElementById('voice-select');
 const $sessionList = document.getElementById('session-list');
 const $sessionListEmpty = document.getElementById('session-list-empty');
+const $connectionState = document.getElementById('connection-state');
 const $streamState = document.getElementById('stream-state');
+const $mutedState = document.getElementById('muted-state');
 const $sessionId = document.getElementById('session-id');
 const $waveform = document.getElementById('waveform');
+const $orbView = document.getElementById('orb-view');
+const $chatView = document.getElementById('chat-view');
+const $btnShowChat = document.getElementById('btn-show-chat');
+const $btnShowOrb = document.getElementById('btn-show-orb');
 const $messages = document.getElementById('messages');
+const $sessionsDrawer = document.getElementById('sessions-drawer');
+const $debugDrawer = document.getElementById('debug-drawer');
+const $drawerBackdrop = document.getElementById('drawer-backdrop');
+const $btnToggleSessions = document.getElementById('btn-toggle-sessions');
+const $btnToggleDebug = document.getElementById('btn-toggle-debug');
+const $btnCloseSessions = document.getElementById('btn-close-sessions');
+const $btnCloseDebug = document.getElementById('btn-close-debug');
 const $thoughtContent = document.getElementById('thought-content');
 const $captionContent = document.getElementById('caption-content');
 const $retrievalContent = document.getElementById('retrieval-content');
-const $panelThought = document.getElementById('panel-thought');
-const $panelCaption = document.getElementById('panel-caption');
-const $panelRetrieval = document.getElementById('panel-retrieval');
-const $btnToggleThought = document.getElementById('btn-toggle-thought');
-const $btnToggleCaption = document.getElementById('btn-toggle-caption');
-const $btnToggleRetrieval = document.getElementById('btn-toggle-retrieval');
 const $latencyNetwork = document.getElementById('latency-network');
 const $latencyAsr = document.getElementById('latency-asr');
 const $latencyLlmFirst = document.getElementById('latency-llm-first');
 const $latencyLlmSentence = document.getElementById('latency-llm-sentence');
 const $latencyTts = document.getElementById('latency-tts');
 const $latencyE2e = document.getElementById('latency-e2e');
-const $btnToggleRecentAudio = document.getElementById('btn-toggle-recent-audio');
-const $recentAudioCard = document.getElementById('recent-audio-card');
+const $recentAudioDetails = document.getElementById('recent-audio-details');
 const $recentAudioStatus = document.getElementById('recent-audio-status');
 const $recentAudioPlayer = document.getElementById('recent-audio-player');
+const $toastRegion = document.getElementById('toast-region');
 
 let audioCtx = null;
 let inputAnalyser = null;
@@ -85,6 +81,11 @@ let toolCallCacheKey = '';
 let chatTimeline = [];
 let chatTimelineIndexByKey = new Map();
 let isStarting = false;
+let isStopping = false;
+let isUploading = false;
+let voiceOptionsLoaded = false;
+let currentDrawer = null;
+let currentMainView = 'orb';
 
 const FULL_AUDIO_CHANNELS = 2;
 const FULL_AUDIO_BYTES_PER_SAMPLE = 2;
@@ -98,28 +99,98 @@ let recentAudioSnapshotDirty = false;
 const canvasCtx = $waveform.getContext('2d');
 
 const STATE_COLORS = {
-    idle: '#6b7280',
-    listening: '#34d399',
-    processing: '#fbbf24',
-    speaking: '#93c5fd'
+    idle: ['#7380ff', '#c8d0ff', '#f8fbff'],
+    listening: ['#6978ff', '#aab8ff', '#f9fbff'],
+    processing: ['#8b78ff', '#c2b8ff', '#fffaff'],
+    speaking: ['#5e73ff', '#9eafff', '#f8fbff'],
 };
 
-function setConnectionButtons(isConnected) {
-    const isReconnecting = session.state.connectionState === 'reconnecting';
-    const startDisabled = isStarting || isConnected || isReconnecting;
-    const stopDisabled = isStarting || (!isConnected && !isReconnecting);
+function isLiveConnection() {
+    return session.state.connectionState === 'connected'
+        || session.state.connectionState === 'reconnecting';
+}
 
-    $btnStart.disabled = startDisabled;
-    $btnStart.textContent = isStarting ? 'Starting...' : 'Start';
-    $btnStart.classList.toggle('is-loading', isStarting);
+function renderControls() {
+    const isLive = isLiveConnection();
+    const isMuted = session.muted;
+    const isCallPending = isStarting || isStopping;
+    const callAction = isLive ? 'stop' : 'start';
+    const callLabel = isLive ? '停止对话' : '开始对话';
+    const pendingLabel = isStopping ? '正在停止对话' : '正在开始对话';
 
-    $btnStop.disabled = stopDisabled;
+    $btnCall.dataset.action = callAction;
+    $btnCall.disabled = isCallPending;
+    $btnCall.classList.toggle('is-loading', isCallPending);
+    $btnCall.setAttribute('aria-label', isCallPending ? pendingLabel : callLabel);
+    $btnCall.setAttribute('aria-busy', String(isCallPending));
+    $btnCall.title = isCallPending ? pendingLabel : callLabel;
+
+    $btnMute.disabled = !isLive || isCallPending;
+    $btnMute.classList.toggle('is-muted', isMuted);
+    $btnMute.setAttribute('aria-pressed', String(isMuted));
+    $btnMute.setAttribute('aria-label', isMuted ? '打开麦克风' : '关闭麦克风');
+    $btnMute.title = isMuted ? '打开麦克风' : '关闭麦克风';
+
+    $btnUploadFile.disabled = isUploading || !session.state.sessionId;
+    $btnUploadFile.classList.toggle('is-loading', isUploading);
+    $voiceSelect.disabled = !voiceOptionsLoaded || !isLive;
+
+    $connectionState.textContent = isStarting
+        ? 'starting'
+        : isStopping
+            ? 'stopping'
+            : session.state.connectionState;
+    $streamState.textContent = session.state.streamState;
+    $mutedState.textContent = String(isMuted);
+    $sessionId.textContent = session.state.sessionId || '--';
+    $btnShowChat.dataset.streamState = session.state.streamState;
+    $btnShowChat.classList.toggle('is-muted', isMuted);
+    $btnShowOrb.dataset.streamState = session.state.streamState;
+    $btnShowOrb.classList.toggle('is-muted', isMuted);
 }
 
 function resetRealtimeUI() {
     stopVisualization();
     isStarting = false;
-    setConnectionButtons(false);
+    isStopping = false;
+    renderControls();
+}
+
+function showToast(message, type = 'error') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    $toastRegion.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 4200);
+}
+
+function setMainView(view) {
+    currentMainView = view === 'chat' ? 'chat' : 'orb';
+    const showChat = currentMainView === 'chat';
+    $orbView.classList.toggle('is-hidden', showChat);
+    $chatView.classList.toggle('is-hidden', !showChat);
+    $orbView.setAttribute('aria-hidden', String(showChat));
+    $chatView.setAttribute('aria-hidden', String(!showChat));
+    if (!showChat) {
+        resizeCanvas();
+        if (!isActive) drawWaveform(true);
+    }
+}
+
+function setDrawer(drawer) {
+    currentDrawer = drawer;
+    const sessionsOpen = drawer === 'sessions';
+    const debugOpen = drawer === 'debug';
+    const anyOpen = sessionsOpen || debugOpen;
+
+    document.body.dataset.drawer = drawer || '';
+    $sessionsDrawer.classList.toggle('is-open', sessionsOpen);
+    $debugDrawer.classList.toggle('is-open', debugOpen);
+    $drawerBackdrop.classList.toggle('is-visible', anyOpen);
+    $sessionsDrawer.setAttribute('aria-hidden', String(!sessionsOpen));
+    $debugDrawer.setAttribute('aria-hidden', String(!debugOpen));
+    $btnToggleSessions.setAttribute('aria-expanded', String(sessionsOpen));
+    $btnToggleDebug.setAttribute('aria-expanded', String(debugOpen));
 }
 
 function formatSessionTitle(item) {
@@ -128,9 +199,9 @@ function formatSessionTitle(item) {
         return title;
     }
     if (item?.session_id === session.state.sessionId) {
-        return 'Current Draft';
+        return '新会话';
     }
-    return `Session ${String(item?.session_id || '').slice(0, 8) || '--'}`;
+    return `会话 ${String(item?.session_id || '').slice(0, 8) || '--'}`;
 }
 
 function renderSessions() {
@@ -150,14 +221,10 @@ function renderSessions() {
         title.className = 'session-title';
         title.textContent = formatSessionTitle(item);
 
-        const meta = document.createElement('div');
-        meta.className = 'session-meta';
-        meta.textContent = item.session_id;
-
         button.appendChild(title);
-        button.appendChild(meta);
         button.addEventListener('click', async () => {
             if (item.session_id === session.state.sessionId) {
+                setDrawer(null);
                 return;
             }
             try {
@@ -165,8 +232,10 @@ function renderSessions() {
                 resetRealtimeUI();
                 await session.switchSession(item.session_id);
                 renderSessions();
+                setMainView('chat');
+                setDrawer(null);
             } catch (error) {
-                alert('Failed to switch session: ' + (error?.message || error));
+                showToast('切换会话失败：' + (error?.message || error));
             }
         });
 
@@ -303,12 +372,52 @@ function appendLocalInfoMessage(content) {
     });
 }
 
+async function copyMessageText(text) {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.setAttribute('readonly', '');
+            textArea.style.position = 'fixed';
+            textArea.style.opacity = '0';
+            document.body.appendChild(textArea);
+            textArea.select();
+            const copied = document.execCommand('copy');
+            textArea.remove();
+            if (!copied) throw new Error('Clipboard API unavailable');
+        }
+        showToast('消息已复制', 'success');
+    } catch (error) {
+        showToast('复制失败：' + (error?.message || error));
+    }
+}
+
+function createMessageCopyButton(text) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'message-copy-button';
+    button.setAttribute('aria-label', '复制消息');
+    button.title = '复制消息';
+    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>';
+    button.addEventListener('click', async () => {
+        await copyMessageText(text);
+    });
+    return button;
+}
+
 function renderChatTimeline() {
     $messages.innerHTML = '';
     for (const entry of chatTimeline) {
-        const el = document.createElement('div');
+        const role = entry.kind === 'tool' ? 'tool' : entry.role;
+        const row = document.createElement('div');
+        row.className = 'message-row message-row-' + role;
+
+        const message = document.createElement('div');
+        let copyText = '';
         if (entry.kind === 'tool') {
-            el.className = 'message message-tool';
+            message.className = 'message message-tool';
 
             const label = document.createElement('div');
             label.className = 'message-tool-label';
@@ -318,13 +427,23 @@ function renderChatTimeline() {
             args.className = 'message-tool-args';
             args.textContent = entry.argsText;
 
-            el.appendChild(label);
-            el.appendChild(args);
+            message.appendChild(label);
+            message.appendChild(args);
+            copyText = `Tool Call: ${entry.name}\n${entry.argsText}`;
         } else {
-            el.className = 'message message-' + entry.role;
-            el.textContent = entry.content;
+            message.className = 'message message-' + entry.role;
+            message.textContent = entry.content;
+            copyText = entry.content;
         }
-        $messages.appendChild(el);
+        row.appendChild(message);
+
+        if (role !== 'info') {
+            const actions = document.createElement('div');
+            actions.className = 'message-actions';
+            actions.appendChild(createMessageCopyButton(copyText));
+            row.appendChild(actions);
+        }
+        $messages.appendChild(row);
     }
     $messages.scrollTop = $messages.scrollHeight;
 }
@@ -395,24 +514,20 @@ function resizeCanvas() {
     }
 }
 
-function drawWaveform() {
-    if (!isActive) return;
-    rafId = requestAnimationFrame(drawWaveform);
+function drawWaveform(renderOnce = false) {
+    if (!isActive && !renderOnce) return;
+    if (!renderOnce) {
+        rafId = requestAnimationFrame(() => drawWaveform(false));
+    }
 
+    resizeCanvas();
     const w = $waveform.width;
     const h = $waveform.height;
-
-    canvasCtx.fillStyle = '#0f172a';
-    canvasCtx.fillRect(0, 0, w, h);
-
-    canvasCtx.strokeStyle = '#1f2937';
-    canvasCtx.lineWidth = 1;
-    canvasCtx.beginPath();
-    canvasCtx.moveTo(0, h / 2);
-    canvasCtx.lineTo(w, h / 2);
-    canvasCtx.stroke();
-
-    const color = STATE_COLORS[currentStreamState] || '#6b7280';
+    const dpr = window.devicePixelRatio || 1;
+    const centerX = w / 2;
+    const centerY = h / 2;
+    const palette = STATE_COLORS[currentStreamState] || STATE_COLORS.idle;
+    const time = performance.now() / 1000;
     let dataArray = null;
     let bufferLength = 0;
 
@@ -426,22 +541,78 @@ function drawWaveform() {
         bufferLength = inputBufferLength;
     }
 
+    let energy = 0;
     if (dataArray && bufferLength) {
-        const sliceWidth = w / bufferLength;
-        canvasCtx.strokeStyle = color;
-        canvasCtx.lineWidth = 2;
-        canvasCtx.beginPath();
-        let x = 0;
-        for (let i = 0; i < bufferLength; i++) {
-            const v = dataArray[i] / 128.0;
-            const y = (v * h) / 2;
-            if (i === 0) canvasCtx.moveTo(x, y);
-            else canvasCtx.lineTo(x, y);
-            x += sliceWidth;
+        const stride = Math.max(1, Math.floor(bufferLength / 256));
+        let samples = 0;
+        for (let i = 0; i < bufferLength; i += stride) {
+            const sample = (dataArray[i] - 128) / 128;
+            energy += sample * sample;
+            samples += 1;
         }
-        canvasCtx.lineTo(w, h / 2);
-        canvasCtx.stroke();
+        energy = samples > 0 ? Math.sqrt(energy / samples) : 0;
     }
+
+    const statePulse = currentStreamState === 'processing'
+        ? 0.018 * Math.sin(time * 3.2)
+        : currentStreamState === 'speaking'
+            ? 0.014 * Math.sin(time * 5.2)
+            : 0.008 * Math.sin(time * 1.8);
+    const audioScale = Math.min(0.14, energy * 0.52);
+    const radius = Math.min(w, h) * 0.39 * (1 + statePulse + audioScale);
+    const isMuted = session.muted;
+
+    canvasCtx.clearRect(0, 0, w, h);
+    canvasCtx.save();
+    canvasCtx.globalAlpha = isMuted ? 0.48 : 1;
+    canvasCtx.shadowColor = 'rgba(104, 119, 255, 0.34)';
+    canvasCtx.shadowBlur = (24 + energy * 70) * dpr;
+
+    const baseGradient = canvasCtx.createLinearGradient(
+        centerX - radius * 0.65,
+        centerY - radius,
+        centerX + radius * 0.55,
+        centerY + radius,
+    );
+    baseGradient.addColorStop(0, palette[0]);
+    baseGradient.addColorStop(0.56, palette[1]);
+    baseGradient.addColorStop(1, palette[2]);
+    canvasCtx.fillStyle = baseGradient;
+    canvasCtx.beginPath();
+    canvasCtx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    canvasCtx.fill();
+
+    canvasCtx.shadowBlur = 0;
+    canvasCtx.clip();
+    const cloudX = centerX + Math.sin(time * 0.48) * radius * 0.08;
+    const cloudY = centerY + radius * 0.3 + Math.cos(time * 0.42) * radius * 0.05;
+    const cloudGradient = canvasCtx.createRadialGradient(
+        cloudX,
+        cloudY,
+        radius * 0.03,
+        cloudX,
+        cloudY,
+        radius * 0.78,
+    );
+    cloudGradient.addColorStop(0, 'rgba(255, 255, 255, 0.92)');
+    cloudGradient.addColorStop(0.32, 'rgba(255, 255, 255, 0.5)');
+    cloudGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    canvasCtx.fillStyle = cloudGradient;
+    canvasCtx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+
+    const sheenGradient = canvasCtx.createRadialGradient(
+        centerX - radius * 0.42,
+        centerY - radius * 0.45,
+        0,
+        centerX - radius * 0.42,
+        centerY - radius * 0.45,
+        radius * 0.72,
+    );
+    sheenGradient.addColorStop(0, 'rgba(255, 255, 255, 0.26)');
+    sheenGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    canvasCtx.fillStyle = sheenGradient;
+    canvasCtx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
+    canvasCtx.restore();
 }
 
 function startVisualization() {
@@ -453,27 +624,20 @@ function startVisualization() {
 }
 
 function stopVisualization() {
-    if (!isActive) return;
     isActive = false;
     if (rafId) {
         cancelAnimationFrame(rafId);
         rafId = null;
     }
-    const w = $waveform.width;
-    const h = $waveform.height;
-    canvasCtx.fillStyle = '#0f172a';
-    canvasCtx.fillRect(0, 0, w, h);
+    resizeCanvas();
+    drawWaveform(true);
 }
 
 function updateRecentAudioStatus(text) {
     $recentAudioStatus.textContent = text;
 }
 
-function setRecentAudioVisible(visible) {
-    $recentAudioCard.classList.toggle('is-hidden', !visible);
-    $recentAudioCard.setAttribute('aria-hidden', visible ? 'false' : 'true');
-    $btnToggleRecentAudio.textContent = visible ? 'Hide Recent Audio' : 'Recent 60s Audio';
-}
+
 
 function revokeRecentAudioUrl() {
     if (recentAudioObjectUrl) {
@@ -596,11 +760,12 @@ function refreshRecentAudioSnapshot(force = false) {
 }
 
 session.onStateChange((state) => {
-    $streamState.textContent = state.streamState;
-    $sessionId.textContent = state.sessionId || '--';
     currentStreamState = state.streamState;
-    setConnectionButtons(state.connectionState === 'connected');
+    renderControls();
     renderSessions();
+    if (!isActive) {
+        drawWaveform(true);
+    }
 
     if (state.sessionId !== timelineSessionId) {
         resetChatTimeline(state.sessionId);
@@ -663,59 +828,48 @@ session.onFullAudioChunk((pcmChunkInt16, sampleRate) => {
     }
 });
 
-$btnStart.addEventListener('click', async () => {
-    if (isStarting) {
+$btnCall.addEventListener('click', async () => {
+    if (isStarting) return;
+
+    if (isLiveConnection()) {
+        isStopping = true;
+        renderControls();
+        try {
+            await session.close();
+            stopVisualization();
+        } catch (error) {
+            showToast('停止对话失败：' + (error?.message || error));
+        } finally {
+            isStopping = false;
+            renderControls();
+        }
         return;
     }
 
     isStarting = true;
-    setConnectionButtons(false);
+    renderControls();
     try {
         resetRecentAudioBuffer();
         await session.open();
         startVisualization();
-        setConnectionButtons(true);
+        setMainView('orb');
         await refreshSessions();
-    } catch (e) {
-        alert('Failed to start: ' + (e?.message || e));
+    } catch (error) {
+        showToast('开始对话失败：' + (error?.message || error));
     } finally {
         isStarting = false;
-        setConnectionButtons(session.state.connectionState === 'connected');
-    }
-});
-
-$btnStop.addEventListener('click', async () => {
-    try {
-        await session.close();
-        resetRealtimeUI();
-    } catch (e) {
-        alert('Failed to stop: ' + (e?.message || e));
+        renderControls();
     }
 });
 
 $btnMute.addEventListener('click', () => {
-    try {
-        session.muted = !session.muted;
-        $btnMute.textContent = session.muted ? 'Unmute' : 'Mute';
-    } catch (e) {
-        alert('Failed to toggle mute: ' + (e?.message || e));
-    }
+    if (!isLiveConnection()) return;
+    session.muted = !session.muted;
+    renderControls();
 });
 
-function setupToggle(btn, panel) {
-    btn.addEventListener('click', () => {
-        const active = btn.classList.toggle('active');
-        panel.style.display = active ? '' : 'none';
-    });
-}
-setupToggle($btnToggleThought, $panelThought);
-setupToggle($btnToggleCaption, $panelCaption);
-setupToggle($btnToggleRetrieval, $panelRetrieval);
-
-$btnToggleRecentAudio.addEventListener('click', () => {
-    const willOpen = $recentAudioCard.classList.contains('is-hidden');
-    setRecentAudioVisible(willOpen);
-    if (willOpen) {
+$recentAudioDetails.addEventListener('toggle', () => {
+    if ($recentAudioDetails.open) {
         refreshRecentAudioSnapshot(true);
     }
 });
@@ -738,13 +892,36 @@ $btnNewSession.addEventListener('click', async () => {
             renderChatTimeline();
         }
         renderSessions();
+        setMainView('orb');
+        setDrawer(null);
     } catch (error) {
-        alert('Failed to create draft session: ' + (error?.message || error));
+        showToast('新建会话失败：' + (error?.message || error));
+    }
+});
+
+$btnToggleSessions.addEventListener('click', () => {
+    setDrawer(currentDrawer === 'sessions' ? null : 'sessions');
+});
+
+$btnToggleDebug.addEventListener('click', () => {
+    setDrawer(currentDrawer === 'debug' ? null : 'debug');
+});
+
+$btnCloseSessions.addEventListener('click', () => setDrawer(null));
+$btnCloseDebug.addEventListener('click', () => setDrawer(null));
+$drawerBackdrop.addEventListener('click', () => setDrawer(null));
+$btnShowChat.addEventListener('click', () => setMainView('chat'));
+$btnShowOrb.addEventListener('click', () => setMainView('orb'));
+
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && currentDrawer) {
+        setDrawer(null);
     }
 });
 
 window.addEventListener('resize', () => {
     resizeCanvas();
+    if (!isActive) drawWaveform(true);
 });
 
 window.addEventListener('beforeunload', () => {
@@ -755,8 +932,9 @@ window.addEventListener('beforeunload', () => {
     revokeRecentAudioUrl();
 });
 
-setConnectionButtons(false);
-setRecentAudioVisible(false);
+renderControls();
+resizeCanvas();
+drawWaveform(true);
 
 let availableAudios = [];
 
@@ -787,41 +965,65 @@ async function loadReferenceAudios() {
             $voiceSelect.appendChild(option);
         });
 
-        $voiceSelect.disabled = false;
+        voiceOptionsLoaded = availableAudios.length > 0;
+        renderControls();
     } catch (error) {
         console.error('Failed to load reference audios:', error);
+        voiceOptionsLoaded = false;
         $voiceSelect.innerHTML = '<option value="">Load failed</option>';
+        renderControls();
     }
 }
 
-$voiceSelect.addEventListener('change', (e) => {
-    const selectedName = e.target.value;
-    const selectedAudio = availableAudios.find(a => (a.name || a.path) === selectedName);
-    if (selectedAudio) {
-        const voiceName = selectedAudio.name || selectedName;
-        session.changeVoice(voiceName);
+$voiceSelect.addEventListener('change', async (event) => {
+    const selectedName = event.target.value;
+    const selectedAudio = availableAudios.find((audio) => (audio.name || audio.path) === selectedName);
+    if (!selectedAudio) return;
+
+    const voiceName = selectedAudio.name || selectedName;
+    $voiceSelect.disabled = true;
+    try {
+        await session.changeVoice(voiceName);
         session.state.currentVoiceName = voiceName;
         session.state.currentVoicePath = selectedAudio.path || null;
         syncVoiceSelectValue(voiceName);
+        showToast(`已切换语音：${voiceName}`, 'success');
+    } catch (error) {
+        showToast('切换语音失败：' + (error?.message || error));
+        syncVoiceSelectValue(session.state.currentVoiceName);
+    } finally {
+        renderControls();
     }
 });
 
 $btnUploadFile.addEventListener('click', () => {
+    if (!session.state.sessionId) {
+        showToast('请先开始或选择一个会话。');
+        return;
+    }
     $fileInput.click();
 });
 
-$fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
+$fileInput.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
     if (!file) return;
+
+    isUploading = true;
+    renderControls();
     try {
         await session.uploadFile(file);
-    } catch (err) {
-        alert('Failed to upload file: ' + (err?.message || err));
+        showToast(`已上传：${file.name}`, 'success');
+    } catch (error) {
+        showToast('上传失败：' + (error?.message || error));
+    } finally {
+        isUploading = false;
+        renderControls();
+        $fileInput.value = '';
     }
-    $fileInput.value = '';
 });
 
 loadReferenceAudios();
 refreshSessions().catch((error) => {
     console.error('Initial session load failed:', error);
+    showToast('加载会话列表失败：' + (error?.message || error));
 });
