@@ -388,21 +388,35 @@ async function copyMessageText(text) {
             textArea.remove();
             if (!copied) throw new Error('Clipboard API unavailable');
         }
-        showToast('消息已复制', 'success');
+        return true;
     } catch (error) {
         showToast('复制失败：' + (error?.message || error));
+        return false;
     }
 }
 
 function createMessageCopyButton(text) {
     const button = document.createElement('button');
+    let feedbackTimer = null;
     button.type = 'button';
     button.className = 'message-copy-button';
     button.setAttribute('aria-label', '复制消息');
     button.title = '复制消息';
-    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>';
+    button.innerHTML = '<svg class="icon-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg><svg class="icon-check" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>';
     button.addEventListener('click', async () => {
-        await copyMessageText(text);
+        const copied = await copyMessageText(text);
+        if (!copied) return;
+
+        button.classList.add('is-copied');
+        button.setAttribute('aria-label', '已复制');
+        button.title = '已复制';
+        if (feedbackTimer) window.clearTimeout(feedbackTimer);
+        feedbackTimer = window.setTimeout(() => {
+            button.classList.remove('is-copied');
+            button.setAttribute('aria-label', '复制消息');
+            button.title = '复制消息';
+            feedbackTimer = null;
+        }, 1600);
     });
     return button;
 }
