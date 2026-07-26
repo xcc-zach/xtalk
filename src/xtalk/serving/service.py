@@ -27,6 +27,8 @@ from .modules.recording_manager import RecordingManager
 from .modules.turn_detector_manager import TurnDetectorManager
 from .modules.tts_playback_manager import TTSPlaybackManager
 from .modules.persistence_manager import PersistenceManager
+from .modules.mtd_diarization_manager import MtdDiarizationManager
+from .modules.multi_speaker_turn_context_manager import MultiSpeakerTurnContextManager
 from .events import Event, LLMAgentLoop
 from ..models import Agent, Models
 from .interfaces import EventListenerMixin, EventOverrides
@@ -389,6 +391,8 @@ class DefaultService(Service):
 
     MANAGER_CLASSES: list[Type[Manager]] = [
         ASRManager,
+        MtdDiarizationManager,
+        MultiSpeakerTurnContextManager,
         LLMAgentContextManager,
         LLMAgentConsumptionManager,
         DirectAudioManager,
