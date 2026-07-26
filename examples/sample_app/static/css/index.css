@@ -333,6 +333,23 @@ svg {
     height: 18px;
 }
 
+.message-copy-button .icon-check {
+    display: none;
+}
+
+.message-copy-button.is-copied {
+    color: var(--text-muted);
+    opacity: 1;
+}
+
+.message-copy-button.is-copied .icon-copy {
+    display: none;
+}
+
+.message-copy-button.is-copied .icon-check {
+    display: block;
+}
+
 .chat-mini-orb {
     position: fixed;
     z-index: 23;
