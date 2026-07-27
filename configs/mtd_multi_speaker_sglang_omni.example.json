@@ -1,0 +1,59 @@
+{
+  "speaker_diarization": {
+    "type": "SglangOmniMtdClient",
+    "params": {
+      "base_url": "http://127.0.0.1:18714",
+      "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+      "request_timeout_s": 15.0,
+      "temperature": 0.0,
+      "max_tokens": 2048,
+      "exemplar_match_min_overlap_s": 0.05
+    }
+  },
+  "service_config": {
+    "multi_speaker": {
+      "enabled": true,
+      "response_policy": "all",
+      "focus_speaker_ids": [],
+      "suppress_when_speaker_missing": false,
+      "join_timeout_s": 5.0,
+      "fallback_on_timeout": true
+    },
+    "mtd": {
+      "sample_rate": 16000,
+      "pre_buffer_s": 1.0,
+      "partial": {
+        "interval_s": 1.0,
+        "first_partial_min_s": 0.8,
+        "publish_unchanged": false,
+        "abort_on_vad_end": true
+      },
+      "audio_layout": {
+        "inter_exemplar_silence_s": 0.5,
+        "exemplar_to_current_silence_s": 1.0
+      },
+      "pool": {
+        "max_speakers": 16,
+        "min_register_duration_s": 0.7,
+        "min_update_duration_s": 0.45,
+        "preferred_min_duration_s": 1.0,
+        "preferred_max_duration_s": 7.0,
+        "hard_max_duration_s": 7.0,
+        "min_rms_dbfs": -42.0,
+        "max_clipping_ratio": 0.01,
+        "max_overlap_ratio": 0.45,
+        "prefer_non_overlap": true,
+        "allow_overlap_fallback": true,
+        "min_boundary_margin_s": 0.08,
+        "replace_score_margin": 0.08,
+        "score_weights": {
+          "duration": 0.35,
+          "rms": 0.25,
+          "non_overlap": 0.25,
+          "boundary": 0.1,
+          "unclipped": 0.05
+        }
+      }
+    }
+  }
+}
