@@ -55,7 +55,6 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
         self._lock = threading.Lock()
         self._final_event = threading.Event()
         self._fixed_prefix: str = ""
-        self._last_partial: str = ""
         self._active_partial: str = ""
         self._final_text: str = ""
         self._session_id: str = ""
@@ -92,20 +91,14 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
 
     def _handle_partial(self, response):
         transcript = str(response.get("transcript") or "").strip()
-        text = str(response.get("text") or "").strip()
-        stash = str(response.get("stash") or "").strip()
-
-        candidates = [candidate for candidate in (transcript, text) if candidate]
-        partial = max(candidates, key=len) if candidates else stash
+        confirmed_text = str(response.get("text") or "")
+        tentative_suffix = str(response.get("stash") or "")
+        partial = transcript or (confirmed_text + tentative_suffix).strip()
         if not partial:
             return
 
         with self._lock:
-            self._last_partial = partial
-            self._active_partial = self._merge_incremental_partial(
-                self._active_partial,
-                partial,
-            )
+            self._active_partial = partial
 
     def _handle_final(self, response):
         final = response.get("transcript") or response.get("text") or ""
@@ -115,52 +108,9 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             self._final_text = self._join_segments(self._fixed_prefix, active_text)
             self._final_event.set()
 
-    def _merge_incremental_partial(self, accumulated: str, partial: str) -> str:
-        """Merge one incremental partial into the accumulated transcript."""
-        if not partial:
-            return accumulated
-        if not accumulated:
-            return partial
-        if partial == accumulated:
-            return accumulated
-        if partial.startswith(accumulated):
-            return partial
-        if accumulated in partial:
-            return partial
-        if accumulated.startswith(partial) or partial in accumulated:
-            return accumulated
-
-        common_prefix_len = 0
-        for left_char, right_char in zip(accumulated, partial):
-            if left_char != right_char:
-                break
-            common_prefix_len += 1
-
-        min_len = min(len(accumulated), len(partial))
-        if common_prefix_len >= 4 or (
-            min_len > 0 and common_prefix_len / min_len >= 0.6
-        ):
-            # Realtime ASR often revises the whole hypothesis instead of sending
-            # a strict delta. When the new partial shares a strong prefix with
-            # the previous one, prefer the latest hypothesis and replace.
-            return partial
-
-        max_overlap = min(len(accumulated), len(partial))
-        for overlap in range(max_overlap, 0, -1):
-            if not accumulated.endswith(partial[:overlap]):
-                continue
-            if overlap >= 4 or overlap / len(partial) >= 0.6:
-                return accumulated + partial[overlap:]
-            break
-
-        # When no strong continuation signal exists, treat the new partial as
-        # the latest full hypothesis instead of concatenating unrelated text.
-        return partial
-
     def clear_turn(self) -> None:
         with self._lock:
             self._fixed_prefix = ""
-            self._last_partial = ""
             self._active_partial = ""
             self._final_text = ""
         self._final_event.clear()
@@ -185,7 +135,6 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
                 active_text = active_text[len(self._fixed_prefix) :].strip()
             active_text = self._strip_boundary_punctuation(active_text)
             self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
-            self._last_partial = ""
             self._active_partial = ""
             self._final_text = ""
             self._final_event.clear()
