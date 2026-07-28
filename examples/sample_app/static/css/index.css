@@ -820,6 +820,193 @@ svg {
     height: 38px;
 }
 
+.vad-panel {
+    padding: 0 14px 14px;
+}
+
+.vad-panel-heading,
+.vad-recording-heading,
+.vad-recording-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.vad-panel-heading,
+.vad-recording-heading {
+    color: var(--text-muted);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.vad-panel-heading {
+    margin-bottom: 8px;
+}
+
+#vad-timeline-clock,
+#vad-recording-count,
+.vad-recording-meta {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.vad-timeline {
+    position: relative;
+    height: 80px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background:
+        linear-gradient(to right, transparent calc(100% - 1px), var(--border) 0) 0 0 / 33.333% 100%,
+        var(--surface-muted);
+}
+
+.vad-timeline::after {
+    position: absolute;
+    z-index: 3;
+    top: 8px;
+    right: 0;
+    bottom: 20px;
+    width: 2px;
+    background: var(--focus);
+    content: "";
+    opacity: 0.72;
+}
+
+.vad-timeline-events {
+    position: absolute;
+    inset: 0 0 20px;
+}
+
+.vad-timeline-segment {
+    position: absolute;
+    top: 28px;
+    min-width: 3px;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(109, 120, 255, 0.7);
+    box-shadow: 0 0 0 1px rgba(109, 120, 255, 0.24);
+}
+
+.vad-timeline-segment.is-active {
+    background: rgba(34, 197, 94, 0.82);
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.38);
+    animation: vad-segment-pulse 900ms ease-in-out infinite alternate;
+}
+
+.vad-timeline-marker {
+    position: absolute;
+    z-index: 2;
+    top: 13px;
+    width: 1px;
+    height: 42px;
+    background: currentColor;
+    color: var(--focus);
+}
+
+.vad-timeline-marker.is-end {
+    color: #8b5cf6;
+}
+
+.vad-timeline-marker::before {
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    min-width: 15px;
+    height: 15px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    color: #fff;
+    background: var(--focus);
+    content: attr(data-label);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 8px;
+    font-weight: 700;
+    transform: translateX(-50%);
+}
+
+.vad-timeline-marker.is-end::before {
+    background: #8b5cf6;
+}
+
+.vad-timeline-axis {
+    position: absolute;
+    right: 7px;
+    bottom: 5px;
+    left: 7px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 8px;
+}
+
+.vad-recording-heading {
+    margin: 14px 0 8px;
+}
+
+.vad-recording-empty {
+    padding: 12px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: center;
+}
+
+.vad-recording-list {
+    max-height: 300px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.vad-recording-item {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-muted);
+}
+
+.vad-recording-meta {
+    margin-bottom: 7px;
+    color: var(--text-muted);
+    font-size: 9px;
+}
+
+.vad-recording-player {
+    width: 100%;
+    height: 34px;
+    display: block;
+}
+
+.vad-recording-unavailable {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+#vad-current-state.is-active {
+    color: #22c55e;
+}
+
+@keyframes vad-segment-pulse {
+    to {
+        opacity: 0.62;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vad-timeline-segment.is-active {
+        animation: none;
+    }
+}
+
 .toast-region {
     position: fixed;
     z-index: 60;

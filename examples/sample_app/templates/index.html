@@ -105,6 +105,36 @@
                     </dl>
                 </details>
 
+                <details id="vad-status-details" class="debug-details" open hidden>
+                    <summary>
+                        <span>Frontend VAD</span>
+                        <span id="vad-current-state" class="summary-value">idle</span>
+                    </summary>
+                    <div class="vad-panel">
+                        <div class="vad-panel-heading">
+                            <span>最近 30 秒</span>
+                            <span id="vad-timeline-clock">--:--:--.---</span>
+                        </div>
+                        <div id="vad-timeline" class="vad-timeline" aria-label="前端 VAD 开始和结束时间线">
+                            <div id="vad-timeline-events" class="vad-timeline-events"></div>
+                            <div class="vad-timeline-axis" aria-hidden="true">
+                                <span>-30s</span>
+                                <span>-20s</span>
+                                <span>-10s</span>
+                                <span>now</span>
+                            </div>
+                        </div>
+                        <div class="vad-recording-heading">
+                            <span>VAD 录音</span>
+                            <span id="vad-recording-count">0 clips</span>
+                        </div>
+                        <div id="vad-recording-empty" class="vad-recording-empty">
+                            等待前端 VAD 触发
+                        </div>
+                        <ol id="vad-recording-list" class="vad-recording-list"></ol>
+                    </div>
+                </details>
+
                 <details class="debug-details">
                     <summary>Thought</summary>
                     <div id="thought-content" class="debug-content"></div>
