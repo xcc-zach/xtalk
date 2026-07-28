@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Manager that forwards direct-audio tool calls as TTS chunks."""
 
+import logging
 from typing import Any
 
-from ...log_utils import logger
 from ..event_bus import EventBus
 from ..events import ToolCallOccurred, TTSChunkReady
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class DirectAudioManager(Manager):

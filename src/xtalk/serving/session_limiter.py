@@ -7,12 +7,15 @@ woken when a slot becomes available.
 """
 
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Deque
+from typing import Deque, Optional
+
 from fastapi import WebSocket
 
-from xtalk.log_utils import logger
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass

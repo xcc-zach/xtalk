@@ -1,16 +1,20 @@
-from .interfaces import ASR
-from ..registry import model
-from typing import Optional, Dict, Any, List
+import base64
+import io
+import logging
+import os
+import re
+import wave
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import base64
-import io
-import wave
-import os
-import re
-from ...log_utils import logger
+
+from ..registry import model
+from .interfaces import ASR
+
+logger = logging.getLogger(__name__)
 
 @model
 class Qwen3ASRClient(ASR):

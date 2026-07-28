@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -11,16 +12,18 @@ from fastapi.templating import Jinja2Templates
 from langchain.chat_models.base import BaseChatModel
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
+from xtalk.models.agents.default import DefaultAgent
 
 from xtalk import Xtalk, model
-from xtalk.log_utils import mute_other_logging
-from xtalk.models.agents.default import DefaultAgent
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
-
-mute_other_logging()
 
 parser = argparse.ArgumentParser(description="Mental Consultant Xtalk Server")
 parser.add_argument("--config", type=str, help="Path to the server configuration file")

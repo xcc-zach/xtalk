@@ -1,31 +1,32 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import json
+import logging
+from typing import Any, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ...log_utils import logger
-
 from ..event_bus import EventBus
 from ..events import (
-    ErrorOccurred,
-    WebSocketMessageReceived,
     AudioFrameReceived,
-    VADSpeechStart,
-    VADSpeechEnd,
+    ClockSyncReceived,
+    ErrorOccurred,
+    LLMModelSwitchRequested,
+    SessionConfigReceived,
+    TTSChunkPlayed,
+    TTSEmotionChange,
+    TTSModelSwitchRequested,
     TTSPlaybackFinished,
     TTSPlaybackStopped,
-    TTSVoiceChange,
-    TTSEmotionChange,
     TTSSpeedChange,
-    TTSChunkPlayed,
-    TTSModelSwitchRequested,
-    LLMModelSwitchRequested,
-    ClockSyncReceived,
-    SessionConfigReceived,
+    TTSVoiceChange,
+    VADSpeechEnd,
+    VADSpeechStart,
+    WebSocketMessageReceived,
 )
 from ..interfaces import EventListenerMixin
-from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:

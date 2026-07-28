@@ -1,4 +1,7 @@
 import argparse
+import json
+import logging
+import mimetypes
 import shutil
 import tarfile
 import tempfile
@@ -7,19 +10,21 @@ import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse
-import json
-import mimetypes
+
+from xtalk import Xtalk
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("application/octet-stream", ".onnx")
-
-from xtalk import Xtalk
-from xtalk.log_utils import mute_other_logging
 
 FRONTEND_UTILITIES_ROUTE = "/xtalk/frontend-utilities"
 FRONTEND_UTILITIES_DIR = Path(__file__).parent / "dist"
@@ -172,8 +177,6 @@ def download_frontend_utilities() -> None:
     if not fastenhancer_target.exists():
         download_file(FASTENHANCER_URL, fastenhancer_target)
 
-
-mute_other_logging()
 
 parser = argparse.ArgumentParser(description="Xtalk Dev Server")
 parser.add_argument("--config", type=str, help="Path to the server configuration file")

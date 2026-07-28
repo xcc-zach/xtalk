@@ -1,24 +1,28 @@
 import argparse
 import asyncio
 import json
+import logging
+import mimetypes
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
-import mimetypes
+
+from xtalk import Xtalk, model
+from xtalk.model_types import Agent
+from xtalk.models.agents import AgentContext, AgentOutput
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
-from xtalk import Xtalk, model
-from xtalk.log_utils import mute_other_logging
-from xtalk.model_types import Agent
-from xtalk.models.agents import AgentContext, AgentOutput
-
-mute_other_logging()
 
 parser = argparse.ArgumentParser(
     description="Configurable Xtalk Server with custom model"

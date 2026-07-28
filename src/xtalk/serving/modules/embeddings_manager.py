@@ -1,16 +1,18 @@
 import asyncio
+import logging
 import os
 import shutil
 from typing import Any
 
-from ...log_utils import logger
-from ..event_bus import EventBus
-from ..interfaces import Manager
 from ...models import Embeddings, Models
+from ..event_bus import EventBus
 from ..events import (
     EmbeddingStatusUpdated,
     TextForEmbeddingReady,
 )
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingsManager(Manager):

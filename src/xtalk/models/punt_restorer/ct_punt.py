@@ -17,11 +17,13 @@ Notes:
 
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List
 
-from ...log_utils import logger
-from .interfaces import PuntRestorer
 from ..registry import model
+from .interfaces import PuntRestorer
+
+logger = logging.getLogger(__name__)
 
 try:
     from funasr import AutoModel  # type: ignore

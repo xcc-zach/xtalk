@@ -4,18 +4,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, AsyncIterator
 
 from ...models import Agent, Models
 from ...models.agents import AgentOutput, AgentTurnBoundary
-from ...log_utils import logger
 from ..event_bus import EventBus
 from ..events import (
     ConsumeLLMAgentGenerationRequested,
     ErrorOccurred,
-    LLMFirstChunk,
     LLMAgentResponseFinish,
     LLMAgentResponseUpdate,
+    LLMFirstChunk,
     LLMModelSwitchRequested,
     ToolCallOccurred,
     TurnLLMAgentPauseRequested,
@@ -29,6 +29,8 @@ from ..events import (
     TurnTTSTextAppendRequested,
 )
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class LLMAgentConsumptionManager(Manager):
@@ -89,8 +91,9 @@ class LLMAgentConsumptionManager(Manager):
         extra_body: dict[str, Any] | None = None,
     ) -> None:
         """Replace the current agent LLM with a ``ChatOpenAI`` instance."""
-        from langchain_openai import ChatOpenAI
         import os
+
+        from langchain_openai import ChatOpenAI
 
         kwargs: dict[str, Any] = {"model": model}
 

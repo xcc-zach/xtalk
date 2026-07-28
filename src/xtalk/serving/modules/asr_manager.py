@@ -1,18 +1,21 @@
-from typing import Optional, Any
 import asyncio
-from ..interfaces import Manager
-from ..event_bus import EventBus
+import logging
+from typing import Any, Optional
+
 from ...models import ASR, Agent, Models
+from ..event_bus import EventBus
 from ..events import (
-    Event,
+    ASRResultFinal,  # emit when turn about to move to next stage like text generation
+    ASRResultPartial,
     EnhancedAudioFrameReceived,
-    TurnASRStartRequested,
+    Event,
     TurnASREndRequested,
     TurnASRPauseRequested,
-    ASRResultPartial,
-    ASRResultFinal,  # emit when turn about to move to next stage like text generation
+    TurnASRStartRequested,
 )
-from ...log_utils import logger
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class ByteQueue:
