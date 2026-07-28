@@ -1129,7 +1129,6 @@ $btnCall.addEventListener('click', async () => {
         resetVadDiagnostics();
         await session.open();
         startVisualization();
-        setMainView('orb');
         await refreshSessions();
     } catch (error) {
         showToast('开始对话失败：' + (error?.message || error));
