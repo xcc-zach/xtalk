@@ -49,6 +49,8 @@ class Qwen3ASRFlashConfig:
 
 
 class _RealtimeASRCallback(OmniRealtimeCallback):
+    _SENTENCE_END_PUNCTUATION = frozenset(".。!?！？…")
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._final_event = threading.Event()
@@ -181,12 +183,21 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             active_text = active_text or self._active_partial
             if self._fixed_prefix and active_text.startswith(self._fixed_prefix):
                 active_text = active_text[len(self._fixed_prefix) :].strip()
+            active_text = self._strip_boundary_punctuation(active_text)
             self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
             self._last_partial = ""
             self._active_partial = ""
             self._final_text = ""
             self._final_event.clear()
             return self._fixed_prefix
+
+    @classmethod
+    def _strip_boundary_punctuation(cls, text: str) -> str:
+        """Remove sentence-ending punctuation added at a temporary ASR boundary."""
+        text = text.rstrip()
+        while text and text[-1] in cls._SENTENCE_END_PUNCTUATION:
+            text = text[:-1].rstrip()
+        return text
 
     @staticmethod
     def _join_segments(prefix: str, segment: str) -> str:
