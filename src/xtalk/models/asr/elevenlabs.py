@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 from typing import Any, Dict, Literal, Optional
 from urllib.parse import urlencode
@@ -10,10 +11,11 @@ from urllib.parse import urlencode
 import aiohttp
 import requests
 
-from .interfaces import ASR
-from ...log_utils import logger
 from ..audio_utils import MockStreamRecognizer
 from ..registry import model
+from .interfaces import ASR
+
+logger = logging.getLogger(__name__)
 
 try:  # Optional dependency for realtime streaming
     import websockets  # type: ignore

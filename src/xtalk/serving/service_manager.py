@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 import json
-from typing import Dict, Optional, Any
+import logging
+from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from ..log_utils import logger
 from ..models import Models
 from ..persistence import PersistenceStore
+from .service import DefaultService, Service
 
-from .service import Service, DefaultService
+logger = logging.getLogger(__name__)
 
 
 class ServiceManager:

@@ -1,13 +1,15 @@
+import logging
 from typing import Any
-from ...log_utils import logger
+
+from ...models.agents.tools.retrievers import LOCAL_SEARCH_TOOL, WEB_SEARCH_TOOL
 from ..event_bus import EventBus
+from ..events import (
+    RetrievalUpdated,
+    ToolCallOccurred,
+)
 from ..interfaces import Manager
 
-from ..events import (
-    ToolCallOccurred,
-    RetrievalUpdated,
-)
-from ...models.agents.tools.retrievers import WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL
+logger = logging.getLogger(__name__)
 
 
 class RetrievalManager(Manager):

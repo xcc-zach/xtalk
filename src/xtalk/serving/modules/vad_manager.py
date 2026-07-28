@@ -19,19 +19,20 @@ Notes:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Any, Optional
 
-from ...log_utils import logger
-
+from ...models import VAD, Models
 from ..event_bus import EventBus
-from ..interfaces import Manager
 from ..events import (
     EnhancedAudioFrameReceived,
-    VADSpeechStart,
     VADSpeechEnd,
+    VADSpeechStart,
 )
-from ...models import Models, VAD
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

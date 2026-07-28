@@ -19,31 +19,32 @@ Emits:
 
 from __future__ import annotations
 
-from typing import Optional, Any
+import logging
+from typing import Any, Optional
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
-from ..interfaces import Manager
-from ..events import (
-    EnhancedAudioFrameReceived,
-    ASRResultPartial,
-    ResponseFinish,
-    ResponseUpdate,
-    VADSpeechStart,
-    VADSpeechEnd,
-    TTSChunkReady,
-    TTSPlaybackFinished,
-    TTSStopped,
-    TurnDetectorStopSpeaking,
-    TurnDetectorStartGeneration,
-)
-from ...models import Models, TurnDetector, VAD
+from ...models import VAD, Models, TurnDetector
 from ...models.turn_detector.interfaces import (
     TurnDetectionAction,
     TurnDetectionResult,
     TurnVADResult,
 )
+from ..event_bus import EventBus
+from ..events import (
+    ASRResultPartial,
+    EnhancedAudioFrameReceived,
+    ResponseFinish,
+    ResponseUpdate,
+    TTSChunkReady,
+    TTSPlaybackFinished,
+    TTSStopped,
+    TurnDetectorStartGeneration,
+    TurnDetectorStopSpeaking,
+    VADSpeechEnd,
+    VADSpeechStart,
+)
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class TurnDetectorManager(Manager):

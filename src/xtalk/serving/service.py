@@ -1,35 +1,36 @@
 # -*- coding: utf-8 -*-
+import logging
 import uuid
 from inspect import signature
+from typing import Any, Callable, Coroutine, Type
+
 from fastapi import WebSocket
-from typing import Any, Type, Callable, Coroutine
 
-from ..log_utils import logger
-
+from ..models import Agent, Models
 from .event_bus import EventBus
-from .interfaces import Manager
+from .events import Event, LLMAgentLoop
+from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
+from .modules.captioner_manager import CaptionerManager
 from .modules.direct_audio_manager import DirectAudioManager
-from .modules.tts_manager import TTSManager
-from .modules.output_gateway import OutputGateway
+from .modules.embeddings_manager import EmbeddingsManager
+from .modules.enhancer_manager import EnhancerManager
 from .modules.input_gateway import InputGateway
+from .modules.latency_manager import LatencyManager
 from .modules.llm_agent_context_manager import LLMAgentContextManager
 from .modules.llm_agent_generation_manager import LLMAgentConsumptionManager
-from .modules.captioner_manager import CaptionerManager
-from .modules.retrieval_manager import RetrievalManager
-from .modules.turn_taking_manager import TurnTakingManager
-from .modules.latency_manager import LatencyManager
-from .modules.vad_manager import VADManager
-from .modules.enhancer_manager import EnhancerManager
-from .modules.speaker_manager import SpeakerManager
-from .modules.embeddings_manager import EmbeddingsManager
-from .modules.recording_manager import RecordingManager
-from .modules.turn_detector_manager import TurnDetectorManager
-from .modules.tts_playback_manager import TTSPlaybackManager
+from .modules.output_gateway import OutputGateway
 from .modules.persistence_manager import PersistenceManager
-from .events import Event, LLMAgentLoop
-from ..models import Agent, Models
-from .interfaces import EventListenerMixin, EventOverrides
+from .modules.recording_manager import RecordingManager
+from .modules.retrieval_manager import RetrievalManager
+from .modules.speaker_manager import SpeakerManager
+from .modules.tts_manager import TTSManager
+from .modules.tts_playback_manager import TTSPlaybackManager
+from .modules.turn_detector_manager import TurnDetectorManager
+from .modules.turn_taking_manager import TurnTakingManager
+from .modules.vad_manager import VADManager
+
+logger = logging.getLogger(__name__)
 
 
 class Service:

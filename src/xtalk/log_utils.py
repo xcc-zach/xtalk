@@ -1,69 +1,34 @@
+"""Internal logging initialization for the Xtalk package."""
+
 import logging
 import os
-from datetime import datetime
+
+_DEFAULT_LOG_LEVEL = logging.INFO
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+_PACKAGE_LOGGER_NAME = "xtalk"
 
 
-def mute_other_logging():
-    """Reduce noise from third-party loggers used by Xtalk.
-
-    Notes
-    -----
-    This helper raises the root logger level to ``WARNING`` and applies the
-    same threshold to common network and SDK loggers so sample applications
-    can keep terminal output focused on Xtalk events.
-    """
-    logging.getLogger().setLevel(logging.WARNING)
-    for name in [
-        "httpx",
-        "httpcore",
-        "httpcore.http11",
-        "openai",
-        "openai._base_client",
-        "urllib3.connectionpool",
-    ]:
-        logger = logging.getLogger(name)
-        logger.setLevel(logging.WARNING)  # Keep WARNING+ only
-        logger.propagate = True  # Let logs bubble to root handlers
-
-
-def setup_logging():
-    """Configure the process-wide Xtalk logger.
-
-    Returns
-    -------
-    logging.Logger
-        The configured ``xtalk`` logger instance.
+def _initialize_package_logging() -> None:
+    """Initialize the package logger from ``XTALK_LOG_LEVEL``.
 
     Notes
     -----
-    A timestamped log file is created under ``logs/`` for every process start.
+    The package logger only defines the threshold for ``xtalk.*`` records.
+    Applications remain responsible for configuring output handlers and
+    formatters.
     """
-    # Ensure logs directory exists
-    logs_dir = "logs"
-    if not os.path.exists(logs_dir):
-        os.makedirs(logs_dir)
+    level_name = os.getenv("XTALK_LOG_LEVEL", "INFO").strip().upper()
+    package_logger = logging.getLogger(_PACKAGE_LOGGER_NAME)
+    package_logger.setLevel(_LOG_LEVELS.get(level_name, _DEFAULT_LOG_LEVEL))
 
-    # Create timestamped log filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"logs/xtalk_{timestamp}.log"
-
-    # Configure root logger
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            # Console handler
-            logging.StreamHandler(),
-            # File handler
-            logging.FileHandler(log_filename, encoding="utf-8"),
-        ],
-    )
-
-    # Return xtalk logger
-    logger = logging.getLogger("xtalk")
-
-    return logger
-
-
-# Initialize logger on import
-logger = setup_logging()
+    if not any(
+        isinstance(handler, logging.NullHandler)
+        for handler in package_logger.handlers
+    ):
+        package_logger.addHandler(logging.NullHandler())

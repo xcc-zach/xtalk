@@ -1,44 +1,45 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import logging
 from collections import deque
-from typing import Optional, NamedTuple, Any
+from typing import Any, NamedTuple, Optional
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
-from ..events import (
-    # Outbound events (unchanged for OutputGateway)
-    TTSStarted,
-    TTSStopped,
-    TTSPaused,
-    TTSResumed,
-    TTSFinished,
-    TTSTextSynthesized,
-    TTSChunkReady,
-    TTSChunkPlayed,
-    ErrorOccurred,
-    TTSVoiceChange,
-    TTSEmotionChange,
-    TTSSpeedChange,
-    ToolCallOccurred,
-    # Inbound mediator events
-    TurnTTSStartRequested,
-    TurnTTSPauseRequested,
-    TurnTTSResumeRequested,
-    TurnTTSStopRequested,
-    TurnTTSFlushRequested,
-    TTSModelSwitchRequested,
-    LLMFirstSentence,
-)
-from ..events import TurnTTSTextAppendRequested
-from ..interfaces import Manager
 from ...models import (
+    TTS,
     ForceAligner,
     Models,
     SpeechSpeedController,
     StreamingTextTTS,
-    TTS,
 )
+from ..event_bus import EventBus
+from ..events import (
+    ErrorOccurred,
+    LLMFirstSentence,
+    ToolCallOccurred,
+    TTSChunkPlayed,
+    TTSChunkReady,
+    TTSEmotionChange,
+    TTSFinished,
+    TTSModelSwitchRequested,
+    TTSPaused,
+    TTSResumed,
+    TTSSpeedChange,
+    # Outbound events (unchanged for OutputGateway)
+    TTSStarted,
+    TTSStopped,
+    TTSTextSynthesized,
+    TTSVoiceChange,
+    TurnTTSFlushRequested,
+    TurnTTSPauseRequested,
+    TurnTTSResumeRequested,
+    # Inbound mediator events
+    TurnTTSStartRequested,
+    TurnTTSStopRequested,
+    TurnTTSTextAppendRequested,
+)
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class TTSQueueItem(NamedTuple):
