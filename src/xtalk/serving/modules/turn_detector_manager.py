@@ -6,6 +6,8 @@ Manages turn detection by processing audio and ASR results through the TurnDetec
 Subscribes to:
 - EnhancedAudioFrameReceived: feeds audio to turn detector
 - ASRResultPartial: feeds text to turn detector
+- ResponseUpdate: feeds cumulative played AI response text to turn detector
+- ResponseFinish: feeds final played AI response text to turn detector
 - TTSChunkGenerated: sets turn detector to non-listening
 - TTSPlaybackFinished: resumes turn detector listening
 - TTSStopped: resumes turn detector listening
@@ -26,6 +28,8 @@ from ..interfaces import Manager
 from ..events import (
     EnhancedAudioFrameReceived,
     ASRResultPartial,
+    ResponseFinish,
+    ResponseUpdate,
     VADSpeechStart,
     VADSpeechEnd,
     TTSChunkReady,
@@ -120,6 +124,17 @@ class TurnDetectorManager(Manager):
         if event.origin == "turn_detector":
             return
         self._disable_proxy_vad()
+
+    @Manager.event_handler(ResponseUpdate, priority=100)
+    @Manager.event_handler(ResponseFinish, priority=100)
+    async def _on_assistant_text(
+        self,
+        event: ResponseUpdate | ResponseFinish,
+    ) -> None:
+        """Forward cumulative played AI response text to the turn detector."""
+        if self.turn_detector is None:
+            return
+        await self.turn_detector.async_detect(assistant_text=event.text)
 
     @Manager.event_handler(TTSChunkReady)
     async def _on_tts_chunk_generated(self, event: TTSChunkReady) -> None:
