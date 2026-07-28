@@ -56,6 +56,8 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
         self._final_event = threading.Event()
         self._fixed_prefix: str = ""
         self._active_partial: str = ""
+        self._active_item_id: str = ""
+        self._completed_item_ids: set[str] = set()
         self._final_text: str = ""
         self._session_id: str = ""
 
@@ -90,6 +92,7 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             self._session_id = sid
 
     def _handle_partial(self, response):
+        item_id = str(response.get("item_id") or "")
         transcript = str(response.get("transcript") or "").strip()
         confirmed_text = str(response.get("text") or "")
         tentative_suffix = str(response.get("stash") or "")
@@ -98,20 +101,47 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             return
 
         with self._lock:
+            if item_id and item_id in self._completed_item_ids:
+                return
+            if item_id and item_id != self._active_item_id:
+                self._fix_active_item()
+                self._active_item_id = item_id
+                self._final_text = ""
+                self._final_event.clear()
             self._active_partial = partial
 
     def _handle_final(self, response):
+        item_id = str(response.get("item_id") or "")
         final = response.get("transcript") or response.get("text") or ""
         final = str(final).strip()
         with self._lock:
-            active_text = final or self._active_partial
-            self._final_text = self._join_segments(self._fixed_prefix, active_text)
-            self._final_event.set()
+            if item_id and item_id in self._completed_item_ids:
+                return
+
+            is_active_item = (
+                not item_id
+                or not self._active_item_id
+                or item_id == self._active_item_id
+            )
+            active_text = final or (self._active_partial if is_active_item else "")
+            active_text = self._strip_boundary_punctuation(active_text)
+            self._fixed_prefix = self._join_segments(
+                self._fixed_prefix, active_text
+            )
+            if item_id:
+                self._completed_item_ids.add(item_id)
+            if is_active_item:
+                self._active_partial = ""
+                self._active_item_id = ""
+                self._final_text = self._fixed_prefix
+                self._final_event.set()
 
     def clear_turn(self) -> None:
         with self._lock:
             self._fixed_prefix = ""
             self._active_partial = ""
+            self._active_item_id = ""
+            self._completed_item_ids.clear()
             self._final_text = ""
         self._final_event.clear()
 
@@ -135,10 +165,23 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
                 active_text = active_text[len(self._fixed_prefix) :].strip()
             active_text = self._strip_boundary_punctuation(active_text)
             self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
+            if self._active_item_id:
+                self._completed_item_ids.add(self._active_item_id)
             self._active_partial = ""
+            self._active_item_id = ""
             self._final_text = ""
             self._final_event.clear()
             return self._fixed_prefix
+
+    def _fix_active_item(self) -> None:
+        """Move an unfinished server item into the stable transcript prefix."""
+        if not self._active_partial:
+            return
+        active_text = self._strip_boundary_punctuation(self._active_partial)
+        self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
+        if self._active_item_id:
+            self._completed_item_ids.add(self._active_item_id)
+        self._active_partial = ""
 
     @classmethod
     def _strip_boundary_punctuation(cls, text: str) -> str:
@@ -324,6 +367,7 @@ class Qwen3ASRFlashRealtime(ASR):
         conv.update_session(
             output_modalities=[MultiModality.TEXT],
             enable_input_audio_transcription=True,
+            enable_turn_detection=self._config.enable_turn_detection,
             transcription_params=tp,
         )
 
