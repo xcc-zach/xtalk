@@ -45,6 +45,7 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -54,6 +55,7 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -75,11 +77,18 @@ def detect(
     self,
     audio: Optional[bytes] = None,
     text: Optional[str] = None,
+    assistant_text: Optional[str] = None,
     speech_start: bool = False,
     speech_pause: Optional[bool] = None,
 ) -> TurnDetectionResult:
     return asyncio.run(
-        self.async_detect(audio, text, speech_start, speech_pause)
+        self.async_detect(
+            audio=audio,
+            text=text,
+            assistant_text=assistant_text,
+            speech_start=speech_start,
+            speech_pause=speech_pause,
+        )
     )
 ```
 
@@ -87,12 +96,16 @@ def detect(
 
 ## `async_detect`说明
 
-`TurnDetector` 支持同时消费音频信号、ASR 文本和 VAD 侧信号。每次调用都应返回一个 `TurnDetectionResult`，表示当前时刻的轮次判断结果。
+`TurnDetector` 支持同时消费音频信号、ASR 文本、已播放的 AI 回复文本和
+VAD 侧信号。每次调用都应返回一个 `TurnDetectionResult`，表示当前时刻的
+轮次判断结果。
 
 ### 输入参数
 
 - `audio`：当前音频帧，格式为 PCM 16-bit、单声道、16 kHz 字节流。
 - `text`：当前轮次截至目前的 ASR 文本。
+- `assistant_text`：已经确认播放给用户的累计 AI 回复文本。`None` 表示
+  本次调用不携带 AI 回复更新。
 - `speech_start`：VAD 刚检测到说话开始时传入的信号。
 - `speech_pause`：用户当前可能出现停顿时传入的信号，通常与 `text` 一起使用。
 
@@ -100,12 +113,28 @@ def detect(
 
 - 仅传入 `audio`，走纯音频判定路径（音频路径）
 - 仅传入 `text` 和 `speech_pause`，走文本语义判定路径（文本路径）
+- 仅传入 `assistant_text`，使用已播放的 AI 回复文本更新 detector 上下文
 - 仅传入 `speech_start=True`，通知 detector 当前说话轮次开始（辅助信号）
 
 当前仓库中的两个典型实现分别代表了两种路径：
 
 - `SoulxDuplug`：以音频路径为主，并在文本停顿信号上提供 fallback
 - `LLMTurnDetector`：以文本语义路径为主，主要依赖 `text` 与 `speech_pause`
+
+现有 detector 实现可以接收但不使用 `assistant_text`。需要感知 AI 回复的
+实现可以把累计值保存为当前 session 的状态，并在后续轮次判断中使用。
+
+## AI 回复文本更新
+
+`TurnDetectorManager` 同时订阅 `ResponseUpdate` 和 `ResponseFinish`。每收到
+一个事件，就单独调用一次
+`async_detect(assistant_text=event.text)`。这个纯上下文调用的返回值会被忽略，
+不会转换成 `STOP_SPEAKING` 或 `START_GENERATION`。
+
+`ResponseUpdate.text` 是已经确认播放给用户的累计文本前缀，而不是文本增量；
+`ResponseFinish.text` 是最终完整回复。因此，detector 保存上下文时应覆盖旧值，
+不能追加。最后一次 `ResponseUpdate` 和 `ResponseFinish` 可能包含相同文本，
+所以状态更新应当具有幂等性。
 
 ### 返回值
 
