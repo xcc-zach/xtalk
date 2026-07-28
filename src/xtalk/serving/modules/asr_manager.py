@@ -98,6 +98,8 @@ class AudioConsumer:
         # Indicate whether consumer is idle; useful for waiting consumer to process its current loop after stop
         self._consumer_idle_event = asyncio.Event()
         self._consumer_idle_event.set()
+        # Serialize lifecycle transitions so pause finalization cannot race reset.
+        self._lifecycle_lock = asyncio.Lock()
         # Start audio consumer task immediately
         self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
     async def accept_audio_frame(self, audio_frame: bytes):
@@ -109,47 +111,58 @@ class AudioConsumer:
 
     async def start(self):
         # Pump pre-buffer to recognition queue; start consumer
-        # Break start-once invariance warning
-        if self._consumer_running():
-            logger.warning(f"AudioConsumer started repeatedly; do early return")
-            return
-        self._ended = False
-        self._paused = False
-        self._turn_chat_history = self._snapshot_chat_history()
-        self._start_consumer()
-        await self._audio_queue.put(await self._pre_buffer.get())
+        async with self._lifecycle_lock:
+            # Break start-once invariance warning
+            if self._consumer_running():
+                logger.warning("AudioConsumer started repeatedly; do early return")
+                return
+            self._ended = False
+            self._paused = False
+            self._turn_chat_history = self._snapshot_chat_history()
+            self._start_consumer()
+            await self._audio_queue.put(await self._pre_buffer.get())
 
     async def pause(self):
         # Stop consumer, do one recognition and publish
-        # Break pause-once invariance warning
-        if self._paused:
-            logger.warning(f"AudioConsumer paused repeatedly; do early return")
-            return
-        if self._ended:
-            return
-        self._paused = True
-        await self._stop_consumer()
-        audio = await self._audio_queue.get()
-        # Sentence end but not end of recognition
-        await self._recognize_and_publish(audio, is_asr_end=False, is_final_chunk=True)
+        async with self._lifecycle_lock:
+            # Break pause-once invariance warning
+            if self._paused:
+                logger.warning("AudioConsumer paused repeatedly; do early return")
+                return
+            if self._ended:
+                return
+            self._paused = True
+            await self._stop_consumer()
+            audio = await self._audio_queue.get()
+            # Sentence end but not end of recognition
+            await self._recognize_and_publish(
+                audio,
+                is_asr_end=False,
+                is_final_chunk=True,
+            )
 
     async def end(self):
         # Stop consumer, do one recognition, publish ASRResultFinal, clean up states (including reset ASR)
-        # Break stop-once invariance warning
-        if self._ended:
-            logger.warning(f"AudioConsumer ended repeatedly; do early return")
-            return
-        self._ended = True
-        if self._paused:
-            # Reuse the pause-time recognition result to avoid re-entering ASR
-            # during the pause->finalize handoff.
-            await self._publish_final_from_cached_text()
+        async with self._lifecycle_lock:
+            # Break stop-once invariance warning
+            if self._ended:
+                logger.warning("AudioConsumer ended repeatedly; do early return")
+                return
+            self._ended = True
+            if self._paused:
+                # Reuse the pause-time recognition result to avoid re-entering ASR
+                # during the pause->finalize handoff.
+                await self._publish_final_from_cached_text()
+                await self._reset_states()
+                return
+            await self._stop_consumer()
+            audio = await self._audio_queue.get()
+            await self._recognize_and_publish(
+                audio,
+                is_asr_end=True,
+                is_final_chunk=True,
+            )
             await self._reset_states()
-            return
-        await self._stop_consumer()
-        audio = await self._audio_queue.get()
-        await self._recognize_and_publish(audio, is_asr_end=True, is_final_chunk=True)
-        await self._reset_states()
 
     async def _audio_consumer(self):
         while True:
