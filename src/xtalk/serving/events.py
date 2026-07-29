@@ -430,10 +430,19 @@ class TurnTTSFlushRequested(Event):
 
 @dataclass
 class ConsumeLLMAgentGenerationRequested(Event):
-    """Request consumption of one LLM-agent output stream."""
+    """Request consumption of one LLM-agent output stream.
+
+    Attributes
+    ----------
+    stream : AsyncIterator[AgentOutput]
+        Agent output stream to consume.
+    persistent : bool
+        Whether turn-stop events must preserve the stream.
+    """
 
     TYPE: ClassVar[str] = "llm_agent.consume_generation_requested"
     stream: AsyncIterator[AgentOutput]
+    persistent: bool = False
 
 
 @dataclass
