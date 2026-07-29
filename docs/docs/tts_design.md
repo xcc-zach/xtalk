@@ -96,7 +96,7 @@ Therefore:
 ## TTS Playback Text Tracking
 
 `TTSPlaybackManager` advances played-audio time from frontend `TTSChunkPlayed`
-confirmations and publishes `ResponseUpdate`. When a `force_aligner` model is
+confirmations and publishes `ResponseUpdate`. When a `forced_aligner` model is
 configured, `TTSManager` buffers each complete synthesized sentence instead of
 sending it immediately. `TTSPlaybackManager` aligns that exact, speed-adjusted
 PCM before the sentence is released to the frontend, then uses the returned

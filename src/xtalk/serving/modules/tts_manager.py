@@ -6,7 +6,7 @@ from typing import Any, NamedTuple, Optional
 
 from ...models import (
     TTS,
-    ForceAligner,
+    ForcedAligner,
     Models,
     SpeechSpeedController,
     StreamingTextTTS,
@@ -109,12 +109,7 @@ class TTSManager(Manager):
         self.speed_controller = self.models.get(SpeechSpeedController)
         self.current_speed: float = 1.0
 
-        force_alignment_config = self.config.get("force_alignment", {})
-        if not isinstance(force_alignment_config, dict):
-            force_alignment_config = {}
-        self._prealign_before_playback = bool(self.models.get(ForceAligner)) and bool(
-            force_alignment_config.get("enabled", True)
-        )
+        self._prealign_before_playback = self.models.get(ForcedAligner) is not None
 
         self._resume_event = asyncio.Event()
         self._resume_event.set()

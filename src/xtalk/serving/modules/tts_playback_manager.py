@@ -28,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...models import ForceAligner, ForceAlignmentUnit, Models
+from ...models import ForcedAligner, ForcedAlignmentUnit, Models
 from ..event_bus import EventBus
 from ..events import (
     LLMAgentResponseFinish,
@@ -69,7 +69,7 @@ class _PlaybackSegment:
     audio_parts: list[bytes] = field(default_factory=list)
     alignment_audio_valid: bool = True
     alignment_state: str = "disabled"
-    alignment_units: list[ForceAlignmentUnit] = field(default_factory=list)
+    alignment_units: list[ForcedAlignmentUnit] = field(default_factory=list)
     alignment_task: asyncio.Task[None] | None = None
 
 
@@ -90,20 +90,18 @@ class TTSPlaybackManager(Manager):
         self.session_id = session_id
         self.models = models
         self.config: dict[str, Any] = config or {}
-        force_alignment_config = self.config.get("force_alignment", {})
-        if not isinstance(force_alignment_config, dict):
-            force_alignment_config = {}
-        self.force_aligner = models.get(ForceAligner) if models else None
-        self._force_alignment_enabled = bool(self.force_aligner) and bool(
-            force_alignment_config.get("enabled", True)
-        )
-        self._force_alignment_language = force_alignment_config.get("language")
+        forced_alignment_config = self.config.get("forced_alignment", {})
+        if not isinstance(forced_alignment_config, dict):
+            forced_alignment_config = {}
+        self.forced_aligner = models.get(ForcedAligner) if models else None
+        self._forced_alignment_enabled = self.forced_aligner is not None
+        self._forced_alignment_language = forced_alignment_config.get("language")
         self._fallback_while_alignment_pending = bool(
-            force_alignment_config.get("fallback_while_pending", True)
+            forced_alignment_config.get("fallback_while_pending", True)
         )
         self._stop_ack_timeout_ms = max(
             0.0,
-            float(force_alignment_config.get("stop_ack_timeout_ms", 500.0)),
+            float(forced_alignment_config.get("stop_ack_timeout_ms", 500.0)),
         )
 
         self._current_response_text = ""
@@ -209,7 +207,7 @@ class TTSPlaybackManager(Manager):
             total_audio_ms=total_audio_ms,
             turn_id=self._turn_id,
             alignment_state="pending"
-            if self._force_alignment_enabled
+            if self._forced_alignment_enabled
             else "disabled",
         )
         if preloaded_audio and preloaded_sample_rate > 0:
@@ -219,7 +217,7 @@ class TTSPlaybackManager(Manager):
             self._prebound_audio_ms += total_audio_ms
 
         self._segments.append(segment)
-        if preloaded_audio and self._force_alignment_enabled:
+        if preloaded_audio and self._forced_alignment_enabled:
             segment.alignment_state = "running"
             logger.info(
                 "TTS forced alignment started before playback - session: %s, "
@@ -259,7 +257,7 @@ class TTSPlaybackManager(Manager):
             return self._completed_text + aligned_prefix
 
         if (
-            self._force_alignment_enabled
+            self._forced_alignment_enabled
             and segment.alignment_state in {"pending", "running"}
             and not self._fallback_while_alignment_pending
         ):
@@ -362,7 +360,7 @@ class TTSPlaybackManager(Manager):
     def _try_start_segment_alignment(self, segment: _PlaybackSegment) -> None:
         """Start forced alignment once a segment has its full audio."""
 
-        if not self._force_alignment_enabled or self.force_aligner is None:
+        if not self._forced_alignment_enabled or self.forced_aligner is None:
             return
         if segment.alignment_state != "pending":
             return
@@ -392,14 +390,13 @@ class TTSPlaybackManager(Manager):
     ) -> None:
         """Run forced alignment for a text segment in the background."""
 
-        assert self.force_aligner is not None
+        assert self.forced_aligner is not None
         try:
             audio = b"".join(segment.audio_parts)
-            units = await self.force_aligner.async_align(
+            units = await self.forced_aligner.async_align(
                 audio=audio,
                 text=segment.text,
-                sample_rate=segment.audio_sample_rate or 48000,
-                language=self._force_alignment_language,
+                language=self._forced_alignment_language,
             )
             if turn_id != self._turn_id or segment.turn_id != self._turn_id:
                 return
@@ -429,11 +426,11 @@ class TTSPlaybackManager(Manager):
     def _normalize_alignment_units(
         self,
         text: str,
-        units: list[ForceAlignmentUnit],
-    ) -> list[ForceAlignmentUnit]:
+        units: list[ForcedAlignmentUnit],
+    ) -> list[ForcedAlignmentUnit]:
         """Map model-returned units onto character spans in the original text."""
 
-        normalized: list[ForceAlignmentUnit] = []
+        normalized: list[ForcedAlignmentUnit] = []
         cursor = 0
         for unit in sorted(units, key=lambda item: (item.start_ms, item.end_ms)):
             if unit.end_ms < unit.start_ms:
@@ -445,7 +442,7 @@ class TTSPlaybackManager(Manager):
             char_start, char_end = span
             cursor = max(cursor, char_end)
             normalized.append(
-                ForceAlignmentUnit(
+                ForcedAlignmentUnit(
                     text=text[char_start:char_end],
                     start_ms=max(0.0, float(unit.start_ms)),
                     end_ms=max(0.0, float(unit.end_ms)),
@@ -458,7 +455,7 @@ class TTSPlaybackManager(Manager):
     def _resolve_unit_span(
         self,
         text: str,
-        unit: ForceAlignmentUnit,
+        unit: ForcedAlignmentUnit,
         cursor: int,
     ) -> tuple[int, int] | None:
         """Resolve one alignment unit to a non-empty span in original text."""
