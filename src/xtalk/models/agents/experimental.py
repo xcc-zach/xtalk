@@ -69,6 +69,14 @@ class ExperimentalAgent(Agent):
     本轮已经附和过的内容：__ALREADY_BACKCHANNELED_TEXT__
     待判断附和的用户输入：__USER_INPUT__"""
 
+    ASYNC_REPORT_INSTRUCTION = (
+        "某个后台异步工具刚刚返回了最终结果，就在上面最近的一条工具消息（tool 角色）里。"
+        "你现在唯一的任务是：用自然口语，主动、简洁地把这个最终结果告诉用户。要求："
+        "1. 直接说结果本身，不要说“稍等”“让我想想”“稍后回来”这类话；"
+        "2. 绝对不要调用任何工具，也不要输出任何工具调用格式的内容；"
+        "3. 如果结果里有明确答案，必须原样、完整地念出来。"
+    )
+
     def __init__(
         self,
         model: BaseChatModel | dict[str, Any],
@@ -134,6 +142,7 @@ class ExperimentalAgent(Agent):
         self._pending_async_tool_updates: list[
             tuple[ToolCall, ToolMessage, AgentOutput]
         ] = []
+        self._pending_final_reports: list[AgentOutput] = []
         self.tool_engine.on_async_tool_update(self._on_async_tool_update)
 
         # every time remove this prefix before judging backchannel
@@ -236,7 +245,10 @@ class ExperimentalAgent(Agent):
                 except asyncio.QueueEmpty:
                     break
 
-            async for generated_item in self._stream_messages(allow_tools=False):
+            async for generated_item in self._stream_messages(
+                allow_tools=False,
+                transient_instruction=self.ASYNC_REPORT_INSTRUCTION,
+            ):
                 yield generated_item
             yield AgentTurnBoundary()
 
@@ -293,6 +305,7 @@ class ExperimentalAgent(Agent):
         async for item in self._stream_messages():
             yield item
         yield AgentTurnBoundary()
+        self._flush_pending_final_reports()
         # reset backchannel state
         self._already_backchanneled_text = ""
         self._turn_already_to_backchannel_response = {}
@@ -381,11 +394,13 @@ class ExperimentalAgent(Agent):
         self,
         *,
         allow_tools: bool = True,
+        transient_instruction: str | None = None,
     ) -> AsyncIterator[AgentOutput]:
         async with self._model_generation_lock:
             try:
                 async for item in self._stream_messages_unlocked(
                     allow_tools=allow_tools,
+                    transient_instruction=transient_instruction,
                 ):
                     yield item
             finally:
@@ -395,6 +410,7 @@ class ExperimentalAgent(Agent):
         self,
         *,
         allow_tools: bool,
+        transient_instruction: str | None = None,
     ) -> AsyncIterator[AgentOutput]:
         streaming_model = (
             self.model_with_tools
@@ -404,7 +420,10 @@ class ExperimentalAgent(Agent):
         while True:
             response_message = AIMessage(content="")
             gathered = None
-            async for chunk in streaming_model.astream(self.messages):
+            prompt_messages = list(self.messages)
+            if transient_instruction:
+                prompt_messages.append(SystemMessage(content=transient_instruction))
+            async for chunk in streaming_model.astream(prompt_messages):
                 text = self.content_to_text(chunk.content)
                 if text:
                     response_message.content += text
@@ -476,8 +495,28 @@ class ExperimentalAgent(Agent):
             messages=self._chat_history.messages,
         )
         if not self._human_input_finished:
+            if self._is_final_tool_update(tool_message):
+                self._pending_final_reports.append(output)
             return
         self._async_tool_update_queue.put_nowait(output)
+
+    @staticmethod
+    def _is_final_tool_update(tool_message: ToolMessage) -> bool:
+        """Return whether an asynchronous update carries a final result."""
+
+        try:
+            payload = json.loads(str(tool_message.content))
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return payload.get("running") is False
+
+    def _flush_pending_final_reports(self) -> None:
+        """Queue final results that arrived while the user was speaking."""
+
+        pending_reports = self._pending_final_reports
+        self._pending_final_reports = []
+        for output in pending_reports:
+            self._async_tool_update_queue.put_nowait(output)
 
     def _flush_pending_async_tool_updates(self) -> None:
         """Move updates deferred during generation into history and the queue."""
