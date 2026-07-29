@@ -51,6 +51,22 @@ A high-performance speech recognition framework, and more. It can run many speec
 </details>
 
 <details markdown="1">
+<summary>MossTTSRealtime</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/tts/moss_tts_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/moss_tts_realtime.py)
+
+A full-duplex streaming TTS client that sends incremental text and receives
+PCM audio from a MOSS-TTS-Realtime service.
+
+[Quick Start](https://github.com/xcc-zach/xtalk-moss-tts-realtime)
+
+[Original Repository](https://github.com/OpenMOSS/MOSS-TTS)
+
+</details>
+
+<details markdown="1">
 <summary>CosyVoice</summary>
 
 **Dependency:** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`

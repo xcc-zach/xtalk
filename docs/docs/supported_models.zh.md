@@ -51,6 +51,22 @@
 </details>
 
 <details markdown="1">
+<summary>MossTTSRealtime</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/tts/moss_tts_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/moss_tts_realtime.py)
+
+一个全双工流式 TTS 客户端，可向 MOSS-TTS-Realtime 服务增量发送文本并接收
+PCM 音频。
+
+[快速开始](https://github.com/xcc-zach/xtalk-moss-tts-realtime)
+
+[原始仓库](https://github.com/OpenMOSS/MOSS-TTS)
+
+</details>
+
+<details markdown="1">
 <summary>CosyVoice</summary>
 
 **依赖：** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`
