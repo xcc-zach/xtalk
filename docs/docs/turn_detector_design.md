@@ -45,6 +45,7 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -54,6 +55,7 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -75,11 +77,18 @@ def detect(
     self,
     audio: Optional[bytes] = None,
     text: Optional[str] = None,
+    assistant_text: Optional[str] = None,
     speech_start: bool = False,
     speech_pause: Optional[bool] = None,
 ) -> TurnDetectionResult:
     return asyncio.run(
-        self.async_detect(audio, text, speech_start, speech_pause)
+        self.async_detect(
+            audio=audio,
+            text=text,
+            assistant_text=assistant_text,
+            speech_start=speech_start,
+            speech_pause=speech_pause,
+        )
     )
 ```
 
@@ -87,12 +96,16 @@ If the underlying implementation is already synchronous, you may also implement 
 
 ## `async_detect`
 
-`TurnDetector` can consume audio signals, ASR text, and VAD side signals at the same time. Each call should return a `TurnDetectionResult` representing the turn-taking judgment at the current moment.
+`TurnDetector` can consume audio signals, ASR text, played assistant response text,
+and VAD side signals at the same time. Each call should return a
+`TurnDetectionResult` representing the turn-taking judgment at the current moment.
 
 ### Input Parameters
 
 - `audio`: The current audio frame, in PCM 16-bit, mono, 16 kHz bytes.
 - `text`: The ASR text accumulated so far for the current turn.
+- `assistant_text`: The cumulative AI response text confirmed as played to the
+  user. `None` means the call carries no assistant response update.
 - `speech_start`: A signal passed in when VAD has just detected speech start.
 - `speech_pause`: A signal passed in when the user may currently be pausing, usually used together with `text`.
 
@@ -100,12 +113,32 @@ Typical combinations of these inputs are:
 
 - Only `audio`: pure audio-based detection path
 - Only `text` and `speech_pause`: text-semantic detection path
+- Only `assistant_text`: update the detector's context with played AI response
+  text
 - Only `speech_start=True`: notify the detector that the current speaking turn has started
 
 The two representative implementations in the current repository correspond to two different paths:
 
 - `SoulxDuplug`: primarily audio-based, with fallback on text pause signals
 - `LLMTurnDetector`: primarily text-semantic, mainly relying on `text` and `speech_pause`
+
+Existing detector implementations may accept `assistant_text` without using it.
+Assistant-aware implementations can store the cumulative value as session state
+and use it in later turn decisions.
+
+## Assistant response updates
+
+`TurnDetectorManager` subscribes to both `ResponseUpdate` and `ResponseFinish`.
+Each event causes one standalone call to
+`async_detect(assistant_text=event.text)`. The return value from this
+context-only call is intentionally ignored and is not converted into
+`STOP_SPEAKING` or `START_GENERATION`.
+
+`ResponseUpdate.text` is a cumulative prefix confirmed as played to the user,
+not a text delta. `ResponseFinish.text` is the final complete response. A
+detector that stores this context should therefore replace its stored value
+rather than append to it. The final `ResponseUpdate` and `ResponseFinish` may
+contain the same text, so updates should be idempotent.
 
 ### Return Value
 

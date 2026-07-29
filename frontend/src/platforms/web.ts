@@ -305,10 +305,9 @@ declare global {
 class WebInputAudioSession extends BaseInputAudioSession {
     readonly VAD_PARAMS = {
         vadFrameSamples: 512,
-        vadNegativeFramesBeforeEnd: 50,
         vadConfig: {
-            positiveSpeechThreshold: 0.2,
-            negativeSpeechThreshold: 0.1,
+            positiveSpeechThreshold: 0.1,
+            negativeSpeechThreshold: 0.02,
             preSpeechPadMs: 30,
             redemptionMs: 500,
             minSpeechMs: 250,
@@ -401,10 +400,6 @@ class WebInputAudioSession extends BaseInputAudioSession {
         const vadStateZeros = Array(2 * 128).fill(0);
         let vadState = new window.ort.Tensor('float32', vadStateZeros, [2, 1, 128]);
         const vadSr = new window.ort.Tensor('int64', [BigInt(this.config.sampleRate)]);
-        const vadHelpers = {
-            negEndCounterEnabled: false,
-            negEndCounter: 0
-        };
 
         const frameProcessorProcess = async (frame: Float32Array) => {
             const enhancedFrame = await enhanceFrame(frame);
@@ -425,31 +420,32 @@ class WebInputAudioSession extends BaseInputAudioSession {
             this.VAD_PARAMS.vadConfig,
             this.VAD_PARAMS.vadFrameSamples / this.config.sampleRate * 1000
         );
-        const onFrameProcessorEvent = (ev: { msg: any; frame: Float32Array; probs: { notSpeech: number; }; }) => {
+        const onFrameProcessorEvent = (ev: {
+            msg: any;
+            frame: Float32Array;
+            probs: {
+                isSpeech: number;
+            };
+        }) => {
             switch (ev.msg) {
-                case window.vad.Message.FrameProcessed:
-                    if (vadHelpers.negEndCounterEnabled) {
-                        const ns = Number(ev?.probs?.notSpeech ?? 0);
-                        const nsHigh = ns > (1 - this.VAD_PARAMS.vadConfig.negativeSpeechThreshold);
-                        vadHelpers.negEndCounter = nsHigh ? (vadHelpers.negEndCounter + 1) : 0;
-                        if (vadHelpers.negEndCounter > this.VAD_PARAMS.vadNegativeFramesBeforeEnd) {
-                            this.speechEndCallback();
-                            vadHelpers.negEndCounterEnabled = false;
-                            vadHelpers.negEndCounter = 0;
-                        }
+                case window.vad.Message.FrameProcessed: {
+                    const speechProbability = Number(ev.probs.isSpeech);
+                    if (
+                        speechProbability
+                        >= this.VAD_PARAMS.vadConfig.negativeSpeechThreshold
+                    ) {
+                        // Only consecutive below-threshold frames may end speech.
+                        frameProcessor.redemptionCounter = 0;
                     }
                     break;
+                }
 
                 case window.vad.Message.SpeechStart:
                     this.speechStartCallback();
-                    vadHelpers.negEndCounterEnabled = true;
-                    vadHelpers.negEndCounter = 0;
                     break;
 
                 case window.vad.Message.SpeechEnd:
                     this.speechEndCallback();
-                    vadHelpers.negEndCounterEnabled = false;
-                    vadHelpers.negEndCounter = 0;
                     break;
             }
         };

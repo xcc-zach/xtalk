@@ -1,24 +1,29 @@
-from typing import Any
 import argparse
+import logging
 import mimetypes
+from typing import Any
 
-mimetypes.add_type("application/javascript", ".js")
-mimetypes.add_type("application/javascript", ".mjs")
-mimetypes.add_type("text/css", ".css")
 from xtalk import (
-    Xtalk,
     DefaultService,
-    create_event_class,
-    Manager,
     EventBus,
+    Manager,
     Models,
+    Xtalk,
+    create_event_class,
 )
 from xtalk.events import *
 from xtalk.model_types import *
 from xtalk.serving.module_types import *
-from xtalk.log_utils import mute_other_logging
 
-mute_other_logging()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+
 parser = argparse.ArgumentParser(description="Custom Xtalk Server")
 parser.add_argument("--config", type=str, help="Path to the server configuration file")
 parser.add_argument("--port", type=int, help="Port number for the server to listen on")
@@ -108,9 +113,9 @@ custom_service.subscribe_event(
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
 
 xtalk_instance = Xtalk(service_prototype=custom_service, max_sessions=10)
 

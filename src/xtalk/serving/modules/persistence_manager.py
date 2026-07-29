@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from ...log_utils import logger
 from ...persistence import PersistenceStore
 from ..event_bus import EventBus
 from ..events import ASRResultFinal, ResponseFinish
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class PersistenceManager(Manager):

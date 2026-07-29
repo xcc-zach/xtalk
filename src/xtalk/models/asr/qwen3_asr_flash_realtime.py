@@ -49,12 +49,15 @@ class Qwen3ASRFlashConfig:
 
 
 class _RealtimeASRCallback(OmniRealtimeCallback):
+    _SENTENCE_END_PUNCTUATION = frozenset(".。!?！？…")
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._final_event = threading.Event()
         self._fixed_prefix: str = ""
-        self._last_partial: str = ""
         self._active_partial: str = ""
+        self._active_item_id: str = ""
+        self._completed_item_ids: set[str] = set()
         self._final_text: str = ""
         self._session_id: str = ""
 
@@ -89,77 +92,56 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             self._session_id = sid
 
     def _handle_partial(self, response):
+        item_id = str(response.get("item_id") or "")
         transcript = str(response.get("transcript") or "").strip()
-        text = str(response.get("text") or "").strip()
-        stash = str(response.get("stash") or "").strip()
-
-        candidates = [candidate for candidate in (transcript, text) if candidate]
-        partial = max(candidates, key=len) if candidates else stash
+        confirmed_text = str(response.get("text") or "")
+        tentative_suffix = str(response.get("stash") or "")
+        partial = transcript or (confirmed_text + tentative_suffix).strip()
         if not partial:
             return
 
         with self._lock:
-            self._last_partial = partial
-            self._active_partial = self._merge_incremental_partial(
-                self._active_partial,
-                partial,
-            )
+            if item_id and item_id in self._completed_item_ids:
+                return
+            if item_id and item_id != self._active_item_id:
+                self._fix_active_item()
+                self._active_item_id = item_id
+                self._final_text = ""
+                self._final_event.clear()
+            self._active_partial = partial
 
     def _handle_final(self, response):
+        item_id = str(response.get("item_id") or "")
         final = response.get("transcript") or response.get("text") or ""
         final = str(final).strip()
         with self._lock:
-            active_text = final or self._active_partial
-            self._final_text = self._join_segments(self._fixed_prefix, active_text)
-            self._final_event.set()
+            if item_id and item_id in self._completed_item_ids:
+                return
 
-    def _merge_incremental_partial(self, accumulated: str, partial: str) -> str:
-        """Merge one incremental partial into the accumulated transcript."""
-        if not partial:
-            return accumulated
-        if not accumulated:
-            return partial
-        if partial == accumulated:
-            return accumulated
-        if partial.startswith(accumulated):
-            return partial
-        if accumulated in partial:
-            return partial
-        if accumulated.startswith(partial) or partial in accumulated:
-            return accumulated
-
-        common_prefix_len = 0
-        for left_char, right_char in zip(accumulated, partial):
-            if left_char != right_char:
-                break
-            common_prefix_len += 1
-
-        min_len = min(len(accumulated), len(partial))
-        if common_prefix_len >= 4 or (
-            min_len > 0 and common_prefix_len / min_len >= 0.6
-        ):
-            # Realtime ASR often revises the whole hypothesis instead of sending
-            # a strict delta. When the new partial shares a strong prefix with
-            # the previous one, prefer the latest hypothesis and replace.
-            return partial
-
-        max_overlap = min(len(accumulated), len(partial))
-        for overlap in range(max_overlap, 0, -1):
-            if not accumulated.endswith(partial[:overlap]):
-                continue
-            if overlap >= 4 or overlap / len(partial) >= 0.6:
-                return accumulated + partial[overlap:]
-            break
-
-        # When no strong continuation signal exists, treat the new partial as
-        # the latest full hypothesis instead of concatenating unrelated text.
-        return partial
+            is_active_item = (
+                not item_id
+                or not self._active_item_id
+                or item_id == self._active_item_id
+            )
+            active_text = final or (self._active_partial if is_active_item else "")
+            active_text = self._strip_boundary_punctuation(active_text)
+            self._fixed_prefix = self._join_segments(
+                self._fixed_prefix, active_text
+            )
+            if item_id:
+                self._completed_item_ids.add(item_id)
+            if is_active_item:
+                self._active_partial = ""
+                self._active_item_id = ""
+                self._final_text = self._fixed_prefix
+                self._final_event.set()
 
     def clear_turn(self) -> None:
         with self._lock:
             self._fixed_prefix = ""
-            self._last_partial = ""
             self._active_partial = ""
+            self._active_item_id = ""
+            self._completed_item_ids.clear()
             self._final_text = ""
         self._final_event.clear()
 
@@ -181,12 +163,33 @@ class _RealtimeASRCallback(OmniRealtimeCallback):
             active_text = active_text or self._active_partial
             if self._fixed_prefix and active_text.startswith(self._fixed_prefix):
                 active_text = active_text[len(self._fixed_prefix) :].strip()
+            active_text = self._strip_boundary_punctuation(active_text)
             self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
-            self._last_partial = ""
+            if self._active_item_id:
+                self._completed_item_ids.add(self._active_item_id)
             self._active_partial = ""
+            self._active_item_id = ""
             self._final_text = ""
             self._final_event.clear()
             return self._fixed_prefix
+
+    def _fix_active_item(self) -> None:
+        """Move an unfinished server item into the stable transcript prefix."""
+        if not self._active_partial:
+            return
+        active_text = self._strip_boundary_punctuation(self._active_partial)
+        self._fixed_prefix = self._join_segments(self._fixed_prefix, active_text)
+        if self._active_item_id:
+            self._completed_item_ids.add(self._active_item_id)
+        self._active_partial = ""
+
+    @classmethod
+    def _strip_boundary_punctuation(cls, text: str) -> str:
+        """Remove sentence-ending punctuation added at a temporary ASR boundary."""
+        text = text.rstrip()
+        while text and text[-1] in cls._SENTENCE_END_PUNCTUATION:
+            text = text[:-1].rstrip()
+        return text
 
     @staticmethod
     def _join_segments(prefix: str, segment: str) -> str:
@@ -364,6 +367,7 @@ class Qwen3ASRFlashRealtime(ASR):
         conv.update_session(
             output_modalities=[MultiModality.TEXT],
             enable_input_audio_transcription=True,
+            enable_turn_detection=self._config.enable_turn_detection,
             transcription_params=tp,
         )
 

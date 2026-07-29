@@ -23,16 +23,15 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Any, Optional
 
 import numpy as np
 
-from ...log_utils import logger
-
+from ...models import Models, SpeechEnhancer
 from ..event_bus import EventBus
-from ..interfaces import Manager
 from ..events import (
     AudioFrameReceived,
     EnhancedAudioFrameReceived,
@@ -43,7 +42,9 @@ from ..events import (
     TTSStopped,
     VADSpeechEnd,
 )
-from ...models import Models, SpeechEnhancer
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 _ENHANCER_SAMPLE_RATE = 16000

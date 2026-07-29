@@ -3,15 +3,16 @@
 Event Bus with enhanced error handling and recursion protection.
 """
 import asyncio
+import logging
+import time
+import weakref
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Callable, Any, Optional, Set, Type, Union
-import weakref
-import time
+from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
-from ..log_utils import logger
+from .events import ErrorOccurred, Event
 
-from .events import Event, ErrorOccurred
+logger = logging.getLogger(__name__)
 
 
 @dataclass

@@ -8,6 +8,7 @@ from typing import Optional
 
 from ..registry import model_type
 
+
 class TurnDetectionAction(Enum):
     """Immediate action selected by a turn detector."""
 
@@ -104,10 +105,11 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
-        """Detect conversational turn state from audio and/or text.
+        """Detect conversational turn state from audio and/or text context.
 
         Parameters
         ----------
@@ -115,9 +117,12 @@ class TurnDetector(ABC):
             Current PCM 16-bit mono audio frame at 16 kHz.
         text : str | None, optional
             ASR text for the current turn.
+        assistant_text : str | None, optional
+            Cumulative AI response text confirmed as played to the user.
+            ``None`` means that this call carries no assistant response update.
         speech_start : bool, optional
             Whether VAD has just detected the start of speech. This may be
-            provided without ``audio`` or ``text``.
+            provided without ``audio``, ``text``, or ``assistant_text``.
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking. This is typically
             provided together with ``text``.
@@ -133,6 +138,7 @@ class TurnDetector(ABC):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -144,9 +150,12 @@ class TurnDetector(ABC):
             Current PCM 16-bit mono audio frame at 16 kHz.
         text : str | None, optional
             ASR text for the current turn.
+        assistant_text : str | None, optional
+            Cumulative AI response text confirmed as played to the user.
+            ``None`` means that this call carries no assistant response update.
         speech_start : bool, optional
             Whether VAD has just detected the start of speech. This may be
-            provided without ``audio`` or ``text``.
+            provided without ``audio``, ``text``, or ``assistant_text``.
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking.
 
@@ -160,6 +169,7 @@ class TurnDetector(ABC):
             self.detect,
             audio=audio,
             text=text,
+            assistant_text=assistant_text,
             speech_start=speech_start,
             speech_pause=speech_pause,
         )

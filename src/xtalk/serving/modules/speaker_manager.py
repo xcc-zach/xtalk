@@ -6,24 +6,27 @@ Maintains per-session speaker embeddings to recognize or register speakers based
 voiceprints provided by a SpeakerEncoder.
 """
 import asyncio
-import numpy as np
 import json
+import logging
 import os
-from datetime import datetime
-from typing import Optional, Any, List, Dict
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from ...log_utils import logger
+import numpy as np
+
+from ...models import Models, SpeakerEncoder
 from ..event_bus import EventBus
 from ..events import (
     EnhancedAudioFrameReceived,
-    TurnASRStartRequested,
-    TurnASREndRequested,
     SpeakerRecognized,
+    TurnASREndRequested,
+    TurnASRStartRequested,
 )
 from ..interfaces import Manager
-from ...models import Models, SpeakerEncoder
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

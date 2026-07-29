@@ -29,18 +29,20 @@ Events:
 """
 
 import asyncio
+import logging
 import time
 from collections import deque
-from typing import Deque, Optional, Tuple, Any
+from typing import Any, Deque, Optional, Tuple
 
-from ...log_utils import logger
+from ...models import Captioner, Models, Rewriter
 from ..event_bus import EventBus
 from ..events import (
     AudioFrameReceived,
     CaptionUpdated,
 )
 from ..interfaces import Manager
-from ...models import Captioner, Models, Rewriter
+
+logger = logging.getLogger(__name__)
 
 
 class CaptionerManager(Manager):

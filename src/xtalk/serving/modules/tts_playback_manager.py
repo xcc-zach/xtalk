@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
 # Playback tracking plan:
 # 1. Extend TTSPlaybackManager state with a segment ledger, a FIFO queue of
 #    generated chunk durations, the latest reported text prefix, and cached
@@ -21,13 +23,11 @@ from __future__ import annotations
 #    completes, flush any remaining played text via ResponseUpdate if needed,
 #    publish ResponseFinish with the cached final text, and clear the playback
 #    tracker state for the next turn.
-
-import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...log_utils import logger
 from ...models import ForceAligner, ForceAlignmentUnit, Models
 from ..event_bus import EventBus
 from ..events import (
@@ -35,14 +35,16 @@ from ..events import (
     LLMAgentResponseUpdate,
     ResponseFinish,
     ResponseUpdate,
-    TTSChunkReady,
     TTSChunkPlayed,
-    TTSPlaybackStopped,
+    TTSChunkReady,
     TTSPlaybackFinished,
-    TTSTextSynthesized,
+    TTSPlaybackStopped,
     TTSStopped,
+    TTSTextSynthesized,
 )
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

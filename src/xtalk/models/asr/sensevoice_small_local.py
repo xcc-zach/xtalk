@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 SenseVoiceSmall local ASR implementation built on FunASR.
 
@@ -12,14 +10,18 @@ Notes:
 Input: PCM 16-bit mono 16 kHz raw bytes.
 """
 
-from typing import Any, Optional, Dict
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .interfaces import ASR
-from ...log_utils import logger
 from ..audio_utils import MockStreamRecognizer
 from ..registry import model
+from .interfaces import ASR
+
+logger = logging.getLogger(__name__)
 
 try:  # FunASR dependency
     from funasr import AutoModel  # type: ignore

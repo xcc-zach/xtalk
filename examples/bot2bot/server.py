@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import logging
 import mimetypes
 import uuid
 from dataclasses import dataclass
@@ -15,13 +16,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from xtalk import Xtalk
-from xtalk.log_utils import mute_other_logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
-
-mute_other_logging()
 
 
 @dataclass

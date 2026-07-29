@@ -261,6 +261,7 @@ class TurnSense(TurnDetector):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -272,6 +273,9 @@ class TurnSense(TurnDetector):
             Current PCM 16-bit mono audio frame at 16 kHz.
         text : str | None, optional
             ASR text for the current turn.
+        assistant_text : str | None, optional
+            Cumulative AI response text confirmed as played to the user. This
+            implementation currently ignores it.
         speech_start : bool, optional
             Whether VAD has just detected the start of speech.
         speech_pause : bool | None, optional
@@ -286,6 +290,7 @@ class TurnSense(TurnDetector):
             self.async_detect(
                 audio=audio,
                 text=text,
+                assistant_text=assistant_text,
                 speech_start=speech_start,
                 speech_pause=speech_pause,
             )
@@ -295,6 +300,7 @@ class TurnSense(TurnDetector):
         self,
         audio: Optional[bytes] = None,
         text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
     ) -> TurnDetectionResult:
@@ -307,6 +313,9 @@ class TurnSense(TurnDetector):
         text : str | None, optional
             ASR text for the current turn. The current implementation only uses
             this path as a carrier for ``speech_pause`` events.
+        assistant_text : str | None, optional
+            Cumulative AI response text confirmed as played to the user. This
+            implementation currently ignores it.
         speech_start : bool, optional
             Whether VAD has just detected the start of speech.
         speech_pause : bool | None, optional

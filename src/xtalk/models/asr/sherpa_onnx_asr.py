@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Remote ASR implementation based on sherpa-onnx WebSocket services.
 
@@ -12,16 +10,20 @@ Features:
 Input: PCM 16-bit mono 16 kHz raw bytes.
 """
 
+from __future__ import annotations
+
 import asyncio
+import logging
 from typing import Optional
 from urllib.parse import urlparse
 
 import numpy as np
 
-from .interfaces import ASR
-from ...log_utils import logger
 from ..audio_utils import MockStreamRecognizer
 from ..registry import model
+from .interfaces import ASR
+
+logger = logging.getLogger(__name__)
 
 try:  # websockets dependency
     import websockets  # type: ignore

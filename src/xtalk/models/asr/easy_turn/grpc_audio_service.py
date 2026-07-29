@@ -4,15 +4,18 @@
 gRPC audio inference service that accepts numpy arrays or file paths.
 """
 
-import grpc
-from concurrent import futures
-import numpy as np
+import logging
 import os
 import sys
-import time
-import logging
 import tempfile
+import time
 import traceback
+from concurrent import futures
+
+import grpc
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Add wenet binary path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -60,10 +63,10 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
     def _initialize_recognizer(self):
         """Initialize the underlying recognizer."""
         try:
-            logging.info("Initializing audio recognizer...")
-            logging.info("Config path: %s", self.config_path)
-            logging.info("Checkpoint path: %s", self.checkpoint_path)
-            logging.info(
+            logger.info("Initializing audio recognizer...")
+            logger.info("Config path: %s", self.config_path)
+            logger.info("Checkpoint path: %s", self.checkpoint_path)
+            logger.info(
                 "Device: %s, dtype: %s, GPU: %d", self.device, self.dtype, self.gpu
             )
             
@@ -75,12 +78,12 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                 gpu=self.gpu,
                 verbose=False
             )
-            logging.info("Audio recognizer initialized successfully")
+            logger.info("Audio recognizer initialized successfully")
         except Exception as e:
-            logging.error("Failed to initialize audio recognizer: %s", e)
-            logging.error("Exception type: %s", type(e).__name__)
-            logging.error("Full traceback:")
-            logging.error(traceback.format_exc())
+            logger.error("Failed to initialize audio recognizer: %s", e)
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Full traceback:")
+            logger.error(traceback.format_exc())
             raise
     
     def _save_audio_from_numpy(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
@@ -96,48 +99,48 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
         """
         import soundfile as sf
         
-        logging.info("_save_audio_from_numpy started")
-        logging.info("Input audio shape: %s", audio_data.shape)
-        logging.info("Input audio dtype: %s", audio_data.dtype)
-        logging.info("Input sample rate: %d", sample_rate)
+        logger.info("_save_audio_from_numpy started")
+        logger.info("Input audio shape: %s", audio_data.shape)
+        logger.info("Input audio dtype: %s", audio_data.dtype)
+        logger.info("Input sample rate: %d", sample_rate)
         
         # Create a temp file
         temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
         temp_path = temp_file.name
         temp_file.close()
-        logging.info("Created temp file: %s", temp_path)
+        logger.info("Created temp file: %s", temp_path)
         
         # Ensure audio has the correct shape
         if audio_data.ndim > 1:
-            logging.info("Detected multi-dimensional audio: %d dims", audio_data.ndim)
+            logger.info("Detected multi-dimensional audio: %d dims", audio_data.ndim)
             # For multi-channel audio, average or squeeze
             if audio_data.shape[0] > 1:
-                logging.info("Multi-channel audio detected; averaging channels")
+                logger.info("Multi-channel audio detected; averaging channels")
                 audio_data = np.mean(audio_data, axis=0)
             else:
-                logging.info("Single-channel audio; squeezing dimension")
+                logger.info("Single-channel audio; squeezing dimension")
                 audio_data = audio_data.squeeze(0)
-            logging.info("Audio shape after processing: %s", audio_data.shape)
+            logger.info("Audio shape after processing: %s", audio_data.shape)
         
         # Ensure dtype is correct
         if audio_data.dtype != np.float32:
-            logging.info("Converting dtype from %s to float32", audio_data.dtype)
+            logger.info("Converting dtype from %s to float32", audio_data.dtype)
             audio_data = audio_data.astype(np.float32)
         
         # Save the audio data
         try:
-            logging.info("Saving audio file to: %s", temp_path)
-            logging.info("Final audio shape: %s, dtype: %s", audio_data.shape, audio_data.dtype)
+            logger.info("Saving audio file to: %s", temp_path)
+            logger.info("Final audio shape: %s, dtype: %s", audio_data.shape, audio_data.dtype)
             sf.write(temp_path, audio_data, sample_rate)
-            logging.info("Audio file saved")
+            logger.info("Audio file saved")
         except Exception as e:
-            logging.error("Failed to save audio file: %s", e)
-            logging.error("Exception type: %s", type(e).__name__)
-            logging.error(
+            logger.error("Failed to save audio file: %s", e)
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error(
                 "Audio data shape: %s, dtype: %s", audio_data.shape, audio_data.dtype
             )
-            logging.error("Full traceback:")
-            logging.error(traceback.format_exc())
+            logger.error("Full traceback:")
+            logger.error(traceback.format_exc())
             raise
         
         return temp_path
@@ -160,32 +163,32 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
             if request.audio_data:
                 # Decode numpy-style payload
                 try:
-                    logging.info(
+                    logger.info(
                         "Processing numpy audio payload, size: %d bytes",
                         len(request.audio_data),
                     )
-                    logging.info(
+                    logger.info(
                         "Audio shape metadata: %s",
                         list(request.audio_data_shape)
                         if request.audio_data_shape
                         else "None",
                     )
-                    logging.info("Sample rate: %d", request.sample_rate)
+                    logger.info("Sample rate: %d", request.sample_rate)
                     
                     audio_array = np.frombuffer(request.audio_data, dtype=np.float32)
-                    logging.info("Array shape from buffer: %s", audio_array.shape)
-                    logging.info("Array dtype from buffer: %s", audio_array.dtype)
+                    logger.info("Array shape from buffer: %s", audio_array.shape)
+                    logger.info("Array dtype from buffer: %s", audio_array.dtype)
                     
                     if request.audio_data_shape:
                         # Reshape when shape metadata is provided
                         shape = list(request.audio_data_shape)
-                        logging.info("Reshaping array to: %s", shape)
+                        logger.info("Reshaping array to: %s", shape)
                         audio_array = audio_array.reshape(shape)
-                        logging.info("Array shape after reshape: %s", audio_array.shape)
+                        logger.info("Array shape after reshape: %s", audio_array.shape)
                     
                     # Validate payload
                     if audio_array.size == 0:
-                        logging.error("Audio payload is empty")
+                        logger.error("Audio payload is empty")
                         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                         context.set_details("Audio payload is empty")
                         return audio_service_pb2.AudioResponse(
@@ -195,17 +198,17 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                     
                     # Save to a temp file
                     sample_rate = request.sample_rate if request.sample_rate > 0 else 16000
-                    logging.info("Saving audio file with sample rate: %d", sample_rate)
+                    logger.info("Saving audio file with sample rate: %d", sample_rate)
                     temp_audio_path = self._save_audio_from_numpy(audio_array, sample_rate)
-                    logging.info("Audio file stored at: %s", temp_audio_path)
+                    logger.info("Audio file stored at: %s", temp_audio_path)
                     
                     # Track whether we should delete the temp file
                     cleanup_temp_file = True
                 except Exception as e:
-                    logging.error("Failed to process audio payload: %s", e)
-                    logging.error("Exception type: %s", type(e).__name__)
-                    logging.error("Full traceback:")
-                    logging.error(traceback.format_exc())
+                    logger.error("Failed to process audio payload: %s", e)
+                    logger.error("Exception type: %s", type(e).__name__)
+                    logger.error("Full traceback:")
+                    logger.error(traceback.format_exc())
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                     context.set_details(f"Failed to process audio payload: {str(e)}")
                     return audio_service_pb2.AudioResponse(
@@ -218,8 +221,8 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                 cleanup_temp_file = False
             
             # Run inference
-            logging.info("Starting inference, audio path: %s", temp_audio_path)
-            logging.info(
+            logger.info("Starting inference, audio path: %s", temp_audio_path)
+            logger.info(
                 "Inference params - task: %s, lang: %s, speaker: %s",
                 request.task if request.task else "<TRANSCRIBE>",
                 request.lang if request.lang else "<CN>",
@@ -237,12 +240,12 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                     duration=request.duration if request.duration > 0 else None,
                     return_metadata=True
                 )
-                logging.info("Inference finished, result: %s", result)
+                logger.info("Inference finished, result: %s", result)
             except Exception as e:
-                logging.error("Exception during inference: %s", str(e))
-                logging.error("Exception type: %s", type(e).__name__)
-                logging.error("Full traceback:")
-                logging.error(traceback.format_exc())
+                logger.error("Exception during inference: %s", str(e))
+                logger.error("Exception type: %s", type(e).__name__)
+                logger.error("Full traceback:")
+                logger.error(traceback.format_exc())
                 raise
             
             # Clean up temp file
@@ -250,7 +253,7 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                 os.unlink(temp_audio_path)
             
             if result is None:
-                logging.error("Inference result is empty")
+                logger.error("Inference result is empty")
                 context.set_code(grpc.StatusCode.INTERNAL)
                 context.set_details("Inference failed")
                 return audio_service_pb2.AudioResponse(
@@ -259,8 +262,8 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                 )
             
             # Build response
-            logging.info("Building response, result type: %s", type(result))
-            logging.info("Result payload: %s", result)
+            logger.info("Building response, result type: %s", type(result))
+            logger.info("Result payload: %s", result)
             
             # Extract and cast response fields safely
             result_text = str(result.get("result", ""))
@@ -273,15 +276,15 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
             prompt = str(result.get("prompt", ""))
             total_time = float(time.time() - start_time)
             
-            logging.info("Response - result_text: %s (type: %s)", result_text, type(result_text))
-            logging.info("Response - inference_time: %s (type: %s)", inference_time, type(inference_time))
-            logging.info("Response - audio_path: %s (type: %s)", audio_path, type(audio_path))
-            logging.info("Response - key: %s (type: %s)", key, type(key))
-            logging.info("Response - task: %s (type: %s)", task, type(task))
-            logging.info("Response - lang: %s (type: %s)", lang, type(lang))
-            logging.info("Response - speaker: %s (type: %s)", speaker, type(speaker))
-            logging.info("Response - prompt: %s (type: %s)", prompt, type(prompt))
-            logging.info("Response - total_time: %s (type: %s)", total_time, type(total_time))
+            logger.info("Response - result_text: %s (type: %s)", result_text, type(result_text))
+            logger.info("Response - inference_time: %s (type: %s)", inference_time, type(inference_time))
+            logger.info("Response - audio_path: %s (type: %s)", audio_path, type(audio_path))
+            logger.info("Response - key: %s (type: %s)", key, type(key))
+            logger.info("Response - task: %s (type: %s)", task, type(task))
+            logger.info("Response - lang: %s (type: %s)", lang, type(lang))
+            logger.info("Response - speaker: %s (type: %s)", speaker, type(speaker))
+            logger.info("Response - prompt: %s (type: %s)", prompt, type(prompt))
+            logger.info("Response - total_time: %s (type: %s)", total_time, type(total_time))
             
             response = audio_service_pb2.AudioResponse(
                 success=True,
@@ -299,11 +302,11 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
             return response
             
         except Exception as e:
-            logging.error("Unexpected error during inference: %s", e)
-            logging.error("Exception type: %s", type(e).__name__)
-            logging.error("Exception details: %s", str(e))
-            logging.error("Full traceback:")
-            logging.error(traceback.format_exc())
+            logger.error("Unexpected error during inference: %s", e)
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception details: %s", str(e))
+            logger.error("Full traceback:")
+            logger.error(traceback.format_exc())
             
             # Safely build an error response
             try:
@@ -315,9 +318,9 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
                     error_message=error_message
                 )
             except Exception as response_error:
-                logging.error("Failed to construct error response: %s", response_error)
-                logging.error("Response construction traceback:")
-                logging.error(traceback.format_exc())
+                logger.error("Failed to construct error response: %s", response_error)
+                logger.error("Response construction traceback:")
+                logger.error(traceback.format_exc())
                 # Return a minimal error response
                 return audio_service_pb2.AudioResponse(
                     success=False,
@@ -336,25 +339,25 @@ class AudioInferenceService(audio_service_pb2_grpc.AudioInferenceServiceServicer
             HealthResponse: Health status payload.
         """
         try:
-            logging.info("Performing health check")
+            logger.info("Performing health check")
             # Ensure recognizer is ready
             if self.recognizer is None:
-                logging.warning("Recognizer is not initialized")
+                logger.warning("Recognizer is not initialized")
                 return audio_service_pb2.HealthResponse(
                     status="UNHEALTHY",
                     message="Recognizer is not initialized",
                 )
             
-            logging.info("Health check passed")
+            logger.info("Health check passed")
             return audio_service_pb2.HealthResponse(
                 status="HEALTHY",
                 message="Service is running normally",
             )
         except Exception as e:
-            logging.error("Health check failed: %s", e)
-            logging.error("Health check exception type: %s", type(e).__name__)
-            logging.error("Health check traceback:")
-            logging.error(traceback.format_exc())
+            logger.error("Health check failed: %s", e)
+            logger.error("Health check exception type: %s", type(e).__name__)
+            logger.error("Health check traceback:")
+            logger.error(traceback.format_exc())
             return audio_service_pb2.HealthResponse(
                 status="UNHEALTHY",
                 message=f"Health check failed: {str(e)}",
@@ -402,15 +405,15 @@ def serve(config_path, checkpoint_path, device="cpu", dtype="fp32", gpu=-1,
     server.add_insecure_port(f'{host}:{port}')
     server.start()
     
-    logging.info("gRPC audio inference service is listening at %s:%s", host, port)
-    logging.info("Config file: %s", config_path)
-    logging.info("Checkpoint: %s", checkpoint_path)
-    logging.info("Device: %s, dtype: %s", device, dtype)
+    logger.info("gRPC audio inference service is listening at %s:%s", host, port)
+    logger.info("Config file: %s", config_path)
+    logger.info("Checkpoint: %s", checkpoint_path)
+    logger.info("Device: %s, dtype: %s", device, dtype)
     
     try:
         server.wait_for_termination()
     except KeyboardInterrupt:
-        logging.info("Shutting down service...")
+        logger.info("Shutting down service...")
         server.stop(0)
 
 

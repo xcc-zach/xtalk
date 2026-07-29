@@ -6,6 +6,8 @@ Manages turn detection by processing audio and ASR results through the TurnDetec
 Subscribes to:
 - EnhancedAudioFrameReceived: feeds audio to turn detector
 - ASRResultPartial: feeds text to turn detector
+- ResponseUpdate: feeds cumulative played AI response text to turn detector
+- ResponseFinish: feeds final played AI response text to turn detector
 - TTSChunkGenerated: sets turn detector to non-listening
 - TTSPlaybackFinished: resumes turn detector listening
 - TTSStopped: resumes turn detector listening
@@ -17,29 +19,32 @@ Emits:
 
 from __future__ import annotations
 
-from typing import Optional, Any
+import logging
+from typing import Any, Optional
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
-from ..interfaces import Manager
-from ..events import (
-    EnhancedAudioFrameReceived,
-    ASRResultPartial,
-    VADSpeechStart,
-    VADSpeechEnd,
-    TTSChunkReady,
-    TTSPlaybackFinished,
-    TTSStopped,
-    TurnDetectorStopSpeaking,
-    TurnDetectorStartGeneration,
-)
-from ...models import Models, TurnDetector, VAD
+from ...models import VAD, Models, TurnDetector
 from ...models.turn_detector.interfaces import (
     TurnDetectionAction,
     TurnDetectionResult,
     TurnVADResult,
 )
+from ..event_bus import EventBus
+from ..events import (
+    ASRResultPartial,
+    EnhancedAudioFrameReceived,
+    ResponseFinish,
+    ResponseUpdate,
+    TTSChunkReady,
+    TTSPlaybackFinished,
+    TTSStopped,
+    TurnDetectorStartGeneration,
+    TurnDetectorStopSpeaking,
+    VADSpeechEnd,
+    VADSpeechStart,
+)
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class TurnDetectorManager(Manager):
@@ -120,6 +125,17 @@ class TurnDetectorManager(Manager):
         if event.origin == "turn_detector":
             return
         self._disable_proxy_vad()
+
+    @Manager.event_handler(ResponseUpdate, priority=100)
+    @Manager.event_handler(ResponseFinish, priority=100)
+    async def _on_assistant_text(
+        self,
+        event: ResponseUpdate | ResponseFinish,
+    ) -> None:
+        """Forward cumulative played AI response text to the turn detector."""
+        if self.turn_detector is None:
+            return
+        await self.turn_detector.async_detect(assistant_text=event.text)
 
     @Manager.event_handler(TTSChunkReady)
     async def _on_tts_chunk_generated(self, event: TTSChunkReady) -> None:

@@ -63,6 +63,30 @@ def _run_coro(self, coro: "asyncio.Future[bool]") -> bool:
 
 也就是说，VAD 模型输出的是“原始逐帧判定”，而 turn 级别的 start/end 语义由 `VADManager` 完成。
 
+## 前端VAD逻辑
+
+Web 前端默认使用 Silero VAD v5。输入音频默认采用 16 kHz、PCM 16-bit、单声道格式，并按 512 samples 切帧，每帧约 32 ms。当前默认参数为：
+
+- `positiveSpeechThreshold = 0.1`
+- `negativeSpeechThreshold = 0.02`
+- `minSpeechMs = 250`
+- `redemptionMs = 500`
+
+前端使用双阈值处理模型输出的语音概率：
+
+- 概率大于等于 `0.1` 时，当前帧被认为是语音。第一帧满足条件时，`FrameProcessor` 立即产生 `SpeechStart`，前端随后发送 `vad_speech_start`。
+- 概率低于 `0.02` 时，当前帧累计到 speech-end redemption 计数。
+- 概率大于等于 `0.02` 时，前端立即清零 redemption 计数。因此只有连续低于 `0.02` 的帧才能触发 `SpeechEnd`。
+- 概率位于 `[0.02, 0.1)` 时不会触发语音开始；如果已经处于语音状态，则会阻止语音结束。
+
+在默认 16 kHz / 512 samples 配置下，`FrameProcessor` 将 500 ms 转换为 15 帧，因此实际需要约 480 ms 的连续低概率帧才会产生 `SpeechEnd`。前端随后发送 `vad_speech_end`。
+
+`minSpeechMs` 不会延迟当前集成使用的 `SpeechStart`。它用于 `FrameProcessor` 的 `SpeechRealStart` 和短语音 misfire 判断，但当前前端没有转发这两类事件。
+
+启用前端 VAD 时，麦克风 PCM 帧会立即上传，不等待 VAD 推理。VAD 使用增强后的帧进行判定，并通过独立队列串行处理；当推理落后时，该队列可以丢弃旧帧，但不会阻塞或丢弃上传给 ASR 的麦克风帧。
+
+`inputConfig.vadRedemptionMs` 可以覆盖默认的 `redemptionMs`。该值仅调整结束等待时间，不改变正负概率阈值。
+
 ## 前端 VAD 与后端 VAD 的关系
 
 X-Talk 支持前端 VAD。后端 `VAD` 主要用于前端无法运行 VAD，或你明确希望把 VAD 放到服务端执行的场景。

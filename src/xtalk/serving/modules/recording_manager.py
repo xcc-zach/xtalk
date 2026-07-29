@@ -19,6 +19,7 @@ Client usage:
 """
 
 import asyncio
+import logging
 import os
 import time
 import wave
@@ -27,19 +28,20 @@ from typing import Any, Optional
 
 import numpy as np
 
-from ...log_utils import logger
 from ..event_bus import EventBus
 from ..events import (
     AudioFrameReceived,
     FullAudioFrameReady,
-    TTSPaused,
+    SessionConfigReceived,
     TTSChunkReady,
+    TTSPaused,
     TTSResumed,
     TTSStarted,
     TTSStopped,
-    SessionConfigReceived,
 )
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class _MonoBuffer:
