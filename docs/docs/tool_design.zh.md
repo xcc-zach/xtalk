@@ -343,9 +343,9 @@ ID，都会抛出 `ValueError`。
 最终更新把 `running` 设为 `false`，并把 `ToolOutput.to_content()` 的结果写入
 `tool_output`。
 
-## ExperimentalAgent 接入
+## DefaultAgent 接入
 
-`ExperimentalAgent` 为每个会话创建独立 ToolEngine，绑定模型，并注册异步
+`DefaultAgent` 为每个会话创建独立 ToolEngine，绑定模型，并注册异步
 更新回调。没有模型生成时，回调把合法的 ToolCall/ToolMessage 写入历史并
 通知会话 loop；模型正在生成时，更新会暂存到当前生成结束后再写入，避免
 同一结果被当前工具调用链和后续 loop 重复消费。
