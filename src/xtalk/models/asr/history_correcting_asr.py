@@ -5,15 +5,17 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import logging
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from ...log_utils import logger
 from ...model_loader import init_registered_model
-from ..rewriters.simple import SimpleRewriter
 from ..registry import model
+from ..rewriters.simple import SimpleRewriter
 from .interfaces import ASR
+
+logger = logging.getLogger(__name__)
 
 
 @model

@@ -1,19 +1,23 @@
 import asyncio
-import numpy as np
-import soundfile as sf
-import librosa
-import grpc
-from grpc import aio
-import logging
-from typing import Optional, Generator, AsyncGenerator
-from contextlib import asynccontextmanager
-from .interfaces import TTS
-from ..registry import model
-import queue
-import threading
 
 # Append dependency helper
 import importlib
+import logging
+import queue
+import threading
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Generator, Optional
+
+import grpc
+import librosa
+import numpy as np
+import soundfile as sf
+from grpc import aio
+
+from ..registry import model
+from .interfaces import TTS
+
+logger = logging.getLogger(__name__)
 
 # Default output sample rate (Hz) from the TTS service
 DEFAULT_SERVER_SAMPLE_RATE = 24000
@@ -27,8 +31,7 @@ else:
 
 # Import generated protobuf files
 try:
-    from .grpc_pb import cosyvoice_pb2
-    from .grpc_pb import cosyvoice_pb2_grpc
+    from .grpc_pb import cosyvoice_pb2, cosyvoice_pb2_grpc
 except ImportError as e:
     raise ImportError(
         "Failed to import CosyVoice protobuf files. Please ensure:\n"
@@ -36,8 +39,6 @@ except ImportError as e:
         "2. The files are located in the expected path.\n"
         f"Error details: {e}"
     )
-
-# CosyVoice logger uses xtalk log_utils so no second import is required
 
 
 @model
@@ -217,7 +218,7 @@ class CosyVoiceLocal(TTS):
                 self._loop,
             ).result()
         except Exception as e:
-            logging.error(f"TTS synthesis failed: {e}")
+            logger.error(f"TTS synthesis failed: {e}")
             raise RuntimeError(f"TTS synthesis failed: {e}")
 
     @property
@@ -351,7 +352,7 @@ class CosyVoiceLocal(TTS):
             channel = aio.insecure_channel(self.channel_address)
             yield channel
         except Exception as e:
-            logging.error(f"gRPC channel error: {e}")
+            logger.error(f"gRPC channel error: {e}")
             raise
         finally:
             if channel:
@@ -395,14 +396,14 @@ class CosyVoiceLocal(TTS):
                             chunk_index += 1
                             yield response.tts_audio
                 except grpc.RpcError as e:
-                    logging.error(f"Streaming RPC error: {e.code()}: {e.details()}")
+                    logger.error(f"Streaming RPC error: {e.code()}: {e.details()}")
                     raise RuntimeError(f"Streaming RPC error: {e.code()}: {e.details()}")
                 except Exception as e:
-                    logging.error(f"Streaming processing failed: {str(e)}", exc_info=True)
+                    logger.error(f"Streaming processing failed: {str(e)}", exc_info=True)
                     raise RuntimeError(f"Streaming processing failed: {str(e)}")
 
         except Exception as e:
-            logging.error(f"Async streaming synthesis failed: {str(e)}")
+            logger.error(f"Async streaming synthesis failed: {str(e)}")
             raise
 
     def load_wav(self, wav_path: str, target_sr: int = 16000) -> np.ndarray:
@@ -418,7 +419,7 @@ class CosyVoiceLocal(TTS):
             # Add batch dimension (1, samples)
             return data.reshape(1, -1)
         except Exception as e:
-            logging.error(f"Failed to load audio {wav_path}: {str(e)}")
+            logger.error(f"Failed to load audio {wav_path}: {str(e)}")
             raise RuntimeError(f"Failed to load audio {wav_path}: {str(e)}")
 
     def convert_audio_bytes_to_ndarray(
@@ -457,11 +458,11 @@ class CosyVoiceLocal(TTS):
 
         # Populate request by mode
         if mode == "sft":
-            logging.info("Building sft request")
+            logger.info("Building sft request")
             sft_request = request.sft_request
             sft_request.spk_id = spk_id
         elif mode == "zero_shot":
-            logging.info("Building zero_shot request")
+            logger.info("Building zero_shot request")
             if not prompt_text or not prompt_wav:
                 raise ValueError("zero_shot mode requires prompt_text and prompt_wav")
             zero_shot_request = request.zero_shot_request
@@ -471,7 +472,7 @@ class CosyVoiceLocal(TTS):
                 prompt_speech
             )
         elif mode == "cross_lingual":
-            logging.info("Building cross_lingual request")
+            logger.info("Building cross_lingual request")
             if not prompt_wav:
                 raise ValueError("cross_lingual mode requires prompt_wav")
             cross_lingual_request = request.cross_lingual_request
@@ -480,7 +481,7 @@ class CosyVoiceLocal(TTS):
                 prompt_speech
             )
         elif mode == "instruct2":
-            logging.info("Building instruct2 request")
+            logger.info("Building instruct2 request")
             if not instruct_text or not prompt_wav:
                 raise ValueError("instruct2 mode requires instruct_text and prompt_wav")
             instruct2_request = request.instruct2_request
@@ -490,14 +491,14 @@ class CosyVoiceLocal(TTS):
                 prompt_speech
             )
         elif mode == "instruct2_by_spk_id":
-            logging.info("Building instruct2_by_spk_id request")
+            logger.info("Building instruct2_by_spk_id request")
             if not instruct_text:
                 raise ValueError("instruct2_by_spk_id mode requires instruct_text")
             instruct2_by_spk_id_request = request.instruct2_by_spk_id_request
             instruct2_by_spk_id_request.instruct_text = instruct_text
             instruct2_by_spk_id_request.spk_id = spk_id
         else:  # zero_shot_by_spk_id
-            logging.info("Building zero_shot_by_spk_id request")
+            logger.info("Building zero_shot_by_spk_id request")
             zero_shot_by_spk_id_request = request.zero_shot_by_spk_id_request
             zero_shot_by_spk_id_request.spk_id = spk_id
 
@@ -559,20 +560,20 @@ class CosyVoiceLocal(TTS):
                                 target_sr=self._sample_rate,
                             )
                         except Exception as e:
-                            logging.error(f"Offline resampling failed: {e}")
+                            logger.error(f"Offline resampling failed: {e}")
                             raise RuntimeError(f"Offline resampling failed: {e}")
 
                     return tts_audio
 
                 except grpc.RpcError as e:
-                    logging.error(f"RPC error: {e.code()}: {e.details()}")
+                    logger.error(f"RPC error: {e.code()}: {e.details()}")
                     raise RuntimeError(f"RPC error: {e.code()}: {e.details()}")
                 except Exception as e:
-                    logging.error(f"Processing failed: {str(e)}", exc_info=True)
+                    logger.error(f"Processing failed: {str(e)}", exc_info=True)
                     raise RuntimeError(f"Processing failed: {str(e)}")
 
         except Exception as e:
-            logging.error(f"Async synthesis failed: {str(e)}")
+            logger.error(f"Async synthesis failed: {str(e)}")
             raise
 
     def save_audio(self, audio_data: bytes, output_path: str):
@@ -599,9 +600,9 @@ class CosyVoiceLocal(TTS):
                     audio_data, self.format
                 )
                 duration = audio_array.shape[1] / self.sample_rate
-                logging.info(f"Audio saved to {output_path} (duration: {duration:.2f}s)")
+                logger.info(f"Audio saved to {output_path} (duration: {duration:.2f}s)")
         except Exception as e:
-            logging.error(f"Failed to save audio: {str(e)}")
+            logger.error(f"Failed to save audio: {str(e)}")
             raise RuntimeError(f"Failed to save audio: {str(e)}")
 
     def register_speaker(self, spk_id: str, prompt_text: str, prompt_wav: str) -> bool:
@@ -621,7 +622,7 @@ class CosyVoiceLocal(TTS):
                 self._async_register_speaker(spk_id, prompt_text, prompt_wav)
             )
         except Exception as e:
-            logging.error(f"Speaker registration failed: {str(e)}")
+            logger.error(f"Speaker registration failed: {str(e)}")
             raise RuntimeError(f"Speaker registration failed: {str(e)}")
 
     async def _async_register_speaker(
@@ -647,26 +648,26 @@ class CosyVoiceLocal(TTS):
 
                     # Send registration request
                     response = await stub.RegisterSpk(request)
-                    logging.info(f"Speaker registration response: {response}")
+                    logger.info(f"Speaker registration response: {response}")
 
                     if response.status == cosyvoice_pb2.RegisterSpkResponse.Status.OK:
-                        logging.info(f"Speaker {spk_id} registered successfully")
+                        logger.info(f"Speaker {spk_id} registered successfully")
                         return True
                     else:
-                        logging.error(f"Speaker {spk_id} registration failed")
+                        logger.error(f"Speaker {spk_id} registration failed")
                         return False
 
                 except grpc.RpcError as e:
-                    logging.error(f"Registration RPC error: {e.code()}: {e.details()}")
+                    logger.error(f"Registration RPC error: {e.code()}: {e.details()}")
                     raise RuntimeError(
                         f"Registration RPC error: {e.code()}: {e.details()}"
                     )
                 except Exception as e:
-                    logging.error(f"Registration failed: {str(e)}", exc_info=True)
+                    logger.error(f"Registration failed: {str(e)}", exc_info=True)
                     raise RuntimeError(f"Registration failed: {str(e)}")
 
         except Exception as e:
-            logging.error(f"Async registration failed: {str(e)}")
+            logger.error(f"Async registration failed: {str(e)}")
             raise
 
     def set_mode(self, mode: str):

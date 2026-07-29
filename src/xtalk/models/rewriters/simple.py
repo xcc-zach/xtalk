@@ -14,15 +14,17 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import List
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from .interfaces import Rewriter
-from ...log_utils import logger
 from ..registry import model
+from .interfaces import Rewriter
+
+logger = logging.getLogger(__name__)
 
 
 @model

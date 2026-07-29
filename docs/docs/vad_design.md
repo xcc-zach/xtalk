@@ -63,6 +63,30 @@ Specifically:
 
 In other words, the VAD model outputs the raw frame-level judgment, while turn-level start/end semantics are produced by `VADManager`.
 
+## Frontend VAD Logic
+
+The web frontend uses Silero VAD v5 by default. Input audio defaults to 16 kHz, PCM 16-bit mono and is split into frames of 512 samples, or approximately 32 ms per frame. The current defaults are:
+
+- `positiveSpeechThreshold = 0.1`
+- `negativeSpeechThreshold = 0.02`
+- `minSpeechMs = 250`
+- `redemptionMs = 500`
+
+The frontend applies two thresholds to the speech probability produced by the model:
+
+- A probability greater than or equal to `0.1` classifies the current frame as speech. On the first matching frame, `FrameProcessor` immediately produces `SpeechStart`, after which the frontend sends `vad_speech_start`.
+- A probability below `0.02` advances the speech-end redemption counter.
+- A probability greater than or equal to `0.02` immediately resets the redemption counter. Consequently, only consecutive frames below `0.02` can produce `SpeechEnd`.
+- A probability in `[0.02, 0.1)` does not start speech. If speech is already active, it prevents speech from ending.
+
+With the default 16 kHz / 512-sample configuration, `FrameProcessor` converts 500 ms to 15 frames, so `SpeechEnd` requires approximately 480 ms of consecutive low-probability frames. The frontend then sends `vad_speech_end`.
+
+`minSpeechMs` does not delay the `SpeechStart` consumed by the current integration. It is used for `FrameProcessor`'s `SpeechRealStart` and short-speech misfire handling, but the frontend does not currently forward either event.
+
+When frontend VAD is enabled, microphone PCM frames are uploaded immediately without waiting for VAD inference. VAD runs serially on enhanced frames through a separate queue. If inference falls behind, that queue may drop old frames, but it does not block or discard microphone frames uploaded to ASR.
+
+`inputConfig.vadRedemptionMs` can override the default `redemptionMs`. It only changes the speech-end waiting period and does not change either probability threshold.
+
 ## Relationship Between Frontend VAD and Backend VAD
 
 X-Talk supports frontend VAD. Backend `VAD` is mainly for cases where the frontend cannot run VAD, or when you explicitly want VAD to run on the server side.

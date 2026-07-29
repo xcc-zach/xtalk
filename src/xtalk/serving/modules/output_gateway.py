@@ -1,35 +1,38 @@
 # -*- coding: utf-8 -*-
 import base64
 import json
-from fastapi import WebSocket
-from ...log_utils import logger
+import logging
 from typing import Any
 
+from fastapi import WebSocket
+
 from ..event_bus import EventBus
-from ..interfaces import EventListenerMixin
 from ..events import (
-    ASRResultPartial,
     ASRResultFinal,
-    VADSpeechStart,
-    VADSpeechEnd,
-    TTSStarted,
-    TTSStopped,
-    TTSPaused,
-    TTSResumed,
-    TTSFinished,
-    ResponseUpdate,
-    ResponseFinish,
-    ErrorOccurred,
-    TTSChunkReady,
-    TTSVoiceChange,
-    TTSEmotionChange,
+    ASRResultPartial,
     CaptionUpdated,
+    ErrorOccurred,
+    FullAudioFrameReady,
     LatencyMetricsUpdated,
-    ToolCallOccurred,
+    ResponseFinish,
+    ResponseUpdate,
     RetrievalUpdated,
     SpeakerRecognized,
-    FullAudioFrameReady,
+    ToolCallOccurred,
+    TTSChunkReady,
+    TTSEmotionChange,
+    TTSFinished,
+    TTSPaused,
+    TTSResumed,
+    TTSStarted,
+    TTSStopped,
+    TTSVoiceChange,
+    VADSpeechEnd,
+    VADSpeechStart,
 )
+from ..interfaces import EventListenerMixin
+
+logger = logging.getLogger(__name__)
 
 
 class OutputGateway(EventListenerMixin):

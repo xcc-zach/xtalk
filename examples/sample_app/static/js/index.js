@@ -12,10 +12,13 @@ function getWebSocketURL() {
 }
 
 const frontendUtilitiesBaseUrl = resolveAppURL("xtalk/frontend-utilities").toString();
+const inputConfig = {
+    frontendUtilitiesBaseUrl,
+    enableVAD: true,
+};
+const FRONTEND_VAD_ENABLED = inputConfig.enableVAD !== false;
 const session = createSession(getWebSocketURL(), {
-    inputConfig: {
-        frontendUtilitiesBaseUrl,
-    },
+    inputConfig,
 });
 
 const $btnCall = document.getElementById('btn-call');
@@ -56,6 +59,13 @@ const $latencyE2e = document.getElementById('latency-e2e');
 const $recentAudioDetails = document.getElementById('recent-audio-details');
 const $recentAudioStatus = document.getElementById('recent-audio-status');
 const $recentAudioPlayer = document.getElementById('recent-audio-player');
+const $vadStatusDetails = document.getElementById('vad-status-details');
+const $vadCurrentState = document.getElementById('vad-current-state');
+const $vadTimelineClock = document.getElementById('vad-timeline-clock');
+const $vadTimelineEvents = document.getElementById('vad-timeline-events');
+const $vadRecordingCount = document.getElementById('vad-recording-count');
+const $vadRecordingEmpty = document.getElementById('vad-recording-empty');
+const $vadRecordingList = document.getElementById('vad-recording-list');
 const $toastRegion = document.getElementById('toast-region');
 
 let audioCtx = null;
@@ -95,6 +105,19 @@ let recentFullAudioSampleRate = 48000;
 let recentFullAudioChunks = [];
 let recentFullAudioTotalBytes = 0;
 let recentAudioSnapshotDirty = false;
+
+const VAD_TIMELINE_WINDOW_MS = 30_000;
+const VAD_PRE_ROLL_MS = 300;
+const MAX_VAD_RECORDINGS = 20;
+let vadSegmentSequence = 0;
+let vadStateActive = false;
+let vadActiveRecording = null;
+let vadTimelineSegments = [];
+let vadRecordings = [];
+let vadPreRollChunks = [];
+let vadPreRollTotalBytes = 0;
+let vadPreRollSampleRate = 16000;
+let vadTimelineTimer = null;
 
 const canvasCtx = $waveform.getContext('2d');
 
@@ -747,6 +770,243 @@ function buildWavBlobFromPcm(pcmBytes, sampleRate, channels) {
     return new Blob([header, pcmBytes], { type: 'audio/wav' });
 }
 
+function formatVadTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    const time = date.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    });
+    return `${time}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+}
+
+function resetVadPreRoll(sampleRate = 16000) {
+    vadPreRollChunks = [];
+    vadPreRollTotalBytes = 0;
+    vadPreRollSampleRate = sampleRate;
+}
+
+function trimVadPreRoll() {
+    const maxBytes = Math.ceil(
+        vadPreRollSampleRate * FULL_AUDIO_BYTES_PER_SAMPLE * VAD_PRE_ROLL_MS / 1000
+    );
+    while (vadPreRollTotalBytes > maxBytes && vadPreRollChunks.length > 0) {
+        const overflowBytes = vadPreRollTotalBytes - maxBytes;
+        const firstChunk = vadPreRollChunks[0];
+        if (overflowBytes >= firstChunk.byteLength) {
+            vadPreRollChunks.shift();
+            vadPreRollTotalBytes -= firstChunk.byteLength;
+            continue;
+        }
+        const bytesToDrop = overflowBytes - (overflowBytes % FULL_AUDIO_BYTES_PER_SAMPLE);
+        if (bytesToDrop <= 0) {
+            break;
+        }
+        vadPreRollChunks[0] = firstChunk.slice(bytesToDrop);
+        vadPreRollTotalBytes -= bytesToDrop;
+        break;
+    }
+}
+
+function appendVadInputAudioChunk(pcmChunkInt16, sampleRate) {
+    if (!FRONTEND_VAD_ENABLED
+        || !(pcmChunkInt16 instanceof ArrayBuffer)
+        || pcmChunkInt16.byteLength === 0) {
+        return;
+    }
+    if (vadPreRollChunks.length > 0 && sampleRate !== vadPreRollSampleRate) {
+        resetVadPreRoll(sampleRate);
+    }
+    vadPreRollSampleRate = sampleRate;
+    const chunk = new Uint8Array(pcmChunkInt16.slice(0));
+    if (vadActiveRecording && vadActiveRecording.sampleRate === sampleRate) {
+        vadActiveRecording.chunks.push(chunk);
+        vadActiveRecording.totalBytes += chunk.byteLength;
+    }
+    vadPreRollChunks.push(chunk);
+    vadPreRollTotalBytes += chunk.byteLength;
+    trimVadPreRoll();
+}
+
+function flattenVadRecording(recording) {
+    const pcmBytes = new Uint8Array(recording.totalBytes);
+    let offset = 0;
+    for (const chunk of recording.chunks) {
+        pcmBytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return pcmBytes;
+}
+
+function renderVadTimeline() {
+    if (!FRONTEND_VAD_ENABLED) {
+        return;
+    }
+    const now = Date.now();
+    const windowStart = now - VAD_TIMELINE_WINDOW_MS;
+    vadTimelineSegments = vadTimelineSegments.filter(
+        (segment) => (segment.endAt ?? now) >= windowStart
+    );
+    $vadTimelineClock.textContent = formatVadTimestamp(now);
+    $vadCurrentState.textContent = vadStateActive ? 'speech' : 'idle';
+    $vadCurrentState.classList.toggle('is-active', vadStateActive);
+    $vadTimelineEvents.replaceChildren();
+
+    for (const segment of vadTimelineSegments) {
+        const visibleStart = Math.max(segment.startAt, windowStart);
+        const visibleEnd = Math.min(segment.endAt ?? now, now);
+        const startPercent = (visibleStart - windowStart) / VAD_TIMELINE_WINDOW_MS * 100;
+        const endPercent = (visibleEnd - windowStart) / VAD_TIMELINE_WINDOW_MS * 100;
+        const bar = document.createElement('span');
+        bar.className = 'vad-timeline-segment';
+        if (segment.endAt === null) {
+            bar.classList.add('is-active');
+        }
+        bar.style.left = `${Math.max(0, startPercent)}%`;
+        bar.style.width = `${Math.max(1.2, endPercent - startPercent)}%`;
+        bar.title = segment.endAt === null
+            ? `开始 ${formatVadTimestamp(segment.startAt)} · 进行中`
+            : `开始 ${formatVadTimestamp(segment.startAt)} · 结束 ${formatVadTimestamp(segment.endAt)}`;
+        $vadTimelineEvents.appendChild(bar);
+
+        if (segment.startAt >= windowStart) {
+            const startMarker = document.createElement('span');
+            startMarker.className = 'vad-timeline-marker is-start';
+            startMarker.style.left = `${Math.min(98.5, Math.max(1.5, startPercent))}%`;
+            startMarker.dataset.label = 'S';
+            startMarker.title = `VAD start ${formatVadTimestamp(segment.startAt)}`;
+            $vadTimelineEvents.appendChild(startMarker);
+        }
+        if (segment.endAt !== null && segment.endAt >= windowStart) {
+            const endMarker = document.createElement('span');
+            endMarker.className = 'vad-timeline-marker is-end';
+            endMarker.style.left = `${Math.min(98.5, Math.max(1.5, endPercent))}%`;
+            endMarker.dataset.label = 'E';
+            endMarker.title = `VAD end ${formatVadTimestamp(segment.endAt)}`;
+            $vadTimelineEvents.appendChild(endMarker);
+        }
+    }
+}
+
+function renderVadRecordings() {
+    $vadRecordingList.replaceChildren();
+    $vadRecordingCount.textContent = `${vadRecordings.length} clips`;
+    $vadRecordingEmpty.hidden = vadRecordings.length > 0;
+
+    for (const recording of vadRecordings) {
+        const item = document.createElement('li');
+        item.className = 'vad-recording-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'vad-recording-meta';
+        const timestamp = document.createElement('span');
+        timestamp.textContent = `${formatVadTimestamp(recording.startAt)}`
+            + ` → ${formatVadTimestamp(recording.endAt)}`;
+        const duration = document.createElement('span');
+        duration.textContent = `${(recording.durationMs / 1000).toFixed(2)}s`;
+        meta.append(timestamp, duration);
+        item.appendChild(meta);
+
+        if (recording.objectUrl) {
+            const player = document.createElement('audio');
+            player.className = 'vad-recording-player';
+            player.controls = true;
+            player.preload = 'metadata';
+            player.src = recording.objectUrl;
+            item.appendChild(player);
+        } else {
+            const unavailable = document.createElement('div');
+            unavailable.className = 'vad-recording-unavailable';
+            unavailable.textContent = 'No PCM captured';
+            item.appendChild(unavailable);
+        }
+        $vadRecordingList.appendChild(item);
+    }
+}
+
+function startVadSegment(timestamp = Date.now()) {
+    if (!FRONTEND_VAD_ENABLED || vadStateActive) {
+        return;
+    }
+    const timelineSegment = {
+        id: ++vadSegmentSequence,
+        startAt: timestamp,
+        endAt: null,
+    };
+    vadTimelineSegments.push(timelineSegment);
+    vadActiveRecording = {
+        timelineSegment,
+        sampleRate: vadPreRollSampleRate,
+        chunks: vadPreRollChunks.map((chunk) => chunk.slice()),
+        totalBytes: vadPreRollTotalBytes,
+    };
+    vadStateActive = true;
+    renderVadTimeline();
+}
+
+function finishVadSegment(timestamp = Date.now()) {
+    if (!vadStateActive || !vadActiveRecording) {
+        return;
+    }
+    const recording = vadActiveRecording;
+    recording.timelineSegment.endAt = Math.max(
+        timestamp,
+        recording.timelineSegment.startAt
+    );
+    const pcmBytes = flattenVadRecording(recording);
+    const durationMs = pcmBytes.byteLength
+        / (recording.sampleRate * FULL_AUDIO_BYTES_PER_SAMPLE) * 1000;
+    const objectUrl = pcmBytes.byteLength > 0
+        ? URL.createObjectURL(buildWavBlobFromPcm(pcmBytes, recording.sampleRate, 1))
+        : null;
+    vadRecordings.unshift({
+        id: recording.timelineSegment.id,
+        startAt: recording.timelineSegment.startAt,
+        endAt: recording.timelineSegment.endAt,
+        durationMs,
+        objectUrl,
+    });
+    const expiredRecordings = vadRecordings.splice(MAX_VAD_RECORDINGS);
+    for (const expired of expiredRecordings) {
+        if (expired.objectUrl) {
+            URL.revokeObjectURL(expired.objectUrl);
+        }
+    }
+    vadActiveRecording = null;
+    vadStateActive = false;
+    renderVadTimeline();
+    renderVadRecordings();
+}
+
+function syncFrontendVadState(streamState, connectionState) {
+    if (!FRONTEND_VAD_ENABLED) {
+        return;
+    }
+    const nextActive = connectionState !== 'disconnected' && streamState === 'listening';
+    if (nextActive && !vadStateActive) {
+        startVadSegment();
+    } else if (!nextActive && vadStateActive) {
+        finishVadSegment();
+    }
+}
+
+function resetVadDiagnostics() {
+    for (const recording of vadRecordings) {
+        if (recording.objectUrl) {
+            URL.revokeObjectURL(recording.objectUrl);
+        }
+    }
+    vadSegmentSequence = 0;
+    vadStateActive = false;
+    vadActiveRecording = null;
+    vadTimelineSegments = [];
+    vadRecordings = [];
+    resetVadPreRoll();
+    renderVadTimeline();
+    renderVadRecordings();
+}
+
 function refreshRecentAudioSnapshot(force = false) {
     if (!force && !recentAudioSnapshotDirty) {
         return;
@@ -775,6 +1035,7 @@ function refreshRecentAudioSnapshot(force = false) {
 
 session.onStateChange((state) => {
     currentStreamState = state.streamState;
+    syncFrontendVadState(state.streamState, state.connectionState);
     renderControls();
     renderSessions();
     if (!isActive) {
@@ -817,6 +1078,7 @@ session.onStateChange((state) => {
 
 session.onInputAudioChunk((pcmChunkInt16, sampleRate) => {
     try {
+        appendVadInputAudioChunk(pcmChunkInt16, sampleRate);
         const analyser = ensureInputAnalyser();
         playPcmChunkThroughAnalyser(pcmChunkInt16, sampleRate, analyser);
     } catch (e) {
@@ -864,9 +1126,9 @@ $btnCall.addEventListener('click', async () => {
     renderControls();
     try {
         resetRecentAudioBuffer();
+        resetVadDiagnostics();
         await session.open();
         startVisualization();
-        setMainView('orb');
         await refreshSessions();
     } catch (error) {
         showToast('开始对话失败：' + (error?.message || error));
@@ -900,6 +1162,7 @@ $btnNewSession.addEventListener('click', async () => {
             await session.close();
         }
         resetRealtimeUI();
+        resetVadDiagnostics();
         await session.switchSession(null);
         if (hadActiveSession) {
             appendLocalInfoMessage('Previous session stopped.');
@@ -944,8 +1207,23 @@ window.addEventListener('beforeunload', () => {
         refreshSessionsTimer = null;
     }
     revokeRecentAudioUrl();
+    if (vadTimelineTimer) {
+        clearInterval(vadTimelineTimer);
+        vadTimelineTimer = null;
+    }
+    for (const recording of vadRecordings) {
+        if (recording.objectUrl) {
+            URL.revokeObjectURL(recording.objectUrl);
+        }
+    }
 });
 
+$vadStatusDetails.hidden = !FRONTEND_VAD_ENABLED;
+if (FRONTEND_VAD_ENABLED) {
+    renderVadTimeline();
+    renderVadRecordings();
+    vadTimelineTimer = window.setInterval(renderVadTimeline, 200);
+}
 renderControls();
 resizeCanvas();
 drawWaveform(true);

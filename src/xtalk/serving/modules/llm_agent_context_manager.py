@@ -3,26 +3,28 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import fields
 from typing import Any
 
 from ...models import Agent, Models
 from ...models.agents import AgentContext
-from ...log_utils import logger
 from ..event_bus import EventBus
 from ..events import (
-    ASRResultPartial,
     ASRResultFinal,
-    Event,
+    ASRResultPartial,
     CaptionUpdated,
     ConsumeLLMAgentGenerationRequested,
     EmbeddingStatusUpdated,
+    Event,
     LLMAgentLoop,
-    SpeakerRecognized,
+    ResponseFinish,
     ResponseUpdate,
-    ResponseFinish
+    SpeakerRecognized,
 )
 from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 _BASE_EVENT_FIELD_NAMES = frozenset(field.name for field in fields(Event))
 
