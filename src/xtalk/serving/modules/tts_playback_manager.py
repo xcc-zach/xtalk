@@ -2,28 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-
-# Playback tracking plan:
-# 1. Extend TTSPlaybackManager state with a segment ledger, a FIFO queue of
-#    generated chunk durations, the latest reported text prefix, and cached
-#    final-response metadata such as the active response text.
-# 2. Subscribe to TTSChunkGenerated and TTSTextSynthesized. TTSChunkGenerated
-#    is only used to build the FIFO chunk-duration queue for playback acks,
-#    while TTSTextSynthesized carries the sentence-level audio duration needed
-#    to close each synthesized text segment.
-# 3. Consume TTSChunkPlayed to advance playback through the segment ledger.
-#    For each confirmed played chunk, reduce the FIFO duration queue, update the
-#    active segment's played-audio counter, map the played-audio ratio back to a
-#    text prefix, and publish ResponseUpdate whenever that played prefix grows.
-# 4. Use a FIFO duration queue rather than a fixed chunk-size assumption. Each
-#    TTSChunkGenerated contributes its exact duration, and each TTSChunkPlayed
-#    consumes the next duration in order, so playback tracking matches the real
-#    emitted audio timing, including short final chunks.
-# 5. Tighten ResponseFinish to come from the same playback state. When playback
-#    completes, flush any remaining played text via ResponseUpdate if needed,
-#    publish ResponseFinish with the cached final text, and clear the playback
-#    tracker state for the next turn.
 import logging
+import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,6 +20,8 @@ from ..events import (
     TTSPlaybackFinished,
     TTSPlaybackStopped,
     TTSStopped,
+    TTSStreamingTextAccepted,
+    TTSTextSynthesisStarted,
     TTSTextSynthesized,
 )
 from ..interfaces import Manager
@@ -57,24 +39,39 @@ class _AudioChunk:
 
 
 @dataclass
+class _RoughTextUnit:
+    """One rough text-timing unit and its original-text end offset."""
+
+    char_end: int
+    duration_ms: float
+
+
+@dataclass
 class _PlaybackSegment:
     """One synthesized text segment and its generated/played audio accounting."""
 
     text: str
-    total_audio_ms: float
     turn_id: int
+    total_audio_ms: float | None = None
+    generated_audio_ms: float = 0.0
     played_audio_ms: float = 0.0
-    collected_audio_ms: float = 0.0
     audio_sample_rate: int | None = None
     audio_parts: list[bytes] = field(default_factory=list)
     alignment_audio_valid: bool = True
-    alignment_state: str = "disabled"
+    alignment_state: str = "collecting"
     alignment_units: list[ForcedAlignmentUnit] = field(default_factory=list)
     alignment_task: asyncio.Task[None] | None = None
 
 
 class TTSPlaybackManager(Manager):
     """Project confirmed TTS playback progress back onto response text."""
+
+    _ROUGH_SAFETY_LAG_MS = 200.0
+    _ROUGH_UNFINISHED_TAIL_MS = 300.0
+    _ROUGH_CHARACTER_MS = 200.0
+    _ROUGH_WORD_MS = 280.0
+    _ROUGH_PUNCTUATION_MS = 80.0
+    _ALIGNMENT_STOP_GRACE_SECONDS = 0.2
 
     def __init__(
         self,
@@ -96,9 +93,6 @@ class TTSPlaybackManager(Manager):
         self.forced_aligner = models.get(ForcedAligner) if models else None
         self._forced_alignment_enabled = self.forced_aligner is not None
         self._forced_alignment_language = forced_alignment_config.get("language")
-        self._fallback_while_alignment_pending = bool(
-            forced_alignment_config.get("fallback_while_pending", True)
-        )
         self._stop_ack_timeout_ms = max(
             0.0,
             float(forced_alignment_config.get("stop_ack_timeout_ms", 500.0)),
@@ -109,6 +103,8 @@ class TTSPlaybackManager(Manager):
         self._segments: deque[_PlaybackSegment] = deque()
         self._generated_chunk_ms: deque[float] = deque()
         self._unassigned_audio_chunks: deque[_AudioChunk] = deque()
+        self._collecting_segment: _PlaybackSegment | None = None
+        self._streaming_segment: _PlaybackSegment | None = None
         self._alignment_tasks: set[asyncio.Task[None]] = set()
         self._stop_commit_task: asyncio.Task[None] | None = None
         self._awaiting_stop_ack = False
@@ -128,6 +124,8 @@ class TTSPlaybackManager(Manager):
         self._segments.clear()
         self._generated_chunk_ms.clear()
         self._unassigned_audio_chunks.clear()
+        self._collecting_segment = None
+        self._streaming_segment = None
         self._played_without_segment_ms = 0.0
         self._prebound_audio_ms = 0.0
         self._completed_text = ""
@@ -153,6 +151,52 @@ class TTSPlaybackManager(Manager):
             self._reset_all_state()
         self._current_response_text = next_text
 
+    @Manager.event_handler(TTSTextSynthesisStarted, priority=20)
+    async def _start_text_segment(self, event: TTSTextSynthesisStarted) -> None:
+        """Open one regular TTS segment before its first audio chunk."""
+
+        text = event.text or ""
+        if not text:
+            return
+        if self._collecting_segment is not None:
+            logger.warning(
+                "TTS sentence started before the prior sentence ended - session: %s",
+                self.session_id,
+            )
+            return
+
+        segment = _PlaybackSegment(
+            text=text,
+            turn_id=self._turn_id,
+        )
+        self._segments.append(segment)
+        self._collecting_segment = segment
+        self._attach_unassigned_audio(segment)
+        await self._apply_pending_playback_time()
+        await self._publish_progress_if_grew()
+
+    @Manager.event_handler(TTSStreamingTextAccepted, priority=20)
+    async def _accept_streaming_text(
+        self,
+        event: TTSStreamingTextAccepted,
+    ) -> None:
+        """Extend the implicit StreamingTextTTS segment with accepted text."""
+
+        text = event.text or ""
+        if not text:
+            return
+        if self._streaming_segment is None:
+            self._streaming_segment = _PlaybackSegment(
+                text="",
+                turn_id=self._turn_id,
+            )
+            self._segments.append(self._streaming_segment)
+            self._attach_unassigned_audio(self._streaming_segment)
+
+        self._streaming_segment.text += text
+        await self._apply_pending_playback_time()
+        await self._publish_progress_if_grew()
+
     @Manager.event_handler(TTSChunkReady, priority=20)
     async def _track_generated_chunk(self, event: TTSChunkReady) -> None:
         """Track generated chunk durations in FIFO order for playback acks."""
@@ -168,68 +212,85 @@ class TTSPlaybackManager(Manager):
             self._prebound_audio_ms = max(0.0, self._prebound_audio_ms - chunk_ms)
             return
 
-        self._unassigned_audio_chunks.append(
-            _AudioChunk(
-                audio_chunk=event.audio_chunk,
-                sample_rate=event.sample_rate,
-                duration_ms=chunk_ms,
-            )
+        chunk = _AudioChunk(
+            audio_chunk=event.audio_chunk,
+            sample_rate=event.sample_rate,
+            duration_ms=chunk_ms,
         )
-        self._assign_audio_to_segments()
+        segment = self._collecting_segment or self._streaming_segment
+        if segment is None:
+            self._unassigned_audio_chunks.append(chunk)
+        else:
+            self._attach_audio_chunk(segment, chunk)
+        await self._publish_progress_if_grew()
 
     @Manager.event_handler(TTSTextSynthesized, priority=20)
     async def _close_text_segment(self, event: TTSTextSynthesized) -> None:
-        """Bind one synthesized text segment and align preloaded PCM before playback."""
+        """Close the current FIFO segment and start background alignment."""
 
         text = event.text or ""
         if not text:
             return
 
+        segment = self._collecting_segment or self._streaming_segment
+        if segment is None:
+            segment = _PlaybackSegment(
+                text=text,
+                turn_id=self._turn_id,
+            )
+            self._segments.append(segment)
+            self._attach_unassigned_audio(segment)
+        segment.text = text
+
         preloaded_audio = event.audio_chunk or b""
         preloaded_sample_rate = int(event.sample_rate or 0)
-        total_audio_ms = max(0.0, float(event.audio_duration or 0.0))
-        if preloaded_audio and preloaded_sample_rate > 0:
-            total_audio_ms = self._chunk_duration_ms(
+        if (
+            preloaded_audio
+            and preloaded_sample_rate > 0
+            and segment.generated_audio_ms <= 1e-6
+        ):
+            preloaded_duration_ms = self._chunk_duration_ms(
                 audio_chunk=preloaded_audio,
                 sample_rate=preloaded_sample_rate,
             )
+            self._attach_audio_chunk(
+                segment,
+                _AudioChunk(
+                    audio_chunk=preloaded_audio,
+                    sample_rate=preloaded_sample_rate,
+                    duration_ms=preloaded_duration_ms,
+                ),
+            )
+            self._prebound_audio_ms += preloaded_duration_ms
+
+        total_audio_ms = segment.generated_audio_ms
         if total_audio_ms <= 0.0:
+            total_audio_ms = max(0.0, float(event.audio_duration or 0.0))
+        if total_audio_ms <= 0.0 or not segment.audio_sample_rate:
             logger.warning(
                 "Ignoring synthesized TTS text without audio - session: %s, "
                 "text_length: %s",
                 self.session_id,
                 len(text),
             )
+            self._discard_segment(segment)
             return
 
-        segment = _PlaybackSegment(
-            text=text,
-            total_audio_ms=total_audio_ms,
-            turn_id=self._turn_id,
-            alignment_state="pending"
-            if self._forced_alignment_enabled
-            else "disabled",
-        )
-        if preloaded_audio and preloaded_sample_rate > 0:
-            segment.collected_audio_ms = total_audio_ms
-            segment.audio_sample_rate = preloaded_sample_rate
-            segment.audio_parts.append(preloaded_audio)
-            self._prebound_audio_ms += total_audio_ms
-
-        self._segments.append(segment)
-        if preloaded_audio and self._forced_alignment_enabled:
-            segment.alignment_state = "running"
-            logger.info(
-                "TTS forced alignment started before playback - session: %s, "
-                "text_length: %s, audio_ms: %.1f",
-                self.session_id,
-                len(text),
-                total_audio_ms,
-            )
-            await self._align_segment(segment, self._turn_id)
+        segment.total_audio_ms = total_audio_ms
+        if self._forced_alignment_enabled:
+            segment.alignment_state = "pending"
         else:
-            self._assign_audio_to_segments()
+            segment.alignment_state = "disabled"
+            segment.audio_parts.clear()
+
+        if segment is self._collecting_segment:
+            self._collecting_segment = None
+        if segment is self._streaming_segment:
+            self._streaming_segment = None
+
+        self._try_start_segment_alignment(segment)
         await self._apply_pending_playback_time()
+        await self._publish_progress_if_grew()
 
     @Manager.event_handler(TTSChunkPlayed, priority=20)
     async def _publish_response_update(self, event: TTSChunkPlayed) -> None:
@@ -241,6 +302,50 @@ class TTSPlaybackManager(Manager):
         self._played_without_segment_ms += remaining_ms
         await self._apply_pending_playback_time()
 
+    def _attach_unassigned_audio(self, segment: _PlaybackSegment) -> None:
+        """Attach FIFO audio that arrived before its implicit segment opened."""
+
+        while self._unassigned_audio_chunks:
+            self._attach_audio_chunk(
+                segment,
+                self._unassigned_audio_chunks.popleft(),
+            )
+
+    def _attach_audio_chunk(
+        self,
+        segment: _PlaybackSegment,
+        chunk: _AudioChunk,
+    ) -> None:
+        """Attach one emitted PCM chunk to the currently collecting segment."""
+
+        if segment.audio_sample_rate is None:
+            segment.audio_sample_rate = chunk.sample_rate
+        elif segment.audio_sample_rate != chunk.sample_rate:
+            segment.alignment_audio_valid = False
+            logger.warning(
+                "TTS playback alignment saw mixed sample rates - session: %s, "
+                "expected: %s, got: %s",
+                self.session_id,
+                segment.audio_sample_rate,
+                chunk.sample_rate,
+            )
+
+        segment.generated_audio_ms += chunk.duration_ms
+        if self._forced_alignment_enabled and segment.alignment_audio_valid:
+            segment.audio_parts.append(chunk.audio_chunk)
+
+    def _discard_segment(self, segment: _PlaybackSegment) -> None:
+        """Discard an empty segment without treating its text as played."""
+
+        if segment is self._collecting_segment:
+            self._collecting_segment = None
+        if segment is self._streaming_segment:
+            self._streaming_segment = None
+        try:
+            self._segments.remove(segment)
+        except ValueError:
+            pass
+
     def _build_reported_text(self) -> str:
         """Return the current played text prefix across completed and active segments."""
 
@@ -249,30 +354,109 @@ class TTSPlaybackManager(Manager):
         segment = self._segments[0]
         if not segment.text:
             return self._completed_text
-        if segment.total_audio_ms <= 0.0:
-            return self._completed_text + segment.text
 
         aligned_prefix = self._build_aligned_segment_prefix(segment)
         if aligned_prefix is not None:
             return self._completed_text + aligned_prefix
 
-        if (
-            self._forced_alignment_enabled
-            and segment.alignment_state in {"pending", "running"}
-            and not self._fallback_while_alignment_pending
-        ):
-            return self._completed_text
+        return self._completed_text + self._build_rough_segment_prefix(segment)
 
-        return self._completed_text + self._build_ratio_segment_prefix(segment)
+    def _build_rough_segment_prefix(self, segment: _PlaybackSegment) -> str:
+        """Estimate a monotonic text prefix before precise alignment is ready."""
 
-    def _build_ratio_segment_prefix(self, segment: _PlaybackSegment) -> str:
-        """Fallback mapping from played audio ratio to a text prefix."""
+        units = self._rough_text_units(segment.text)
+        if not units:
+            return ""
 
-        ratio = max(0.0, min(1.0, segment.played_audio_ms / segment.total_audio_ms))
-        prefix_len = min(len(segment.text), int(len(segment.text) * ratio))
-        if ratio > 0.0 and prefix_len == 0:
-            prefix_len = 1
+        text_duration_ms = sum(unit.duration_ms for unit in units)
+        if text_duration_ms <= 0.0:
+            return ""
+
+        if segment.total_audio_ms is None:
+            safe_played_ms = max(
+                0.0,
+                segment.played_audio_ms - self._ROUGH_SAFETY_LAG_MS,
+            )
+            estimated_total_ms = max(
+                text_duration_ms,
+                segment.generated_audio_ms + self._ROUGH_UNFINISHED_TAIL_MS,
+            )
+            ratio = safe_played_ms / estimated_total_ms
+        elif segment.total_audio_ms > 0.0:
+            ratio = segment.played_audio_ms / segment.total_audio_ms
+        else:
+            return ""
+
+        target_duration_ms = max(0.0, min(1.0, ratio)) * text_duration_ms
+        elapsed_ms = 0.0
+        prefix_len = 0
+        for unit in units:
+            elapsed_ms += unit.duration_ms
+            if elapsed_ms > target_duration_ms + 1e-6:
+                break
+            prefix_len = unit.char_end
+
+        if prefix_len <= 0:
+            return ""
         return segment.text[:prefix_len]
+
+    @classmethod
+    def _rough_text_units(cls, text: str) -> list[_RoughTextUnit]:
+        """Split text into weighted character or word units for rough timing."""
+
+        units: list[_RoughTextUnit] = []
+        word_open = False
+
+        def flush_word(char_end: int) -> None:
+            nonlocal word_open
+            if not word_open:
+                return
+            units.append(
+                _RoughTextUnit(
+                    char_end=char_end,
+                    duration_ms=cls._ROUGH_WORD_MS,
+                )
+            )
+            word_open = False
+
+        for index, character in enumerate(text):
+            if cls._is_character_timing_unit(character):
+                flush_word(index)
+                units.append(
+                    _RoughTextUnit(
+                        char_end=index + 1,
+                        duration_ms=cls._ROUGH_CHARACTER_MS,
+                    )
+                )
+                continue
+
+            if character.isalnum() or character == "'":
+                word_open = True
+                continue
+
+            flush_word(index)
+            if not units:
+                continue
+            units[-1].char_end = index + 1
+            if unicodedata.category(character).startswith("P"):
+                units[-1].duration_ms += cls._ROUGH_PUNCTUATION_MS
+
+        flush_word(len(text))
+        return units
+
+    @staticmethod
+    def _is_character_timing_unit(character: str) -> bool:
+        """Return whether one CJK or Japanese character is a timing unit."""
+
+        codepoint = ord(character)
+        return (
+            0x3400 <= codepoint <= 0x4DBF
+            or 0x4E00 <= codepoint <= 0x9FFF
+            or 0xF900 <= codepoint <= 0xFAFF
+            or 0x20000 <= codepoint <= 0x2CEAF
+            or 0x3040 <= codepoint <= 0x30FF
+            or 0xFF66 <= codepoint <= 0xFF9D
+        )
 
     def _build_aligned_segment_prefix(
         self,
@@ -305,58 +489,6 @@ class TTSPlaybackManager(Manager):
         sample_count = len(audio_chunk) / 2
         return sample_count * 1000.0 / sample_rate
 
-    def _assign_audio_to_segments(self) -> None:
-        """Attach generated audio bytes to synthesized text segments in order."""
-
-        if not self._segments or not self._unassigned_audio_chunks:
-            return
-        for segment in self._segments:
-            self._collect_audio_for_segment(segment)
-            self._try_start_segment_alignment(segment)
-            if not self._unassigned_audio_chunks:
-                break
-
-    def _collect_audio_for_segment(self, segment: _PlaybackSegment) -> None:
-        """Move enough FIFO audio into one text segment for alignment."""
-
-        if segment.total_audio_ms <= 0.0:
-            return
-        while (
-            self._unassigned_audio_chunks
-            and segment.collected_audio_ms + 1e-6 < segment.total_audio_ms
-        ):
-            remaining_ms = segment.total_audio_ms - segment.collected_audio_ms
-            chunk = self._unassigned_audio_chunks.popleft()
-            if segment.audio_sample_rate is None:
-                segment.audio_sample_rate = chunk.sample_rate
-            elif segment.audio_sample_rate != chunk.sample_rate:
-                segment.alignment_audio_valid = False
-                logger.warning(
-                    "TTS playback alignment saw mixed sample rates - session: %s, "
-                    "expected: %s, got: %s",
-                    self.session_id,
-                    segment.audio_sample_rate,
-                    chunk.sample_rate,
-                )
-
-            if chunk.duration_ms <= remaining_ms + 1e-6:
-                if segment.alignment_audio_valid:
-                    segment.audio_parts.append(chunk.audio_chunk)
-                segment.collected_audio_ms += chunk.duration_ms
-                continue
-
-            taken, remainder = self._split_audio_chunk_at_duration(
-                chunk=chunk,
-                duration_ms=remaining_ms,
-            )
-            if taken is not None:
-                if segment.alignment_audio_valid:
-                    segment.audio_parts.append(taken.audio_chunk)
-                segment.collected_audio_ms += taken.duration_ms
-            if remainder is not None:
-                self._unassigned_audio_chunks.appendleft(remainder)
-            break
-
     def _try_start_segment_alignment(self, segment: _PlaybackSegment) -> None:
         """Start forced alignment once a segment has its full audio."""
 
@@ -364,10 +496,9 @@ class TTSPlaybackManager(Manager):
             return
         if segment.alignment_state != "pending":
             return
-        if segment.total_audio_ms <= 0.0:
+        if segment.total_audio_ms is None or segment.total_audio_ms <= 0.0:
             segment.alignment_state = "failed"
-            return
-        if segment.collected_audio_ms + 1e-6 < segment.total_audio_ms:
+            segment.audio_parts.clear()
             return
         if (
             not segment.alignment_audio_valid
@@ -375,6 +506,7 @@ class TTSPlaybackManager(Manager):
             or not segment.audio_sample_rate
         ):
             segment.alignment_state = "failed"
+            segment.audio_parts.clear()
             return
 
         segment.alignment_state = "running"
@@ -393,6 +525,7 @@ class TTSPlaybackManager(Manager):
         assert self.forced_aligner is not None
         try:
             audio = b"".join(segment.audio_parts)
+            segment.audio_parts.clear()
             units = await self.forced_aligner.async_align(
                 audio=audio,
                 text=segment.text,
@@ -487,68 +620,49 @@ class TTSPlaybackManager(Manager):
             prefix_len += 1
         return prefix_len
 
-    def _split_audio_chunk_at_duration(
-        self,
-        *,
-        chunk: _AudioChunk,
-        duration_ms: float,
-    ) -> tuple[_AudioChunk | None, _AudioChunk | None]:
-        """Split one PCM chunk into prefix/remainder by duration."""
-
-        if duration_ms <= 0.0:
-            return None, chunk
-        sample_count = max(1, round(chunk.sample_rate * duration_ms / 1000.0))
-        split_bytes = min(len(chunk.audio_chunk), sample_count * 2)
-        split_bytes -= split_bytes % 2
-        if split_bytes <= 0:
-            return None, chunk
-        if split_bytes >= len(chunk.audio_chunk):
-            return chunk, None
-
-        taken_audio = chunk.audio_chunk[:split_bytes]
-        remainder_audio = chunk.audio_chunk[split_bytes:]
-        taken = _AudioChunk(
-            audio_chunk=taken_audio,
-            sample_rate=chunk.sample_rate,
-            duration_ms=self._chunk_duration_ms(
-                audio_chunk=taken_audio,
-                sample_rate=chunk.sample_rate,
-            ),
-        )
-        remainder = _AudioChunk(
-            audio_chunk=remainder_audio,
-            sample_rate=chunk.sample_rate,
-            duration_ms=self._chunk_duration_ms(
-                audio_chunk=remainder_audio,
-                sample_rate=chunk.sample_rate,
-            ),
-        )
-        return taken, remainder
-
     async def _apply_pending_playback_time(self) -> None:
         """Apply queued played-audio time to known text segments."""
 
         remaining_ms = max(0.0, self._played_without_segment_ms)
-        if remaining_ms <= 0.0:
-            return
-        while remaining_ms > 0.0 and self._segments:
+        while self._segments:
             segment = self._segments[0]
-            if segment.total_audio_ms <= 0.0:
-                self._completed_text += segment.text
-                self._segments.popleft()
-                continue
+            if segment.total_audio_ms is None:
+                if remaining_ms > 0.0:
+                    segment.played_audio_ms += remaining_ms
+                    remaining_ms = 0.0
+                break
 
-            unplayed_ms = max(0.0, segment.total_audio_ms - segment.played_audio_ms)
+            if segment.played_audio_ms + 1e-6 >= segment.total_audio_ms:
+                self._complete_front_segment(segment)
+                continue
+            if remaining_ms <= 0.0:
+                break
+
+            unplayed_ms = segment.total_audio_ms - segment.played_audio_ms
             consume_ms = min(remaining_ms, unplayed_ms)
             segment.played_audio_ms += consume_ms
             remaining_ms -= consume_ms
 
             if segment.played_audio_ms + 1e-6 >= segment.total_audio_ms:
-                self._completed_text += segment.text
-                self._segments.popleft()
+                self._complete_front_segment(segment)
 
         self._played_without_segment_ms = remaining_ms
         await self._publish_progress_if_grew()
+
+    def _complete_front_segment(self, segment: _PlaybackSegment) -> None:
+        """Move one fully played FIFO segment into completed text."""
+
+        if not self._segments or self._segments[0] is not segment:
+            return
+        self._segments.popleft()
+        self._completed_text += segment.text
+        segment.audio_parts.clear()
+        if segment is self._collecting_segment:
+            self._collecting_segment = None
+        if segment is self._streaming_segment:
+            self._streaming_segment = None
+        if segment.alignment_task is not None and not segment.alignment_task.done():
+            segment.alignment_task.cancel()
 
     async def _publish_progress_if_grew(self) -> None:
         """Publish one response update when the played text prefix grows."""
@@ -656,6 +770,7 @@ class TTSPlaybackManager(Manager):
     async def _commit_stopped_playback(self) -> None:
         """Commit the force-aligned prefix after playback has actually stopped."""
 
+        await self._wait_for_alignment_grace()
         played_text = self._build_reported_text()
         if len(self._reported_text) > len(played_text):
             played_text = self._reported_text
@@ -664,6 +779,17 @@ class TTSPlaybackManager(Manager):
                 await self._commit_playback_text(played_text)
         finally:
             self._reset_all_state()
+
+    async def _wait_for_alignment_grace(self) -> None:
+        """Briefly wait for precise alignment before committing an interruption."""
+
+        tasks = [task for task in self._alignment_tasks if not task.done()]
+        if not tasks:
+            return
+        await asyncio.wait(
+            tasks,
+            timeout=self._ALIGNMENT_STOP_GRACE_SECONDS,
+        )
 
     async def _commit_playback_text(self, text: str) -> None:
         """Publish the final playback-confirmed text for the active turn."""

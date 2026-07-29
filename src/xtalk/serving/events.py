@@ -211,6 +211,34 @@ class ResponseFinish(Event):
 
 
 @dataclass
+class TTSTextSynthesisStarted(Event):
+    """Mark the start of one FIFO-ordered TTS text segment.
+
+    Attributes
+    ----------
+    text : str
+        Complete text of the segment about to be synthesized.
+    """
+
+    TYPE: ClassVar[str] = "tts.text_synthesis_started"
+    text: str = ""
+
+
+@dataclass
+class TTSStreamingTextAccepted(Event):
+    """Report text accepted by the active streaming TTS session.
+
+    Attributes
+    ----------
+    text : str
+        Incremental text successfully accepted by ``StreamingTextTTS``.
+    """
+
+    TYPE: ClassVar[str] = "tts.streaming_text_accepted"
+    text: str = ""
+
+
+@dataclass
 class TTSTextSynthesized(Event):
     """Text marker emitted after one synthesized text segment is fully produced.
 
@@ -219,9 +247,9 @@ class TTSTextSynthesized(Event):
     text : str
         Text segment that was synthesized.
     audio_duration : float
-        Estimated playback duration of the synthesized audio in milliseconds.
+        Duration of the final emitted PCM audio in milliseconds.
     audio_chunk : bytes
-        Optional complete PCM 16-bit mono audio for pre-playback alignment.
+        Optional complete PCM 16-bit mono audio accepted for compatibility.
     sample_rate : int
         Sample rate of ``audio_chunk``. Zero when no audio is attached.
     """
