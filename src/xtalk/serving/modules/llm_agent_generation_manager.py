@@ -56,6 +56,7 @@ class LLMAgentConsumptionManager(Manager):
         self.config: dict[str, Any] = config or {}
 
         self._active_streams: dict[asyncio.Task[None], AsyncIterator[AgentOutput]] = {}
+        self._persistent_streams: set[asyncio.Task[None]] = set()
         self._streams_lock = asyncio.Lock()
         self._output_lock = asyncio.Lock()
         self._resume_event = asyncio.Event()
@@ -150,6 +151,8 @@ class LLMAgentConsumptionManager(Manager):
                 )
             )
             self._active_streams[task] = iterator
+            if event.persistent:
+                self._persistent_streams.add(task)
 
     @Manager.event_handler(TurnLLMAgentResumeRequested, priority=95)
     async def _handle_generation_resume(
@@ -193,12 +196,12 @@ class LLMAgentConsumptionManager(Manager):
 
     @Manager.event_handler(TurnLLMAgentStopRequested, priority=95)
     async def _handle_generation_stop(self, event: TurnLLMAgentStopRequested) -> None:
-        """Stop all active stream-consumption tasks and downstream TTS."""
+        """Stop interruptible generation streams and downstream TTS."""
 
         tasks: list[asyncio.Task[None]]
         iterators: list[AsyncIterator[AgentOutput]]
         async with self._streams_lock:
-            tasks, iterators = self._detach_all_streams_locked()
+            tasks, iterators = self._detach_interruptible_streams_locked()
 
         await self._cancel_tasks(tasks)
         await self._close_iterators(iterators)
@@ -318,6 +321,7 @@ class LLMAgentConsumptionManager(Manager):
             should_finish = False
             async with self._streams_lock:
                 popped_iterator = self._active_streams.pop(task, None)
+                self._persistent_streams.discard(task)
                 if popped_iterator is None:
                     return
                 should_finish = not self._active_streams
@@ -347,6 +351,21 @@ class LLMAgentConsumptionManager(Manager):
             )
         await self._publish_llm_response_finish(final_text)
 
+    def _detach_interruptible_streams_locked(
+        self,
+    ) -> tuple[list[asyncio.Task[None]], list[AsyncIterator[AgentOutput]]]:
+        """Detach turn-scoped streams while preserving persistent streams."""
+
+        tasks = [
+            task
+            for task in self._active_streams
+            if task not in self._persistent_streams
+        ]
+        iterators = [self._active_streams.pop(task) for task in tasks]
+        self._resume_event.set()
+        self._reset_turn_output_state()
+        return tasks, iterators
+
     def _detach_all_streams_locked(
         self,
     ) -> tuple[list[asyncio.Task[None]], list[AsyncIterator[AgentOutput]]]:
@@ -355,6 +374,7 @@ class LLMAgentConsumptionManager(Manager):
         tasks = list(self._active_streams.keys())
         iterators = list(self._active_streams.values())
         self._active_streams.clear()
+        self._persistent_streams.clear()
         self._resume_event.set()
         self._reset_turn_output_state()
         return tasks, iterators

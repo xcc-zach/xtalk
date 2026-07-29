@@ -139,6 +139,7 @@ class LLMAgentContextManager(Manager):
                 ConsumeLLMAgentGenerationRequested(
                     session_id=self.session_id,
                     stream=self.llm_agent.async_accept(context),
+                    persistent=context_type == "loop",
                 ),
                 wait_for_completion=True,
             )
