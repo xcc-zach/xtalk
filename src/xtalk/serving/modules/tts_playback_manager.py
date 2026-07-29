@@ -6,7 +6,7 @@ import logging
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from ...models import ForcedAligner, ForcedAlignmentUnit, Models
 from ..event_bus import EventBus
@@ -52,6 +52,7 @@ class _PlaybackSegment:
 
     text: str
     turn_id: int
+    tts_mode: Literal["regular", "streaming"]
     total_audio_ms: float | None = None
     generated_audio_ms: float = 0.0
     played_audio_ms: float = 0.0
@@ -114,6 +115,8 @@ class TTSPlaybackManager(Manager):
         self._completed_text = ""
         self._reported_text = ""
         self._received_audio = False
+        self._last_logged_alignment_segment: _PlaybackSegment | None = None
+        self._last_logged_alignment_level: str | None = None
 
     def _reset_playback_tracking(self) -> None:
         """Reset playback-progress state while preserving response metadata."""
@@ -132,6 +135,8 @@ class TTSPlaybackManager(Manager):
         self._reported_text = ""
         self._received_audio = False
         self._awaiting_stop_ack = False
+        self._last_logged_alignment_segment = None
+        self._last_logged_alignment_level = None
 
     def _reset_all_state(self) -> None:
         """Reset all cached response and playback-tracking state."""
@@ -168,6 +173,7 @@ class TTSPlaybackManager(Manager):
         segment = _PlaybackSegment(
             text=text,
             turn_id=self._turn_id,
+            tts_mode="regular",
         )
         self._segments.append(segment)
         self._collecting_segment = segment
@@ -189,6 +195,7 @@ class TTSPlaybackManager(Manager):
             self._streaming_segment = _PlaybackSegment(
                 text="",
                 turn_id=self._turn_id,
+                tts_mode="streaming",
             )
             self._segments.append(self._streaming_segment)
             self._attach_unassigned_audio(self._streaming_segment)
@@ -237,6 +244,7 @@ class TTSPlaybackManager(Manager):
             segment = _PlaybackSegment(
                 text=text,
                 turn_id=self._turn_id,
+                tts_mode="regular",
             )
             self._segments.append(segment)
             self._attach_unassigned_audio(segment)
@@ -355,11 +363,53 @@ class TTSPlaybackManager(Manager):
         if not segment.text:
             return self._completed_text
 
+        self._log_alignment_level_if_changed(segment)
         aligned_prefix = self._build_aligned_segment_prefix(segment)
         if aligned_prefix is not None:
             return self._completed_text + aligned_prefix
 
         return self._completed_text + self._build_rough_segment_prefix(segment)
+
+    @staticmethod
+    def _alignment_level(segment: _PlaybackSegment) -> str:
+        """Return the calibration level currently used for one segment."""
+
+        precise_alignment_ready = (
+            segment.alignment_state == "ready" and bool(segment.alignment_units)
+        )
+        if segment.tts_mode == "streaming":
+            if precise_alignment_ready:
+                return "L3-precise"
+            if segment.total_audio_ms is not None:
+                return "L2-total-duration-ratio"
+            return "L1-online-estimate"
+
+        if precise_alignment_ready:
+            return "L2-precise"
+        return "L1-rough"
+
+    def _log_alignment_level_if_changed(
+        self,
+        segment: _PlaybackSegment,
+    ) -> None:
+        """Log the active calibration level once per segment-level transition."""
+
+        level = self._alignment_level(segment)
+        if (
+            self._last_logged_alignment_segment is segment
+            and self._last_logged_alignment_level == level
+        ):
+            return
+
+        self._last_logged_alignment_segment = segment
+        self._last_logged_alignment_level = level
+        logger.debug(
+            "TTS playback alignment - session: %s, mode: %s, level: %s, state: %s",
+            self.session_id,
+            segment.tts_mode,
+            level,
+            segment.alignment_state,
+        )
 
     def _build_rough_segment_prefix(self, segment: _PlaybackSegment) -> str:
         """Estimate a monotonic text prefix before precise alignment is ready."""
@@ -536,12 +586,6 @@ class TTSPlaybackManager(Manager):
             normalized_units = self._normalize_alignment_units(segment.text, units)
             segment.alignment_units = normalized_units
             segment.alignment_state = "ready" if normalized_units else "failed"
-            logger.info(
-                "TTS forced alignment completed - session: %s, units: %s, state: %s",
-                self.session_id,
-                len(normalized_units),
-                segment.alignment_state,
-            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
