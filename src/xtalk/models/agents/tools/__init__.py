@@ -20,6 +20,23 @@ from .core import (
     ToolEngine,
 )
 
+from .thinking import (
+    ThinkInput,
+    ThinkOutput,
+    build_think_tool,
+)
+from .async_web_search import (
+    AsyncWebSearchInput,
+    AsyncWebSearchOutput,
+    build_async_web_search_tool,
+)
+from .deepresearch import (
+    DeepResearchInput,
+    DeepResearchOutput,
+    DeepResearchState,
+    build_deep_research_tool,
+)
+
 from .speech_control import (
     build_set_voice_tool,
     build_set_emotion_tool,
@@ -53,4 +70,14 @@ __all__ = [
     "AVAILABLE_EMOTIONS",
     "build_web_search_tool",
     "build_time_tool",
+    "ThinkInput",
+    "ThinkOutput",
+    "build_think_tool",
+    "AsyncWebSearchInput",
+    "AsyncWebSearchOutput",
+    "build_async_web_search_tool",
+    "DeepResearchInput",
+    "DeepResearchOutput",
+    "DeepResearchState",
+    "build_deep_research_tool",
 ]

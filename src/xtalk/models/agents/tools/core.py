@@ -239,9 +239,6 @@ class AsyncTool(_NativeTool):
     def _infer_output_type(cls, annotation: Any) -> type[ToolOutput] | None:
         """Find the concrete ToolOutput type inside a return annotation."""
 
-        if isinstance(annotation, type) and issubclass(annotation, ToolOutput):
-            return annotation
-
         origin = get_origin(annotation)
         args = get_args(annotation)
         if origin is Finished and args:
@@ -253,6 +250,9 @@ class AsyncTool(_NativeTool):
                 output_type = cls._infer_output_type(arg)
                 if output_type is not None:
                     return output_type
+        if isinstance(annotation, type) and issubclass(annotation, ToolOutput):
+            return annotation
+
         return None
 
     @classmethod
