@@ -48,6 +48,14 @@ class _RoughTextUnit:
 
 
 @dataclass
+class _StreamingRoughTextUnit:
+    """One immutable StreamingTextTTS L1 unit on the prepared-audio timeline."""
+
+    char_end: int
+    end_ms: float
+
+
+@dataclass
 class _PlaybackSegment:
     """One synthesized text segment and its generated/played audio accounting."""
 
@@ -57,6 +65,9 @@ class _PlaybackSegment:
     total_audio_ms: float | None = None
     generated_audio_ms: float = 0.0
     played_audio_ms: float = 0.0
+    streaming_rough_units: list[_StreamingRoughTextUnit] = field(
+        default_factory=list
+    )
     audio_sample_rate: int | None = None
     audio_parts: list[bytes] = field(default_factory=list)
     audio_prepared: bool = False
@@ -74,6 +85,10 @@ class TTSPlaybackManager(Manager):
     _ROUGH_CHARACTER_MS = 200.0
     _ROUGH_WORD_MS = 280.0
     _ROUGH_PUNCTUATION_MS = 80.0
+    _STREAMING_L1_SAFETY_LAG_MS = 300.0
+    _STREAMING_L1_CHARACTER_MS = 280.0
+    _STREAMING_L1_WORD_MS = 380.0
+    _STREAMING_L1_PUNCTUATION_MS = 160.0
     _ALIGNMENT_STOP_GRACE_SECONDS = 0.2
 
     def __init__(
@@ -100,7 +115,6 @@ class TTSPlaybackManager(Manager):
             0.0,
             float(forced_alignment_config.get("stop_ack_timeout_ms", 500.0)),
         )
-
         self._current_response_text = ""
         self._pending_text = ""
         self._segments: deque[_PlaybackSegment] = deque()
@@ -205,7 +219,7 @@ class TTSPlaybackManager(Manager):
         self,
         event: TTSStreamingTextAccepted,
     ) -> None:
-        """Extend the implicit StreamingTextTTS segment with accepted text."""
+        """Append text to an immutable StreamingTextTTS L1 timeline."""
 
         text = event.text or ""
         if not text:
@@ -219,9 +233,16 @@ class TTSPlaybackManager(Manager):
             self._segments.append(self._streaming_segment)
             self._attach_unassigned_audio(self._streaming_segment)
 
-        self._streaming_segment.text += text
+        segment = self._streaming_segment
+        text_offset = len(segment.text)
+        segment.text += text
+        self._append_streaming_rough_units(
+            segment,
+            text=text,
+            text_offset=text_offset,
+            prepared_audio_ms=event.prepared_audio_ms,
+        )
         await self._apply_pending_playback_time()
-        await self._publish_progress_if_grew()
 
     @Manager.event_handler(TTSChunkReady, priority=20)
     async def _track_generated_chunk(self, event: TTSChunkReady) -> None:
@@ -523,6 +544,9 @@ class TTSPlaybackManager(Manager):
     def _build_rough_segment_prefix(self, segment: _PlaybackSegment) -> str:
         """Estimate a monotonic text prefix before precise alignment is ready."""
 
+        if segment.tts_mode == "streaming" and segment.total_audio_ms is None:
+            return self._build_streaming_online_prefix(segment)
+
         units = self._rough_text_units(segment.text)
         if not units:
             return ""
@@ -559,10 +583,96 @@ class TTSPlaybackManager(Manager):
             return ""
         return segment.text[:prefix_len]
 
+    def _append_streaming_rough_units(
+        self,
+        segment: _PlaybackSegment,
+        *,
+        text: str,
+        text_offset: int,
+        prepared_audio_ms: float,
+    ) -> None:
+        """Append immutable L1 units after the text preparation watermark."""
+
+        rough_units = self._rough_text_units(
+            text,
+            character_ms=self._STREAMING_L1_CHARACTER_MS,
+            word_ms=self._STREAMING_L1_WORD_MS,
+            punctuation_ms=self._STREAMING_L1_PUNCTUATION_MS,
+        )
+        if not rough_units:
+            separator_duration_ms = sum(
+                self._STREAMING_L1_PUNCTUATION_MS
+                for character in text
+                if unicodedata.category(character).startswith("P")
+            )
+            rough_units = [
+                _RoughTextUnit(
+                    char_end=len(text),
+                    duration_ms=separator_duration_ms,
+                )
+            ]
+
+        prior_end_ms = (
+            segment.streaming_rough_units[-1].end_ms
+            if segment.streaming_rough_units
+            else 0.0
+        )
+        timeline_end_ms = max(
+            0.0,
+            prepared_audio_ms,
+            segment.generated_audio_ms,
+            segment.played_audio_ms,
+            prior_end_ms,
+        )
+        for unit in rough_units:
+            timeline_end_ms += max(0.0, unit.duration_ms)
+            segment.streaming_rough_units.append(
+                _StreamingRoughTextUnit(
+                    char_end=text_offset + unit.char_end,
+                    end_ms=timeline_end_ms,
+                )
+            )
+
+    def _build_streaming_online_prefix(
+        self,
+        segment: _PlaybackSegment,
+    ) -> str:
+        """Build StreamingTextTTS L1 text from its immutable unit timeline."""
+
+        safe_played_ms = max(
+            0.0,
+            segment.played_audio_ms - self._STREAMING_L1_SAFETY_LAG_MS,
+        )
+        prefix_len = 0
+        for unit in segment.streaming_rough_units:
+            if unit.end_ms > safe_played_ms + 1e-6:
+                break
+            prefix_len = unit.char_end
+
+        if prefix_len <= 0:
+            return ""
+        return segment.text[:prefix_len]
+
     @classmethod
-    def _rough_text_units(cls, text: str) -> list[_RoughTextUnit]:
+    def _rough_text_units(
+        cls,
+        text: str,
+        *,
+        character_ms: float | None = None,
+        word_ms: float | None = None,
+        punctuation_ms: float | None = None,
+    ) -> list[_RoughTextUnit]:
         """Split text into weighted character or word units for rough timing."""
 
+        resolved_character_ms = (
+            cls._ROUGH_CHARACTER_MS if character_ms is None else character_ms
+        )
+        resolved_word_ms = cls._ROUGH_WORD_MS if word_ms is None else word_ms
+        resolved_punctuation_ms = (
+            cls._ROUGH_PUNCTUATION_MS
+            if punctuation_ms is None
+            else punctuation_ms
+        )
         units: list[_RoughTextUnit] = []
         word_open = False
 
@@ -573,7 +683,7 @@ class TTSPlaybackManager(Manager):
             units.append(
                 _RoughTextUnit(
                     char_end=char_end,
-                    duration_ms=cls._ROUGH_WORD_MS,
+                    duration_ms=resolved_word_ms,
                 )
             )
             word_open = False
@@ -584,7 +694,7 @@ class TTSPlaybackManager(Manager):
                 units.append(
                     _RoughTextUnit(
                         char_end=index + 1,
-                        duration_ms=cls._ROUGH_CHARACTER_MS,
+                        duration_ms=resolved_character_ms,
                     )
                 )
                 continue
@@ -598,7 +708,7 @@ class TTSPlaybackManager(Manager):
                 continue
             units[-1].char_end = index + 1
             if unicodedata.category(character).startswith("P"):
-                units[-1].duration_ms += cls._ROUGH_PUNCTUATION_MS
+                units[-1].duration_ms += resolved_punctuation_ms
 
         flush_word(len(text))
         return units

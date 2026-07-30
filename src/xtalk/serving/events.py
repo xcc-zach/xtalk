@@ -232,10 +232,14 @@ class TTSStreamingTextAccepted(Event):
     ----------
     text : str
         Incremental text successfully accepted by ``StreamingTextTTS``.
+    prepared_audio_ms : float
+        Duration of speed-processed PCM already prepared before the text was
+        forwarded. The value is a lower-bound timeline anchor for this text.
     """
 
     TYPE: ClassVar[str] = "tts.streaming_text_accepted"
     text: str = ""
+    prepared_audio_ms: float = 0.0
 
 
 @dataclass
