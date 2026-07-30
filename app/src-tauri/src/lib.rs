@@ -4,23 +4,26 @@
 
 mod sidecar;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
-use sidecar::{BackendManager, NativeBackendConnection};
+use sidecar::{BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection};
 use tauri::{Manager, State, WindowEvent};
 
 /// Runs the XTalk Desktop native shell.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            apply_model_config,
             get_backend_connection,
+            get_model_config_selection,
             shutdown_backend
         ])
         .setup(|app| {
-            let manager = tauri::async_runtime::block_on(BackendManager::start(app.handle()))
-                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
-            app.manage(manager);
+            let supervisor =
+                tauri::async_runtime::block_on(BackendSupervisor::initialize(app.handle()));
+            app.manage(supervisor);
             Ok(())
         })
         .on_window_event(handle_window_event)
@@ -29,16 +32,41 @@ pub fn run() {
 }
 
 #[tauri::command]
-fn get_backend_connection(
-    manager: State<'_, Arc<BackendManager>>,
+async fn get_backend_connection(
+    supervisor: State<'_, Arc<BackendSupervisor>>,
 ) -> Result<NativeBackendConnection, String> {
-    manager.connection().map_err(|error| error.to_string())
+    supervisor
+        .connection()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn get_model_config_selection(
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+) -> Result<NativeModelConfigSelection, String> {
+    Ok(supervisor.selection().await)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_model_config(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+    config_path: PathBuf,
+) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .apply_model_config(&app, config_path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn shutdown_backend(app: tauri::AppHandle) -> Result<(), String> {
-    let manager = app.state::<Arc<BackendManager>>().inner().clone();
-    manager.shutdown().await.map_err(|error| error.to_string())
+    let supervisor = app.state::<Arc<BackendSupervisor>>().inner().clone();
+    supervisor
+        .shutdown()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
@@ -52,14 +80,14 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     api.prevent_close();
 
     let app = window.app_handle().clone();
-    let manager = app.state::<Arc<BackendManager>>().inner().clone();
-    if !manager.begin_app_close() {
+    let supervisor = app.state::<Arc<BackendSupervisor>>().inner().clone();
+    if !supervisor.begin_app_close() {
         return;
     }
 
     let window = window.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = manager.shutdown().await {
+        if let Err(error) = supervisor.shutdown().await {
             eprintln!("app-backend shutdown did not complete cleanly: {error}");
         }
         if let Err(error) = window.destroy() {

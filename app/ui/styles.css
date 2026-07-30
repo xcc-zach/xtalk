@@ -202,6 +202,12 @@ summary,
   animation: status-pulse 1.3s ease-in-out infinite;
 }
 
+.status-dot[data-state="unconfigured"] {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 13%, transparent);
+  animation: none;
+}
+
 .status-dot[data-state="ready"] {
   background: var(--success);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 13%, transparent);
@@ -897,6 +903,43 @@ summary,
 
 .security-copy {
   font-family: inherit;
+}
+
+.settings-section > p {
+  margin: -2px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-path {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.settings-path span {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.settings-path code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.settings-section .settings-status {
+  min-height: 18px;
+  margin: 9px 1px -3px;
 }
 
 .debug-actions p {

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.2",
     "xtalk-client": "file:resources/artifacts/xtalk-client-0.2.6.tgz"
   },
   "devDependencies": {

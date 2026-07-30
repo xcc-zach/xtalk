@@ -19,7 +19,7 @@
         class="drawer-backdrop"
         type="button"
         tabindex="-1"
-        aria-label="关闭调试信息"
+        aria-label="关闭设置与诊断"
       ></button>
 
       <aside
@@ -30,14 +30,14 @@
       >
         <div class="drawer-header">
           <div>
-            <div class="drawer-eyebrow">Desktop inspector</div>
-            <h2 id="debug-title">运行诊断</h2>
+            <div class="drawer-eyebrow">Desktop settings</div>
+            <h2 id="debug-title">设置与诊断</h2>
           </div>
           <button
             id="close-debug-button"
             class="icon-button icon-button-quiet"
             type="button"
-            aria-label="关闭调试信息"
+            aria-label="关闭设置与诊断"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M6 6l12 12M18 6 6 18" />
@@ -46,6 +46,32 @@
         </div>
 
         <div class="debug-scroll">
+          <section class="debug-section settings-section" aria-labelledby="model-config-title">
+            <h3 id="model-config-title">模型配置</h3>
+            <p>
+              release 包不内置默认模型配置。选择 JSON 配置后，应用会重启并重新探测本地服务。
+            </p>
+            <div class="settings-path">
+              <span>当前配置</span>
+              <code id="model-config-detail">未选择</code>
+            </div>
+            <button
+              id="select-model-config-button"
+              class="drawer-action-button"
+              type="button"
+            >
+              选择模型配置文件
+            </button>
+            <p
+              id="model-config-status"
+              class="settings-status"
+              role="status"
+              aria-live="polite"
+            >
+              尚未选择模型配置
+            </p>
+          </section>
+
           <section class="debug-section" aria-labelledby="runtime-title">
             <h3 id="runtime-title">Runtime</h3>
             <dl class="runtime-grid">
@@ -106,7 +132,7 @@
 
           <section class="debug-section debug-actions" aria-labelledby="recovery-title">
             <h3 id="recovery-title">Recovery</h3>
-            <p>本地服务不可用时，主界面仍保持可访问。可在 sidecar 就绪后重新探测。</p>
+            <p>本地服务不可用时，主界面仍保持可访问。可重新选择配置或再次探测。</p>
             <button id="retry-button" class="drawer-action-button" type="button">
               重新探测本地服务
             </button>
@@ -119,7 +145,7 @@
           id="backend-status-button"
           class="topbar-status"
           type="button"
-          aria-label="打开本地服务诊断"
+          aria-label="打开设置与诊断"
           aria-controls="debug-drawer"
           aria-expanded="false"
         >
@@ -133,7 +159,7 @@
           id="toggle-debug-button"
           class="icon-button"
           type="button"
-          aria-label="打开调试信息"
+          aria-label="打开设置与诊断"
           aria-controls="debug-drawer"
           aria-expanded="false"
         >
@@ -220,18 +246,6 @@
       </main>
 
       <div class="control-dock" aria-label="语音控制">
-        <button
-          id="dock-diagnostics-button"
-          class="control-button control-button-secondary"
-          type="button"
-          aria-label="打开运行诊断"
-          title="运行诊断"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
-          </svg>
-        </button>
-
         <button
           id="mute-button"
           class="control-button control-button-secondary"

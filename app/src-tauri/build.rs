@@ -1,4 +1,9 @@
-const APP_COMMANDS: &[&str] = &["get_backend_connection", "shutdown_backend"];
+const APP_COMMANDS: &[&str] = &[
+    "apply_model_config",
+    "get_backend_connection",
+    "get_model_config_selection",
+    "shutdown_backend",
+];
 
 fn main() {
     tauri_build::try_build(
