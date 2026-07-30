@@ -12,6 +12,7 @@ from xtalk.model_loader import init_registered_model
 from xtalk.models.speaker_diarization import SglangOmniMtdClient
 from xtalk.models.speaker_diarization.sglang_omni_mtd_client import (
     SglangOmniRequestCancelled,
+    _parse_timestamped_text,
 )
 
 
@@ -48,8 +49,8 @@ async def _read_form(request: web.Request) -> dict[str, Any]:
     return result
 
 
-def test_http_request_wraps_wav_and_maps_swapped_exemplar_labels() -> None:
-    """Exemplar overlap restores global labels after local-label permutation."""
+def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> None:
+    """The raw assistant prefix is fixed decoder context, not post-hoc mapping."""
 
     async def scenario() -> None:
         captured: dict[str, Any] = {}
@@ -58,14 +59,9 @@ def test_http_request_wraps_wav_and_maps_swapped_exemplar_labels() -> None:
             captured.update(await _read_form(request))
             return web.json_response(
                 {
-                    "text": (
-                        "[0.00][S02]我是甲[1.00] "
-                        "[1.50][S01]我是乙[2.50] "
-                        "[3.50][S02]继续说话[4.30]"
-                    ),
+                    # Native SGLang returns only the newly generated suffix.
+                    "text": "[3.50][S02]继续说话[4.30]",
                     "segments": [
-                        {"id": 0, "start": 0.0, "end": 1.0, "text": "[S02]我是甲"},
-                        {"id": 1, "start": 1.5, "end": 2.5, "text": "[S01]我是乙"},
                         {"id": 2, "start": 3.5, "end": 4.3, "text": "[S02]继续说话"},
                     ],
                     "duration": 4.5,
@@ -96,32 +92,36 @@ def test_http_request_wraps_wav_and_maps_swapped_exemplar_labels() -> None:
         assert captured["file"][8:12] == b"WAVE"
         assert captured["model"] == "mtd-test"
         assert captured["response_format"] == "verbose_json"
+        prefix = "[0.00][S01]我是甲[1.00] [1.50][S02]我是乙[2.50]"
+        assert "<|audio_pad|>" in captured["prompt"]
+        assert captured["prompt"].count("<|audio_pad|>") == 1
+        assert captured["prompt"].endswith("<|im_start|>assistant\n" + prefix)
+        assert result.raw_text == prefix + " [3.50][S02]继续说话[4.30]"
         assert result.current_segments == [
             {
                 "start_s": 0.0,
                 "end_s": 0.8,
-                "speaker_id": "S01",
+                "speaker_id": "S02",
                 "text": "继续说话",
             }
         ]
-        assert result.metrics["speaker_mapping"] == {"S02": "S01", "S01": "S02"}
+        assert result.metrics["registration_mode"] == "fixed_decoder_prefix"
+        assert result.metrics["generated_suffix"] == "[3.50][S02]继续说话[4.30]"
         assert result.metrics["remote_request_id"] == "transcription-server-id"
 
     asyncio.run(scenario())
 
 
-def test_unmatched_local_label_gets_new_global_id_without_collision() -> None:
-    """A new local speaker never reuses a registered global label."""
+def test_fixed_prefix_does_not_apply_exemplar_slot_label_mapping() -> None:
+    """A generated S01 is retained even when prefix audio contains S01/S02."""
 
     async def scenario() -> None:
         async def handler(_request: web.Request) -> web.Response:
             return web.json_response(
                 {
-                    "text": "[0.00][S01]甲[1.00] [2.00][S01]旧人[2.50] [2.50][S02]新人[3.00]",
+                    "text": "[3.50][S01]当前说话人[4.20]",
                     "segments": [
-                        {"id": 0, "start": 0.0, "end": 1.0, "text": "[S01]甲"},
-                        {"id": 1, "start": 2.0, "end": 2.5, "text": "[S01]旧人"},
-                        {"id": 2, "start": 2.5, "end": 3.0, "text": "[S02]新人"},
+                        {"id": 0, "start": 3.5, "end": 4.2, "text": "[S01]当前说话人"},
                     ],
                 }
             )
@@ -130,52 +130,10 @@ def test_unmatched_local_label_gets_new_global_id_without_collision() -> None:
         client = SglangOmniMtdClient(base_url=base_url)
         try:
             result = await client.decode_snapshot(
-                request_id="new-speaker",
-                pcm16=b"\0\0" * 48000,
-                sample_rate=16000,
-                decoder_prefix="[0.00][S02]甲[1.00]",
-                context_seconds=2.0,
-                current_audio_seconds=1.0,
-                is_final=True,
-            )
-        finally:
-            await client.close()
-            await runner.cleanup()
-
-        assert [item["speaker_id"] for item in result.current_segments] == ["S02", "S01"]
-        assert all(item["speaker_id"] != "UNKNOWN" for item in result.current_segments)
-
-    asyncio.run(scenario())
-
-
-def test_unmatched_label_avoids_all_registered_and_mapped_ids() -> None:
-    """A local-label collision allocates a fresh ID above the registered pool."""
-
-    async def scenario() -> None:
-        async def handler(_request: web.Request) -> web.Response:
-            return web.json_response(
-                {
-                    "text": (
-                        "[0.00][S01]甲[1.00] [1.50][S03]乙[2.50] "
-                        "[3.50][S01]旧人[4.00] [4.00][S02]新人[4.50]"
-                    ),
-                    "segments": [
-                        {"id": 0, "start": 0.0, "end": 1.0, "text": "[S01]甲"},
-                        {"id": 1, "start": 1.5, "end": 2.5, "text": "[S03]乙"},
-                        {"id": 2, "start": 3.5, "end": 4.0, "text": "[S01]旧人"},
-                        {"id": 3, "start": 4.0, "end": 4.5, "text": "[S02]新人"},
-                    ],
-                }
-            )
-
-        runner, base_url = await _start_server(handler)
-        client = SglangOmniMtdClient(base_url=base_url)
-        try:
-            result = await client.decode_snapshot(
-                request_id="label-collision",
+                request_id="fixed-label",
                 pcm16=b"\0\0" * 72000,
                 sample_rate=16000,
-                decoder_prefix="[0.00][S02]甲[1.00] [1.50][S01]乙[2.50]",
+                decoder_prefix="[0.00][S01]甲[1.00] [1.50][S02]乙[2.50]",
                 context_seconds=3.5,
                 current_audio_seconds=1.0,
                 is_final=True,
@@ -184,12 +142,7 @@ def test_unmatched_label_avoids_all_registered_and_mapped_ids() -> None:
             await client.close()
             await runner.cleanup()
 
-        assert [item["speaker_id"] for item in result.current_segments] == ["S02", "S03"]
-        assert result.metrics["speaker_mapping"] == {
-            "S01": "S02",
-            "S03": "S01",
-            "S02": "S03",
-        }
+        assert [item["speaker_id"] for item in result.current_segments] == ["S01"]
 
     asyncio.run(scenario())
 
@@ -198,7 +151,10 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
     """Cold-start local labels become compact global IDs without UNKNOWN."""
 
     async def scenario() -> None:
-        async def handler(_request: web.Request) -> web.Response:
+        captured: dict[str, Any] = {}
+
+        async def handler(request: web.Request) -> web.Response:
+            captured.update(await _read_form(request))
             return web.json_response(
                 {
                     "text": "[0.10][S01]甲[0.40] [0.45][S02]乙[0.90]",
@@ -226,8 +182,21 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
             await runner.cleanup()
 
         assert [item["speaker_id"] for item in result.current_segments] == ["S01", "S02"]
+        assert captured["prompt"].endswith("<|im_start|>assistant\n")
+        assert "<|audio_pad|>" in captured["prompt"]
 
     asyncio.run(scenario())
+
+
+def test_timestamp_parser_accepts_nested_speaker_bracket() -> None:
+    """Continuation-boundary ``[[Sxx]`` is parsed as the intended speaker."""
+
+    assert _parse_timestamped_text(
+        "[0.00][S01]甲[1.00] [1.50][[S02]乙[2.50]"
+    ) == [
+        _parse_timestamped_text("[0.00][S01]甲[1.00]")[0],
+        _parse_timestamped_text("[1.50][S02]乙[2.50]")[0],
+    ]
 
 
 def test_cancel_releases_waiting_decode_quickly() -> None:
