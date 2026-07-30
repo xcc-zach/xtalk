@@ -4,7 +4,7 @@ from .models.agents.interfaces import Agent
 from .models.asr.interfaces import ASR
 from .models.captioner.interfaces import Captioner
 from .models.embeddings.interfaces import Embeddings
-from .models.force_aligner.interfaces import ForceAligner
+from .models.forced_aligner.interfaces import ForcedAligner
 from .models.punt_restorer.interfaces import PuntRestorer
 from .models.rewriters.interfaces import Rewriter
 from .models.speaker_encoder.interfaces import SpeakerEncoder
@@ -16,7 +16,7 @@ from .models.vad.interfaces import VAD
 
 __all__ = [
     "Embeddings",
-    "ForceAligner",
+    "ForcedAligner",
     "BaseChatModel",
     "Agent",
     "Rewriter",

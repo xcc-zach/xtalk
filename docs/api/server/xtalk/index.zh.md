@@ -37,15 +37,44 @@ Initialize an ``Xtalk`` application wrapper.
   Maximum number of concurrent sessions. If omitted, no session limit
   is enforced.
 
+#### configure
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def configure(cls, path_or_dict: str | dict) -> XtalkBuilder
+```
+
+Start a staged Xtalk configuration.
+
+##### 参数
+
+- `path_or_dict` (`str | dict`)
+  JSON file path or already loaded configuration dictionary.
+
+##### 返回
+
+- `XtalkBuilder`
+  Builder that accepts transformations and runtime-only bindings
+  before model creation.
+
+##### 示例
+
+```pycon
+>>> builder = Xtalk.configure("server_config.json")
+```
+
 #### from_config
 
 _定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
 
 ```python
-def from_config(cls, path_or_dict: str | dict) -> 'Xtalk'
+def from_config(cls, path_or_dict: str | dict) -> Xtalk
 ```
 
 Build an ``Xtalk`` instance from configuration data.
+
+This is equivalent to ``Xtalk.configure(path_or_dict).build()``.
 
 ##### 参数
 
@@ -132,27 +161,6 @@ Queue text for session-scoped embedding storage.
 - `ValueError`
   Raised if the target session does not exist.
 
-#### add_agent_tools
-
-_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
-
-```python
-def add_agent_tools(self, tools_or_factories: list[BaseTool | Callable[[], BaseTool]])
-```
-
-Attach tools to the prototype agent before sessions are created.
-
-##### 参数
-
-- `tools_or_factories` (`list[BaseTool | Callable[[], BaseTool]]`)
-  Tool instances or zero-argument factories that produce tool
-  instances.
-
-##### 抛出
-
-- `RuntimeError`
-  Raised if at least one service session has already been created.
-
 #### mount_routes
 
 _定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
@@ -185,6 +193,125 @@ Accept a WebSocket session and hand it to the service manager.
 
 If a session limit is configured, the socket is first admitted through
 the session limiter queue.
+
+## XtalkBuilder
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+class XtalkBuilder
+```
+
+Collect staged configuration changes and runtime-only Xtalk bindings.
+
+### 参数
+
+- `xtalk_type` (`type[Xtalk]`)
+  ``Xtalk`` class, or a subclass, created by ``build()``.
+- `path_or_dict` (`str | dict`)
+  JSON file path or already loaded configuration dictionary.
+
+### 方法
+
+#### __init__
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def __init__(self, *, xtalk_type: type[Xtalk], path_or_dict: str | dict) -> None
+```
+
+#### transform_config
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def transform_config(self, transform: Callable[[dict[str, Any]], dict[str, Any]]) -> XtalkBuilder
+```
+
+Append an arbitrary configuration transformation.
+
+Transformations run in registration order when ``build()`` is called.
+The first transformation receives a structural copy of the source
+configuration, so it may either mutate and return that copy or return
+a new dictionary.
+
+##### 参数
+
+- `transform` (`Callable[[dict[str, Any]], dict[str, Any]]`)
+  Function that receives the current effective configuration and
+  returns the configuration for the next build stage.
+
+##### 返回
+
+- `XtalkBuilder`
+  This builder, allowing fluent configuration calls.
+
+#### set_model
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def set_model(self, model_class: type[Any]) -> XtalkBuilder
+```
+
+Replace a configured model with a registered Python model class.
+
+The model slot and canonical configuration name are inferred from the
+class's ``@xtalk.model`` registration. Existing model parameters and
+other model-level configuration fields are preserved.
+
+##### 参数
+
+- `model_class` (`type[Any]`)
+  Model implementation class decorated with ``@xtalk.model``.
+
+##### 返回
+
+- `XtalkBuilder`
+  This builder, allowing fluent configuration calls.
+
+##### 抛出
+
+- `TypeError`
+  Raised when ``model_class`` is not a registered model
+  implementation.
+
+#### add_agent_tools
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def add_agent_tools(self, tools: list[Tool | Callable[[], Tool]]) -> XtalkBuilder
+```
+
+Append runtime-only tools to the configured Agent.
+
+##### 参数
+
+- `tools` (`list[Tool | Callable[[], Tool]]`)
+  LangChain tool instances, native Xtalk tool classes, or factories
+  that create either kind of tool.
+
+##### 返回
+
+- `XtalkBuilder`
+  This builder, allowing fluent configuration calls.
+
+#### build
+
+_定义于 [`xtalk.api`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/api.py)。_
+
+```python
+def build(self) -> Xtalk
+```
+
+Instantiate Xtalk after applying all staged configuration changes.
+
+##### 返回
+
+- `Xtalk`
+  Configured application wrapper.
 
 ## Models
 

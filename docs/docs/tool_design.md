@@ -362,9 +362,9 @@ contain the original `source_call_id`. Its message content has this form:
 The final update sets `running` to `false` and stores the result of
 `ToolOutput.to_content()` in `tool_output`.
 
-## ExperimentalAgent integration
+## DefaultAgent integration
 
-`ExperimentalAgent` creates one ToolEngine per session, binds the model, and
+`DefaultAgent` creates one ToolEngine per session, binds the model, and
 registers an asynchronous update callback. When no model generation is active,
 the callback appends a valid ToolCall/ToolMessage pair and wakes the session
 loop. Updates arriving during generation are deferred until it finishes, so

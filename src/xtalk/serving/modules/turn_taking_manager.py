@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 from ..event_bus import EventBus
 from ..interfaces import Manager
@@ -26,6 +27,7 @@ class TurnTakingManager(Manager):
         self.event_bus = event_bus
         self.session_id = session_id
         self._turn_detector_model = models.get(TurnDetector)
+        self._vad_transition_lock = asyncio.Lock()
 
     @Manager.event_handler(TurnDetectorStartGeneration, priority=99)
     async def _on_turn_detector_start_generation(
@@ -45,27 +47,34 @@ class TurnTakingManager(Manager):
 
     @Manager.event_handler(VADSpeechStart)
     async def _on_vad_start(self, _event: VADSpeechStart):
-        """VAD start: notify ASR to start (with turn detector)/stop LLM and notify ASR to start(without turn detector)"""
-        if self._turn_detector_model is None:
+        """Start ASR immediately, then finish interrupting the previous response."""
+        async with self._vad_transition_lock:
             await self.event_bus.publish(
-                TurnLLMAgentStopRequested(
-                    session_id=self.session_id,
-                ),
+                TurnASRStartRequested(session_id=self.session_id),
                 wait_for_completion=True,
             )
-        await self.event_bus.publish(TurnASRStartRequested(session_id=self.session_id))
+            if self._turn_detector_model is None:
+                await self.event_bus.publish(
+                    TurnLLMAgentStopRequested(
+                        session_id=self.session_id,
+                    ),
+                    wait_for_completion=True,
+                )
 
     @Manager.event_handler(VADSpeechEnd)
     async def _on_vad_end(self, _event: VADSpeechEnd):
-        """VAD end: pause ASR recognition (with turn detector)/finalize the turn (without turn detector)"""
-        if self._turn_detector_model is None:
-            await self.event_bus.publish(
-                TurnASREndRequested(session_id=self.session_id)
-            )
-        else:
-            await self.event_bus.publish(
-                TurnASRPauseRequested(session_id=self.session_id)
-            )
+        """Finalize only after any in-flight response interruption completes."""
+        async with self._vad_transition_lock:
+            if self._turn_detector_model is None:
+                await self.event_bus.publish(
+                    TurnASREndRequested(session_id=self.session_id),
+                    wait_for_completion=True,
+                )
+            else:
+                await self.event_bus.publish(
+                    TurnASRPauseRequested(session_id=self.session_id),
+                    wait_for_completion=True,
+                )
 
     @Manager.event_handler(TTSPlaybackFinished)
     async def _on_tts_playback_finished(self, _event: TTSPlaybackFinished) -> None:

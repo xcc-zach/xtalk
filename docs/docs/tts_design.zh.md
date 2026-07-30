@@ -93,10 +93,6 @@ def _run_coro(self, coro: "asyncio.Future[bytes]") -> bytes:
 - 只要保证输出是连续、顺序正确的 PCM 音频即可。
 - 如果模型天然输出很大的块，也不会破坏前端播放协议，因为服务层还会再切分一次。
 
-## TTS 播放文本跟踪
-
-`TTSPlaybackManager` 会根据前端回传的 `TTSChunkPlayed` 事件推进“已经播放的音频时长”，并发布 `ResponseUpdate`。配置 `force_aligner` 后，`TTSManager` 会先缓存每个完整句子的 TTS 音频，而不是立即发送；`TTSPlaybackManager` 使用最终将要播放的、已经过语速处理的 PCM 完成强制对齐后，才允许该句音频发送到前端，并依据字/词级时间戳计算已经说到的文本前缀。该流程会增加句子开始播放前的延迟，但能保证播放确认到达前对齐结果已经就绪；对齐失败时是否使用按音频比例估算的回退逻辑由配置决定。
-
 ## `set_voice`与`set_emotion`（实验接口）
 
 这两个方法是可选控制接口，由 `TTSManager` 通过事件调用：
@@ -217,3 +213,7 @@ StreamingTextTTS.audio_stream() 产出 PCM
 如果上游 WebSocket TTS 只支持其他采样率，例如 Fish Audio 的 PCM 输出支持
 44100 Hz 但不支持 48000 Hz，则模型实现应在内部重采样到 48000 Hz 后再从
 `audio_stream()` 产出，避免改变现有前端二进制音频协议。
+
+# TTS 播放进度跟踪
+
+`TTSPlaybackManager` 会根据前端回传的 `TTSChunkPlayed` 事件推进已播放音频时长，并发布 `ResponseUpdate`。配置 `forced_aligner` 后，可进一步校准当前已经播放到的文本位置。接口说明及“先播放、后校准”方案详见 [Forced Aligner 设计](forced_aligner.zh.md)。

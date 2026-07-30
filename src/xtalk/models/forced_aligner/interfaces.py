@@ -7,7 +7,7 @@ from ..registry import model_type
 
 
 @dataclass(frozen=True)
-class ForceAlignmentUnit:
+class ForcedAlignmentUnit:
     """One text unit aligned onto a synthesized audio timeline."""
 
     text: str
@@ -17,8 +17,8 @@ class ForceAlignmentUnit:
     char_end: int = -1
 
 
-@model_type(aliases=["force_aligner"])
-class ForceAligner(ABC):
+@model_type
+class ForcedAligner(ABC):
     """Abstract interface for forced alignment models."""
 
     @abstractmethod
@@ -27,19 +27,16 @@ class ForceAligner(ABC):
         *,
         audio: bytes,
         text: str,
-        sample_rate: int,
         language: str | None = None,
-    ) -> list[ForceAlignmentUnit]:
-        """Align text units against PCM audio.
+    ) -> list[ForcedAlignmentUnit]:
+        """Align text units against 48 kHz PCM audio.
 
         Parameters
         ----------
         audio : bytes
-            PCM 16-bit mono audio bytes.
+            PCM 16-bit mono audio bytes at 48 kHz.
         text : str
             Original text that the audio speaks.
-        sample_rate : int
-            Audio sample rate.
         language : str | None, optional
             Optional model-specific language hint.
         """
@@ -50,22 +47,20 @@ class ForceAligner(ABC):
         *,
         audio: bytes,
         text: str,
-        sample_rate: int,
         language: str | None = None,
-    ) -> list[ForceAlignmentUnit]:
-        """Asynchronously align text units against PCM audio."""
+    ) -> list[ForcedAlignmentUnit]:
+        """Asynchronously align text units against 48 kHz PCM audio."""
         loop = asyncio.get_running_loop()
         func = partial(
             self.align,
             audio=audio,
             text=text,
-            sample_rate=sample_rate,
             language=language,
         )
-        result: list[ForceAlignmentUnit] = await loop.run_in_executor(None, func)
+        result: list[ForcedAlignmentUnit] = await loop.run_in_executor(None, func)
         return result
 
     @abstractmethod
-    def clone(self) -> "ForceAligner":
+    def clone(self) -> "ForcedAligner":
         """Clone the aligner for a new service session."""
         pass

@@ -83,6 +83,33 @@ See [Supported Models](../docs/supported_models.md) for the full list of model t
 > **Note**
 > Most model implementations are client-side adapters. You may also need to start the model instance itself according to its corresponding instructions.
 
+## Staged configuration
+
+Use `Xtalk.from_config(...)` when the JSON file or configuration dictionary is
+already complete. Use `Xtalk.configure(...)` when Python code needs to modify
+the configuration before models are instantiated:
+
+```python
+def enable_recording(config: dict) -> dict:
+    updated_config = dict(config)
+    service_config = dict(updated_config.get("service_config", {}))
+    service_config["recording"] = True
+    updated_config["service_config"] = service_config
+    return updated_config
+
+
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .transform_config(enable_recording)
+    .build()
+)
+```
+
+`transform_config()` accepts a `dict -> dict` function. Transformations run in
+registration order and receive a structural copy of the source config.
+Prefer focused Builder methods such as `set_model()` and
+`add_agent_tools()` when they express the required change directly.
+
 
 ## Customize service behavior
 

@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import json
 import logging
 import mimetypes
 from pathlib import Path
@@ -97,28 +96,7 @@ class EchoAgent(Agent):
             loop.close()
 
 
-def build_echo_agent_config(config: dict) -> dict:
-    """Return a config copy that uses the sample echo agent."""
-
-    updated_config = dict(config)
-    llm_agent_config = updated_config.get("llm_agent")
-    llm_agent_params = (
-        llm_agent_config.get("params", {})
-        if isinstance(llm_agent_config, dict)
-        else {}
-    )
-    updated_config["llm_agent"] = {
-        "type": "EchoAgent",
-        "params": dict(llm_agent_params) if isinstance(llm_agent_params, dict) else {},
-    }
-    return updated_config
-
-
-# Instantiate Xtalk from config
-# config can be passed as a path to json file or a dict
-with open(args.config, "r", encoding="utf-8") as f:
-    config = json.load(f)
-xtalk_instance = Xtalk.from_config(build_echo_agent_config(config))
+xtalk_instance = Xtalk.configure(args.config).set_model(EchoAgent).build()
 xtalk_instance.mount_routes(app)
 
 

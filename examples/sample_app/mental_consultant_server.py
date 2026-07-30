@@ -294,29 +294,11 @@ class MentalConsultantAgent(DefaultAgent):
         )
 
 
-def build_mental_consultant_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a config copy that swaps in the mental consultant agent."""
-
-    llm_agent_config = config.get("llm_agent")
-    if not isinstance(llm_agent_config, dict):
-        raise RuntimeError("Configured llm_agent must be an object.")
-    llm_agent_params = llm_agent_config.get("params", {})
-    if not isinstance(llm_agent_params, dict):
-        raise RuntimeError("Configured llm_agent.params must be an object.")
-
-    updated_config = dict(config)
-    updated_config["llm_agent"] = {
-        **llm_agent_config,
-        "type": "MentalConsultantAgent",
-        "params": dict(llm_agent_params),
-    }
-    return updated_config
-
-# Instantiate Xtalk from config
-## Read config from json
-with open(args.config, "r", encoding="utf-8") as f:
-    config = json.load(f)
-xtalk_instance = Xtalk.from_config(build_mental_consultant_config(config))
+xtalk_instance = (
+    Xtalk.configure(args.config)
+    .set_model(MentalConsultantAgent)
+    .build()
+)
 xtalk_instance.mount_routes(app)
 
 
