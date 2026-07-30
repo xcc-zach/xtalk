@@ -10,10 +10,9 @@ flowchart LR
     MTD --> Backend{推理后端}
     Backend --> VLLM[MTD server.py<br/>官方 vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
-    SGLang --> Map[exemplar 时间槽<br/>局部标签映射到全局标签]
     ASR --> Join[MultiSpeakerTurnContextManager]
     VLLM --> Join
-    Map --> Join
+    SGLang --> Join
     Join --> Agent[ExperimentalAgent]
 ```
 
@@ -164,20 +163,18 @@ curl http://127.0.0.1:18604/health
       "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
-      "max_tokens": 2048,
-      "exemplar_match_min_overlap_s": 0.05
+      "max_tokens": 2048
     }
   }
 }
 ```
 
-SGLang-Omni 的原生 transcription API 不接收固定 decoder completion prefix，因此 `SglangOmniMtdClient` 使用以下方式保持全局说话人标签：
+`SglangOmniMtdClient` 现在与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
 
-1. `MtdDiarizationManager` 仍然把已注册 exemplar 音频、可配置静音和当前 VAD snapshot 拼成同一个请求。
-2. `decoder_prefix` 仍描述每个 exemplar 在请求音频中的时间槽及其全局 speaker ID，但不直接提交给 SGLang decoder。
-3. 客户端读取 SGLang `verbose_json` 的时间戳，计算每个本轮局部 speaker label 与各 exemplar 时间槽的重叠时长。
-4. 使用一对一最大重叠匹配恢复 `本轮局部标签 -> 会话全局标签`。
-5. 裁掉 exemplar 区域，将当前 VAD 区域的时间戳归零；未匹配的新说话人分配未占用的 `Sxx`，不会产生 `UNKNOWN`。
+1. `MtdDiarizationManager` 将已注册 exemplar 音频、可配置静音和当前 VAD snapshot 拼成同一个请求。
+2. 时间戳形式的 `decoder_prefix` 被接在 `<|im_start|>assistant` 后，注册的 `S01` / `S02` 标签成为固定的 decoder 上下文。
+3. SGLang 只返回新生成的后缀；客户端将后缀和本地已知的 prefix 拼回完整文本，解析完整时间线，裁掉 exemplar 区间后将当前音频时间戳归零。
+4. 客户端直接保留 fixed-prefix continuation 输出的 speaker label，不再做 exemplar 时间槽重叠映射，也不再重新分配标签。
 
 `abort_on_vad_end` 仍会及时取消客户端等待中的旧 partial，让 final 优先进入 manager worker。原生 transcription API 暂无公开的远端 request-ID cancel 接口，因此这是 HTTP 任务级的 best-effort cancel。
 
@@ -186,7 +183,7 @@ SGLang-Omni 的原生 transcription API 不接收固定 decoder completion prefi
 1. `TurnTakingManager` 在 VAD start 时分配 `turn_id` 和 `segment_id`。
 2. SenseVoice 与 `MtdDiarizationManager` 同时接收该片段的语音帧。
 3. MTD 在 VAD 片段内周期性提交完整 audio snapshot，并发布可替换的 partial。
-4. 选择 vLLM 时由固定 decoder prefix 保持全局标签；选择 SGLang-Omni 时由 exemplar 时间槽重叠映射保持全局标签。
+4. vLLM 和 SGLang-Omni 均使用固定 decoder prefix 保持全局标签。
 5. VAD end 后提交不可替换的 segment final，并使用其中的高质量音频更新 speaker exemplar pool。
 6. 硬轮次结束后，`MultiSpeakerTurnContextManager` 按 `turn_id` 合并 ASR final 和 MTD timeline。
 7. `ExperimentalAgent` 同时接收 ASR 文本、speaker timeline 和 active speaker，用于理解谁在说话并记忆说话人自报信息。
@@ -199,7 +196,7 @@ SGLang-Omni 的原生 transcription API 不接收固定 decoder completion prefi
 
 - 12 秒音频直接调用：端到端 HTTP client 时延约 236 ms。
 - VAD 内 full-snapshot partial：0.8、1.8、2.8 秒 snapshot 分别约为 139、99、145 ms，3.5 秒 final 约为 132 ms。
-- 第一个 VAD final 成功注册两个 speaker exemplar；第二个 VAD 请求携带这些 exemplar 后，仍能映射回已有全局 speaker ID。
+- 第一个 VAD final 成功注册两个 speaker exemplar；第二个 VAD 请求将它们作为音频和固定时间戳 decoder prefix 一并提交。
 - `SpeakerDiarizationSegmentFinal`、`SpeakerDiarizationTurnFinal` 和 `MultiSpeakerTurnReady` 均正常发布，没有出现 `UNKNOWN`，final 没有阻塞。
 
 上述结果是在服务完成 warmup 后测得。冷启动首次请求不应计入在线时延。
