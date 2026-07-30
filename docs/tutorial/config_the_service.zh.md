@@ -84,6 +84,31 @@ class DefaultAgent(Agent):
 > **Note**
 > 大多数模型实现都是客户端适配器。您可能还需要按照相应说明启动模型实例本身。
 
+## 分阶段配置
+
+如果 JSON 文件或配置字典已经完整，请使用 `Xtalk.from_config(...)`。需要通过
+Python 代码在模型实例化之前修改配置时，使用 `Xtalk.configure(...)`：
+
+```python
+def enable_recording(config: dict) -> dict:
+    updated_config = dict(config)
+    service_config = dict(updated_config.get("service_config", {}))
+    service_config["recording"] = True
+    updated_config["service_config"] = service_config
+    return updated_config
+
+
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .transform_config(enable_recording)
+    .build()
+)
+```
+
+`transform_config()` 接收一个 `dict -> dict` 函数。多个转换会按注册顺序执行，并从原始
+配置的结构化副本开始处理。如果 `set_model()` 或 `add_agent_tools()` 等专用 Builder
+方法能够直接表达所需修改，应优先使用这些方法。
+
 
 ## 自定义服务行为
 
