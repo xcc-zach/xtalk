@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
@@ -16,6 +17,8 @@ from .interfaces import StreamingTextTTS, TTS
 __all__ = ["MossTTSRealtime"]
 
 _AUDIO_STREAM_END = object()
+
+logger = logging.getLogger(__name__)
 
 
 def _websocket_url(base_url: str) -> str:
@@ -138,6 +141,12 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
                         f"Expected a started event, received {event!r}"
                     )
                 self._validate_audio_format(event)
+                logger.debug(
+                    "[realtime-tts-race] stage=moss_started "
+                    "client=%x sample_rate=%d",
+                    id(self),
+                    self.output_sample_rate,
+                )
                 self._receiver_task = asyncio.create_task(
                     self._receive_audio(),
                     name="moss-tts-realtime-receiver",
@@ -152,8 +161,10 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
         Parameters
         ----------
         text : str
-            Incremental text to synthesize.
+            Incremental text to synthesize. CR and LF characters are removed
+            before the text is sent to the service.
         """
+        text = text.replace("\r", "").replace("\n", "")
         if not text:
             return
         websocket = self._require_active_session()
@@ -163,6 +174,13 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
             await websocket.send_json(
                 {"type": "push", "text": text, "is_final": False}
             )
+        logger.debug(
+            "[realtime-tts-race] stage=moss_append_sent "
+            "client=%x chunk_chars=%d finalized=%s",
+            id(self),
+            len(text),
+            self._finalized,
+        )
 
     async def flush(self) -> None:
         """Finalize incremental text and request all remaining audio."""
@@ -176,6 +194,10 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
                 {"type": "push", "text": "", "is_final": True}
             )
             self._finalized = True
+            logger.debug(
+                "[realtime-tts-race] stage=moss_flush_sent client=%x",
+                id(self),
+            )
 
     async def stop(self) -> None:
         """Finish or abort the active session and release network resources."""
@@ -185,6 +207,13 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
             if websocket is None:
                 return
 
+            logger.debug(
+                "[realtime-tts-race] stage=moss_stop_begin "
+                "client=%x finalized=%s receiver_present=%s",
+                id(self),
+                self._finalized,
+                receiver_task is not None,
+            )
             if self._finalized and receiver_task is not None:
                 await receiver_task
             else:
@@ -386,6 +415,10 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
                     if event["type"] == "accepted":
                         continue
                     if event["type"] == "completed":
+                        logger.debug(
+                            "[realtime-tts-race] stage=moss_completed client=%x",
+                            id(self),
+                        )
                         return
                     raise RuntimeError(
                         f"Unexpected MOSS-TTS-Realtime event: {event!r}"

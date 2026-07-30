@@ -183,6 +183,13 @@ class TTSManager(Manager):
         """Forward incremental text to the active streaming TTS model."""
         if self._streaming_tts is None:
             return
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_begin "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
         try:
             await self._streaming_tts.append_text(text)
         except Exception as e:
@@ -195,6 +202,13 @@ class TTSManager(Manager):
             return
 
         self._streaming_text += text
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_complete "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
         await self.event_bus.publish(
             TTSStreamingTextAccepted(
                 session_id=self.session_id,
@@ -210,10 +224,30 @@ class TTSManager(Manager):
         """Flush residual streaming text and stop the upstream live session."""
         if self._streaming_tts is None:
             return
+        will_flush = bool(self._streaming_text.strip())
+        logger.debug(
+            "[realtime-tts-race] stage=flush_decision "
+            "session=%s buffered_chars=%d will_flush=%s",
+            self.session_id,
+            len(self._streaming_text),
+            will_flush,
+        )
         try:
-            if self._streaming_text.strip():
+            if will_flush:
                 await self._streaming_tts.flush()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_begin "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
             await self._streaming_tts.stop()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_complete "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
         except Exception as e:
             logger.error(
                 "Failed to flush/stop streaming TTS - session: %s, error: %s",
@@ -363,6 +397,14 @@ class TTSManager(Manager):
         text = event.text
         if not text:
             return
+        logger.debug(
+            "[realtime-tts-race] stage=append_handler_enter "
+            "session=%s chunk_chars=%d buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
         if self._streaming_tts is not None:
             await self._append_streaming_text(text)
             return
@@ -370,6 +412,13 @@ class TTSManager(Manager):
 
     @Manager.event_handler(TurnTTSFlushRequested, priority=98)
     async def _handle_turn_tts_flush(self, event: TurnTTSFlushRequested) -> None:
+        logger.debug(
+            "[realtime-tts-race] stage=flush_handler_enter "
+            "session=%s buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
         if self._streaming_tts is not None:
             await self._flush_and_stop_streaming_tts()
             return

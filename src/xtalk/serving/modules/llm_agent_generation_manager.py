@@ -302,6 +302,13 @@ class LLMAgentConsumptionManager(Manager):
                     TurnTTSStartRequested(session_id=self.session_id),
                     wait_for_completion=True,
                 )
+            logger.debug(
+                "[realtime-tts-race] stage=append_schedule "
+                "session=%s chunk_chars=%d accumulated_chars=%d",
+                self.session_id,
+                len(chunk_text),
+                len(accumulated_text),
+            )
             await self.event_bus.publish(
                 TurnTTSTextAppendRequested(
                     session_id=self.session_id,
@@ -346,6 +353,12 @@ class LLMAgentConsumptionManager(Manager):
         if not has_text_output:
             return
         if tts_started:
+            logger.debug(
+                "[realtime-tts-race] stage=flush_schedule "
+                "session=%s final_chars=%d",
+                self.session_id,
+                len(final_text),
+            )
             await self.event_bus.publish(
                 TurnTTSFlushRequested(session_id=self.session_id)
             )
