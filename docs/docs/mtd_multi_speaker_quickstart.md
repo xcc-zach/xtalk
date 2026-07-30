@@ -78,13 +78,24 @@ curl -X POST http://127.0.0.1:18714/v1/audio/transcriptions \
 
 ## 2. Start the official vLLM runtime
 
-`scripts/mtd_runtime/server.py` loads the official vLLM engine in its own process. It also handles the fixed decoder prefix used for registered speakers, parses timestamped output, and removes the exemplar time range from the returned current-segment result. Do not start a separate `vllm serve` process when using this entry point.
+`scripts/mtd_runtime/server.py` loads the official vLLM `AsyncLLM` engine in its
+own process. It also handles the fixed decoder prefix used for registered
+speakers, parses timestamped output, and removes the exemplar time range from
+the returned current-segment result. Do not start a separate `vllm serve`
+process when using this entry point.
+
+The runtime no longer wraps `LLM.generate()` with a global decode lock. Each
+X-Talk session uses its own `OfficialMtdClient` HTTP session, while all requests
+share one `AsyncLLM` engine for cross-session scheduling and dynamic batching.
+The manager still processes snapshots sequentially inside one X-Talk session,
+so its partial/final revision ordering is unchanged.
 
 ```bash
 python scripts/mtd_runtime/server.py \
   --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
   --host 127.0.0.1 \
-  --port 18604
+  --port 18604 \
+  --max-num-seqs 8
 ```
 
 If the model has already been downloaded, replace `--model` with the local weights directory. Check the service after startup:
@@ -92,6 +103,14 @@ If the model has already been downloaded, replace `--model` with the local weigh
 ```bash
 curl http://127.0.0.1:18604/health
 ```
+
+`--max-num-seqs` limits the number of sequences scheduled by the engine at one
+time. Tune it for the available GPU memory, maximum input length, and expected
+concurrency. `/health` reports `active_requests` and the process-lifetime
+`max_active_requests`, which make it possible to verify that concurrent HTTP
+requests actually entered the engine. Cancellation invokes
+`AsyncLLM.abort(request_id)` instead of merely discarding a result after decode
+has completed.
 
 ## 3. Configure X-Talk
 
@@ -187,3 +206,49 @@ The following path was validated on an RTX 4090 with real AISHELL-4 meeting audi
 - `SpeakerDiarizationSegmentFinal`, `SpeakerDiarizationTurnFinal`, and `MultiSpeakerTurnReady` were all published normally, no `UNKNOWN` label appeared, and the final did not block.
 
 These values were measured after server warmup. The first cold-start request should not be included in online-latency measurements.
+
+## 6. AsyncLLM concurrency validation and backend-comparison scope
+
+The following measurements used one RTX 4090, warmed-up service, 20-second
+AISHELL-4 meeting-audio snapshots, and `--max-num-seqs 8`:
+
+| Test | Serial wall time | AsyncLLM concurrent wall time | Concurrent per-request range | Result |
+| --- | ---: | ---: | ---: | --- |
+| 2 requests | 3.143 s | 1.582 s | 1.544–1.576 s | `max_active_requests=2` |
+| 4 requests | 6.186 s | 1.891 s | 1.557–1.869 s | `max_active_requests=4` |
+| 8 requests | 12.280 s | 1.885 s | 1.507–1.843 s | `max_active_requests=8` |
+
+The eight-request run reached about 4.24 requests/s. Two real
+`OfficialMtdClient.clone()` clients submitted concurrently in 1.606 seconds,
+which verifies that the X-Talk session-clone path reaches the shared engine
+concurrently. During a cancellation test, `DELETE` returned `202` in 1.5 ms,
+the cancelled 120-second decode returned `409` at 0.478 seconds, and a
+concurrent 20-second request still completed normally in 1.684 seconds.
+
+To correct the scope of the earlier backend comparison, a second benchmark used
+two identical RTX 4090 GPUs in the same machine, the same four distinct
+20-second snapshots, the same prompt, `max_tokens=512`, and warmed-up services:
+
+| Concurrency | AsyncLLM wall time | SGLang-Omni wall time | SGLang-Omni wall-time advantage |
+| ---: | ---: | ---: | ---: |
+| 4 serial requests | 6.162 s | 1.363 s | 4.52× |
+| 2 requests | 1.563 s | 0.341 s | 4.59× |
+| 4 requests | 1.800 s | 0.409 s | 4.40× |
+| 8 requests | 1.827 s | 0.428 s | 4.27× |
+
+The eight-request serial reference was 12.280 seconds for AsyncLLM and 2.622
+seconds for SGLang-Omni. Three of the four raw outputs were byte-for-byte
+identical. The remaining output differed only in its terminal timestamp,
+`19.99` versus `19.98`; its transcript and speaker tags were identical. This
+small test verifies runtime-output consistency, not dataset-level accuracy.
+
+The earlier conclusion therefore needs a partial correction. SGLang-Omni still
+has a substantial single-request and concurrent speed advantage under the
+current deployment settings. The statement that different vLLM sessions are
+serialized by a runtime-global lock is no longer true. AsyncLLM primarily fixes
+cross-session queueing, batching, and real abort; it does not remove the
+single-request kernel and graph-optimization gap between the engines. The
+current vLLM run uses `enforce_eager`, while SGLang-Omni uses CUDA Graphs for
+batch sizes 1/2/4/8. These numbers therefore describe the current recommended
+deployment configurations rather than a framework-only microbenchmark with all
+optimization variables removed.
