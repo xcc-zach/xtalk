@@ -109,6 +109,46 @@ class MossTTSRealtimeTest(unittest.IsolatedAsyncioTestCase):
         client = MossTTSRealtime(self.base_url)
         self.assertEqual(await client.async_synthesize("完整文本"), b"\x01\x02\x03\x04")
 
+    async def test_removes_line_breaks_from_incremental_text(self) -> None:
+        """Do not forward CR or LF characters to the TTS service."""
+        client = MossTTSRealtime(self.base_url)
+        await client.start()
+        await client.append_text("你\n好\r\n")
+        await client.flush()
+        await client.stop()
+        self.assertEqual(self.events[1]["text"], "你好")
+
+    async def test_emits_race_diagnostic_lifecycle_logs(self) -> None:
+        """Expose append, flush, stop, and completion ordering at debug level."""
+        client = MossTTSRealtime(self.base_url)
+        with self.assertLogs(
+            "xtalk.models.tts.moss_tts_realtime",
+            level="DEBUG",
+        ) as captured:
+            await client.start()
+            await client.append_text("你好")
+            await client.flush()
+            await client.stop()
+
+        messages = "\n".join(captured.output)
+        for stage in (
+            "moss_started",
+            "moss_append_sent",
+            "moss_flush_sent",
+            "moss_stop_begin",
+            "moss_completed",
+        ):
+            self.assertIn(f"stage={stage}", messages)
+
+        abort_client = MossTTSRealtime(self.base_url)
+        with self.assertLogs(
+            "xtalk.models.tts.moss_tts_realtime",
+            level="DEBUG",
+        ) as abort_captured:
+            await abort_client.start()
+            await abort_client.stop()
+        self.assertIn("finalized=False", "\n".join(abort_captured.output))
+
     async def test_uses_first_reference_voice_by_default(self) -> None:
         """Send the first configured voice path in the start event."""
         client = MossTTSRealtime(
