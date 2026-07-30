@@ -10,10 +10,9 @@ flowchart LR
     MTD --> Backend{Inference backend}
     Backend --> VLLM[MTD server.py<br/>official vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
-    SGLang --> Map[Exemplar time slots<br/>local-to-global label mapping]
     ASR --> Join[MultiSpeakerTurnContextManager]
     VLLM --> Join
-    Map --> Join
+    SGLang --> Join
     Join --> Agent[ExperimentalAgent]
 ```
 
@@ -167,20 +166,18 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
       "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
-      "max_tokens": 2048,
-      "exemplar_match_min_overlap_s": 0.05
+      "max_tokens": 2048
     }
   }
 }
 ```
 
-The native SGLang-Omni transcription API does not accept a fixed decoder-completion prefix. `SglangOmniMtdClient` therefore preserves global speaker labels as follows:
+`SglangOmniMtdClient` uses a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
 
-1. `MtdDiarizationManager` still concatenates registered exemplar audio, configurable silence, and the current VAD snapshot into one request.
-2. `decoder_prefix` still describes each exemplar time slot and its global speaker ID, but it is not submitted as a decoder completion prefix.
-3. The client reads SGLang `verbose_json` timestamps and measures how long each request-local label overlaps each exemplar slot.
-4. A one-to-one maximum-overlap match recovers the `request-local label -> session-global label` mapping.
-5. The exemplar range is removed and current-audio timestamps are rebased to zero. An unmatched new speaker receives the next unused `Sxx`; `UNKNOWN` is never emitted.
+1. `MtdDiarizationManager` concatenates registered exemplar audio, configurable silence, and the current VAD snapshot into one request.
+2. Its timestamped `decoder_prefix` is appended after `<|im_start|>assistant`; registered `S01` / `S02` labels are fixed decoder context.
+3. SGLang returns only the newly generated suffix. The client joins that suffix with the locally known prefix, parses the complete timestamped timeline, removes the exemplar range, and rebases the current-audio timestamps to zero.
+4. The client preserves the speaker labels emitted in that fixed-prefix continuation; it does not apply exemplar-slot overlap mapping or allocate replacement labels.
 
 `abort_on_vad_end` still cancels a locally waiting obsolete partial so the final can enter the manager worker promptly. The native transcription API does not currently expose a public request-ID cancellation endpoint, so this is best-effort HTTP-task cancellation.
 
@@ -189,7 +186,7 @@ The native SGLang-Omni transcription API does not accept a fixed decoder-complet
 1. `TurnTakingManager` assigns a `turn_id` and `segment_id` when VAD starts a segment.
 2. SenseVoice and `MtdDiarizationManager` receive the audio frames for the same segment.
 3. Within the VAD segment, MTD periodically submits a complete audio snapshot and publishes a replaceable partial result.
-4. The vLLM backend preserves global labels with a fixed decoder prefix; the SGLang-Omni backend preserves them with exemplar-slot overlap mapping.
+4. Both vLLM and SGLang-Omni preserve global labels with the same fixed decoder prefix mechanism.
 5. At VAD end, MTD submits a terminal segment final and uses high-quality audio from that result to update the speaker exemplar pool.
 6. At the hard turn boundary, `MultiSpeakerTurnContextManager` joins the ASR final and MTD timeline by `turn_id`.
 7. `ExperimentalAgent` receives the ASR transcript, speaker timeline, and active speaker together, allowing the LLM to understand who is speaking and remember speaker self-introductions.
@@ -202,7 +199,7 @@ The following path was validated on an RTX 4090 with real AISHELL-4 meeting audi
 
 - A direct 12-second request took about 236 ms end to end in the HTTP client.
 - Full-snapshot partials at 0.8, 1.8, and 2.8 seconds took about 139, 99, and 145 ms; the 3.5-second final took about 132 ms.
-- The first VAD final registered two speaker exemplars. A second VAD request containing those exemplars mapped its local output back to the existing global speaker IDs.
+- The first VAD final registered two speaker exemplars. A second VAD request supplied them as audio and a fixed timestamped decoder prefix.
 - `SpeakerDiarizationSegmentFinal`, `SpeakerDiarizationTurnFinal`, and `MultiSpeakerTurnReady` were all published normally, no `UNKNOWN` label appeared, and the final did not block.
 
 These values were measured after server warmup. The first cold-start request should not be included in online-latency measurements.
