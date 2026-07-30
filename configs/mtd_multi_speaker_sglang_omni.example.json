@@ -6,8 +6,7 @@
       "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
-      "max_tokens": 2048,
-      "exemplar_match_min_overlap_s": 0.05
+      "max_tokens": 2048
     }
   },
   "service_config": {

@@ -18,15 +18,12 @@ from .interfaces import DiarizationResult, SpeakerDiarization
 
 _TIMESTAMP_SEGMENT_RE = re.compile(
     r"\[(?P<start>\d+(?:\.\d+)?)\]\s*"
-    r"\[(?P<speaker>S\d+)\]"
+    r"\[*\[(?P<speaker>S\d+)\]"
     r"(?P<text>.*?)"
     r"\[(?P<end>\d+(?:\.\d+)?)\]"
-    r"(?=\s*(?:\[\d+(?:\.\d+)?\]\s*\[S\d+\]|$))",
+    r"(?=\s*(?:\[\d+(?:\.\d+)?\]\s*\[*\[S\d+\]|$))",
     re.IGNORECASE | re.DOTALL,
 )
-_SPEAKER_PREFIX_RE = re.compile(r"^\s*\[(?P<speaker>S\d+)\]\s*", re.IGNORECASE)
-
-
 @dataclass(frozen=True)
 class _TimedSpeakerSegment:
     """One request-global segment parsed from an MTD response."""
@@ -37,15 +34,6 @@ class _TimedSpeakerSegment:
     text: str
 
 
-@dataclass(frozen=True)
-class _ExemplarSlot:
-    """Time range occupied by one registered global-speaker exemplar."""
-
-    start_s: float
-    end_s: float
-    speaker_id: str
-
-
 class SglangOmniRequestCancelled(RuntimeError):
     """Signal that an obsolete SGLang-Omni partial was cancelled locally."""
 
@@ -54,10 +42,11 @@ class SglangOmniRequestCancelled(RuntimeError):
 class SglangOmniMtdClient(SpeakerDiarization):
     """Call the native SGLang-Omni MTD transcription API.
 
-    SGLang-Omni does not expose a fixed decoder-completion prefix through its
-    OpenAI-compatible transcription endpoint. X-Talk still sends the existing
-    exemplar-plus-current audio layout, then this client uses the exemplar time
-    slots to map request-local MTD labels back to session-global speaker IDs.
+    The native endpoint forwards a prompt containing ``<|audio_pad|>`` without
+    applying its own chat template. This client uses that existing behavior to
+    submit the complete MTD template and append ``decoder_prefix`` immediately
+    after the assistant header. Registered speaker labels are therefore fixed
+    decoder context, rather than labels recovered by post-hoc overlap mapping.
 
     Parameters
     ----------
@@ -76,16 +65,24 @@ class SglangOmniMtdClient(SpeakerDiarization):
         Maximum number of generated text tokens.
     response_format : str, optional
         OpenAI transcription response format. ``verbose_json`` is required for
-        timestamp-based exemplar matching.
+        parsing and current-audio timestamp cropping.
     exemplar_match_min_overlap_s : float, optional
-        Minimum aggregate overlap required to bind one local label to one
-        registered global speaker.
+        Deprecated compatibility setting from the former time-slot matching
+        implementation. It is accepted but has no effect in fixed-prefix mode.
     """
 
     DEFAULT_INSTRUCTION = (
         "请将音频转写为文本，每一段需以起始时间戳和说话人编号"
         "（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，"
         "并在段末标注结束时间戳，以清晰标明该段语音范围。"
+    )
+    _RAW_PROMPT_TEMPLATE = (
+        "<|im_start|>system\n"
+        "You are a helpful assistant.<|im_end|>\n"
+        "<|im_start|>user\n"
+        "<|audio_start|><|audio_pad|><|audio_end|>\n"
+        "{instruction}<|im_end|>\n"
+        "<|im_start|>assistant\n"
     )
 
     def __init__(
@@ -97,7 +94,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
         temperature: float = 0.0,
         max_tokens: int = 2048,
         response_format: str = "verbose_json",
-        exemplar_match_min_overlap_s: float = 0.05,
+        exemplar_match_min_overlap_s: float | None = None,
     ) -> None:
         if response_format != "verbose_json":
             raise ValueError(
@@ -110,7 +107,9 @@ class SglangOmniMtdClient(SpeakerDiarization):
         self.temperature = float(temperature)
         self.max_tokens = int(max_tokens)
         self.response_format = response_format
-        self.exemplar_match_min_overlap_s = float(exemplar_match_min_overlap_s)
+        # Keep legacy deployment configurations loadable. Speaker registration
+        # is now decoder-side, so overlap matching is intentionally unused.
+        del exemplar_match_min_overlap_s
         self._session: aiohttp.ClientSession | None = None
         self._requests: dict[str, asyncio.Task[tuple[dict[str, Any], str]]] = {}
 
@@ -131,7 +130,6 @@ class SglangOmniMtdClient(SpeakerDiarization):
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format=self.response_format,
-            exemplar_match_min_overlap_s=self.exemplar_match_min_overlap_s,
         )
 
     async def decode_snapshot(
@@ -145,7 +143,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
         current_audio_seconds: float,
         is_final: bool,
     ) -> DiarizationResult:
-        """Decode and convert request-local labels to global speaker IDs.
+        """Decode one audio snapshot using the registered global speaker IDs.
 
         Parameters
         ----------
@@ -156,7 +154,8 @@ class SglangOmniMtdClient(SpeakerDiarization):
         sample_rate : int
             PCM sampling rate in hertz.
         decoder_prefix : str
-            Timestamped transcript describing the global-speaker exemplar slots.
+            Timestamped global-speaker transcript forced after the MTD assistant
+            header. It describes the registered audio prefix.
         context_seconds : float
             Duration before the current VAD audio starts.
         current_audio_seconds : float
@@ -167,7 +166,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
         Returns
         -------
         DiarizationResult
-            Current-audio-local segments carrying session-global speaker IDs.
+            Current-audio-local segments carrying MTD's fixed global IDs.
         """
 
         del is_final
@@ -176,6 +175,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
             self._post_transcription(
                 pcm16=pcm16,
                 sample_rate=sample_rate,
+                decoder_prefix=decoder_prefix,
             )
         )
         previous = self._requests.setdefault(request_id, request_task)
@@ -195,20 +195,16 @@ class SglangOmniMtdClient(SpeakerDiarization):
             if self._requests.get(request_id) is request_task:
                 self._requests.pop(request_id, None)
 
-        raw_text = str(payload.get("text") or "")
-        raw_segments = _parse_response_segments(payload)
-        exemplar_slots = _parse_exemplar_slots(decoder_prefix)
-        speaker_mapping = _match_global_speakers(
-            raw_segments,
-            exemplar_slots,
-            min_overlap_s=self.exemplar_match_min_overlap_s,
-        )
-        current_segments = _crop_and_map_current_segments(
+        generated_suffix = str(payload.get("text") or "").strip()
+        prefix = decoder_prefix.strip()
+        raw_text = " ".join(part for part in (prefix, generated_suffix) if part)
+        # ``verbose_json.segments`` covers only newly generated tokens. Parse
+        # the reconstructed full text so prefix and output share one timeline.
+        raw_segments = _parse_timestamped_text(raw_text)
+        current_segments = _crop_current_segments(
             raw_segments,
             context_seconds=max(0.0, float(context_seconds)),
             current_audio_seconds=max(0.0, float(current_audio_seconds)),
-            registered_speaker_ids={slot.speaker_id for slot in exemplar_slots},
-            speaker_mapping=speaker_mapping,
         )
         latency_ms = (time.perf_counter() - started) * 1000.0
         return DiarizationResult(
@@ -221,7 +217,9 @@ class SglangOmniMtdClient(SpeakerDiarization):
                 "remote_request_id": remote_request_id,
                 "server_duration_s": payload.get("duration"),
                 "usage": payload.get("usage"),
-                "speaker_mapping": dict(speaker_mapping),
+                "registration_mode": "fixed_decoder_prefix",
+                "decoder_prefix_chars": len(decoder_prefix),
+                "generated_suffix": generated_suffix,
             },
         )
 
@@ -260,6 +258,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
         *,
         pcm16: bytes,
         sample_rate: int,
+        decoder_prefix: str,
     ) -> tuple[dict[str, Any], str]:
         """Post one WAV snapshot and return its JSON body and server request ID."""
 
@@ -273,7 +272,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
         )
         if self.model:
             form.add_field("model", self.model)
-        form.add_field("prompt", self.instruction)
+        form.add_field("prompt", self._build_forced_prefix_prompt(decoder_prefix))
         form.add_field("response_format", self.response_format)
         form.add_field("temperature", str(self.temperature))
         form.add_field("max_new_tokens", str(self.max_tokens))
@@ -285,6 +284,19 @@ class SglangOmniMtdClient(SpeakerDiarization):
             payload: dict[str, Any] = await response.json()
             remote_request_id = response.headers.get("X-Request-Id", "")
         return payload, remote_request_id
+
+    def _build_forced_prefix_prompt(self, decoder_prefix: str) -> str:
+        """Build a raw MTD prompt with a decoder-side fixed transcript prefix.
+
+        SGLang-Omni treats prompts containing ``<|audio_pad|>`` as complete
+        prompts and forwards them unchanged. The prefix must consequently be
+        placed *after* the assistant header, never in the user instruction.
+        """
+
+        return (
+            self._RAW_PROMPT_TEMPLATE.format(instruction=self.instruction)
+            + decoder_prefix
+        )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Return a live HTTP session for the current event loop."""
@@ -311,38 +323,6 @@ def _pcm16_to_wav(pcm16: bytes, sample_rate: int) -> bytes:
     return output.getvalue()
 
 
-def _parse_response_segments(payload: dict[str, Any]) -> list[_TimedSpeakerSegment]:
-    """Parse SGLang verbose segments and inherit missing speaker tags."""
-
-    result: list[_TimedSpeakerSegment] = []
-    last_speaker = "S01"
-    payload_segments = payload.get("segments")
-    if isinstance(payload_segments, list):
-        for item in payload_segments:
-            if not isinstance(item, dict):
-                continue
-            start_s = float(item.get("start") or 0.0)
-            end_s = float(item.get("end") or 0.0)
-            if end_s <= start_s:
-                continue
-            text = str(item.get("text") or "")
-            speaker_match = _SPEAKER_PREFIX_RE.match(text)
-            if speaker_match is not None:
-                last_speaker = speaker_match.group("speaker").upper()
-                text = text[speaker_match.end() :]
-            result.append(
-                _TimedSpeakerSegment(
-                    start_s=max(0.0, start_s),
-                    end_s=end_s,
-                    speaker_id=last_speaker,
-                    text=re.sub(r"\s+", " ", text).strip(),
-                )
-            )
-    if result:
-        return result
-    return _parse_timestamped_text(str(payload.get("text") or ""))
-
-
 def _parse_timestamped_text(text: str) -> list[_TimedSpeakerSegment]:
     """Parse native MTD timestamp-plus-speaker text."""
 
@@ -363,109 +343,27 @@ def _parse_timestamped_text(text: str) -> list[_TimedSpeakerSegment]:
     return result
 
 
-def _parse_exemplar_slots(decoder_prefix: str) -> list[_ExemplarSlot]:
-    """Recover registered global-speaker slots from the layout transcript."""
-
-    return [
-        _ExemplarSlot(
-            start_s=segment.start_s,
-            end_s=segment.end_s,
-            speaker_id=segment.speaker_id,
-        )
-        for segment in _parse_timestamped_text(decoder_prefix)
-    ]
-
-
-def _overlap_duration(
-    left_start_s: float,
-    left_end_s: float,
-    right_start_s: float,
-    right_end_s: float,
-) -> float:
-    """Return the non-negative intersection duration of two ranges."""
-
-    return max(0.0, min(left_end_s, right_end_s) - max(left_start_s, right_start_s))
-
-
-def _match_global_speakers(
-    segments: list[_TimedSpeakerSegment],
-    slots: list[_ExemplarSlot],
-    *,
-    min_overlap_s: float,
-) -> dict[str, str]:
-    """Greedily match local labels to global exemplar labels one-to-one."""
-
-    scores: dict[tuple[str, str], float] = {}
-    for segment in segments:
-        for slot in slots:
-            overlap_s = _overlap_duration(
-                segment.start_s,
-                segment.end_s,
-                slot.start_s,
-                slot.end_s,
-            )
-            if overlap_s <= 0:
-                continue
-            key = (segment.speaker_id, slot.speaker_id)
-            scores[key] = scores.get(key, 0.0) + overlap_s
-
-    mapping: dict[str, str] = {}
-    claimed_global_ids: set[str] = set()
-    ranked = sorted(
-        scores.items(),
-        key=lambda item: (-item[1], item[0][0], item[0][1]),
-    )
-    for (local_id, global_id), overlap_s in ranked:
-        if overlap_s + 1e-9 < min_overlap_s:
-            continue
-        if local_id in mapping or global_id in claimed_global_ids:
-            continue
-        mapping[local_id] = global_id
-        claimed_global_ids.add(global_id)
-    return mapping
-
-
-def _crop_and_map_current_segments(
+def _crop_current_segments(
     segments: list[_TimedSpeakerSegment],
     *,
     context_seconds: float,
     current_audio_seconds: float,
-    registered_speaker_ids: set[str],
-    speaker_mapping: dict[str, str],
 ) -> list[dict[str, object]]:
-    """Crop exemplar time and map current segments without ``UNKNOWN`` labels."""
+    """Remove registered-audio time and retain decoder-produced speaker IDs."""
 
     current_end_s = context_seconds + current_audio_seconds
-    mapping = dict(speaker_mapping)
-    reserved_global_ids = set(registered_speaker_ids) | set(mapping.values())
     result: list[dict[str, object]] = []
     for segment in segments:
         start_s = max(segment.start_s, context_seconds)
         end_s = min(segment.end_s, current_end_s)
         if end_s <= start_s:
             continue
-        global_id = mapping.get(segment.speaker_id)
-        if global_id is None:
-            global_id = _next_global_speaker_id(reserved_global_ids)
-            mapping[segment.speaker_id] = global_id
-            reserved_global_ids.add(global_id)
         result.append(
             {
                 "start_s": round(max(0.0, start_s - context_seconds), 6),
                 "end_s": round(max(0.0, end_s - context_seconds), 6),
-                "speaker_id": global_id,
+                "speaker_id": segment.speaker_id,
                 "text": segment.text,
             }
         )
-    speaker_mapping.clear()
-    speaker_mapping.update(mapping)
     return result
-
-
-def _next_global_speaker_id(reserved_ids: set[str]) -> str:
-    """Allocate the first compact speaker label absent from the session pool."""
-
-    index = 1
-    while f"S{index:02d}" in reserved_ids:
-        index += 1
-    return f"S{index:02d}"
