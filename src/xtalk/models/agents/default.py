@@ -20,7 +20,7 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
     ToolCall,
-    ToolMessage
+    ToolMessage,
 )
 from langchain_core.tools import BaseTool
 from typing import Any, Iterable, AsyncIterator, Callable
@@ -77,7 +77,8 @@ class DefaultAgent(Agent):
         "你现在唯一的任务是：用自然口语，主动、简洁地把这次更新告诉用户。要求："
         "1. 直接说进度或结果，不要说“稍等”“让我想想”“稍后回来”这类话；"
         "2. 绝对不要调用任何工具，也不要输出任何工具调用格式的内容；"
-        "3. tool_output 里有明确内容时，必须原样、完整地念出来。"
+        "3. 使用用户当前使用的语言自然转述 tool_output，保留其中的数字、单位和"
+        "关键信息。"
     )
 
     def __init__(
@@ -112,9 +113,11 @@ class DefaultAgent(Agent):
         self.backchannel_model = (
             backchannel_model
             if isinstance(backchannel_model, BaseChatModel)
-            else ChatOpenAI(**backchannel_model)
-            if backchannel_model is not None
-            else None
+            else (
+                ChatOpenAI(**backchannel_model)
+                if backchannel_model is not None
+                else None
+            )
         )
         self._additional_system_prompt = system_prompt
         self.proactive = proactive
@@ -122,7 +125,8 @@ class DefaultAgent(Agent):
         self._chat_history = ChatHistory(system_prompt=self.system_prompt)
         self.backchannel_source_dir = (
             backchannel_source_dir
-            if isinstance(backchannel_source_dir, Path) or backchannel_source_dir is None
+            if isinstance(backchannel_source_dir, Path)
+            or backchannel_source_dir is None
             else Path(backchannel_source_dir)
         )
 
@@ -133,8 +137,8 @@ class DefaultAgent(Agent):
             state={},
         )
         self.model_with_tools = self.tool_engine.bind(self.model)
-        self.model_for_async_updates = (
-            self.tool_engine.bind_without_tool_calls(self.model)
+        self.model_for_async_updates = self.tool_engine.bind_without_tool_calls(
+            self.model
         )
         self._human_input_finished = True
         self._last_partial_human_text = ""
@@ -336,7 +340,9 @@ class DefaultAgent(Agent):
                     "__BACKCHANNEL_OPTIONS__", "、".join(self._load_backchannel_texts())
                 )
                 .replace("__CHAT_HISTORY__", self.get_chat_history())
-                .replace("__ALREADY_BACKCHANNELED_TEXT__", self._already_backchanneled_text)
+                .replace(
+                    "__ALREADY_BACKCHANNELED_TEXT__", self._already_backchanneled_text
+                )
                 .replace("__USER_INPUT__", text_to_judge)
             )
         ]
@@ -370,12 +376,16 @@ class DefaultAgent(Agent):
         if self._asr_final_response_generating:
             return
         # to avoid concurrent generation all produce positive result for the same prefix
-        if self._turn_already_to_backchannel_response.get(self._already_backchanneled_text):
+        if self._turn_already_to_backchannel_response.get(
+            self._already_backchanneled_text
+        ):
             return
         # update already backchanneled text for later to avoid repeated backchannel, and turn_already_to_backchannel_response to prevent concurrent response
         if not self._asr_final_response_generating:
             self._already_backchanneled_text = asr_text
-            self._turn_already_to_backchannel_response[self._already_backchanneled_text] = structured_content["backchannel_content"]
+            self._turn_already_to_backchannel_response[
+                self._already_backchanneled_text
+            ] = structured_content["backchannel_content"]
         yield ToolCall(
             name="direct_audio",
             args={
@@ -416,9 +426,7 @@ class DefaultAgent(Agent):
         transient_instruction: str | None = None,
     ) -> AsyncIterator[AgentOutput]:
         streaming_model = (
-            self.model_with_tools
-            if allow_tools
-            else self.model_for_async_updates
+            self.model_with_tools if allow_tools else self.model_for_async_updates
         )
         while True:
             response_message = AIMessage(content="")
@@ -478,9 +486,7 @@ class DefaultAgent(Agent):
             result_content=str(tool_message.content),
         )
         if self._model_generation_lock.locked():
-            self._pending_async_tool_updates.append(
-                (tool_call, tool_message, output)
-            )
+            self._pending_async_tool_updates.append((tool_call, tool_message, output))
             return
         self._record_async_tool_update(tool_call, tool_message, output)
 
@@ -566,9 +572,8 @@ class DefaultAgent(Agent):
             if isinstance(tool_item, BaseTool):
                 initialized_tools.append(tool_item)
                 continue
-            if (
-                isinstance(tool_item, type)
-                and issubclass(tool_item, (AsyncTool, SyncTool))
+            if isinstance(tool_item, type) and issubclass(
+                tool_item, (AsyncTool, SyncTool)
             ):
                 initialized_tools.append(tool_item)
                 continue
