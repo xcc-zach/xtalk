@@ -54,30 +54,22 @@ FASTENHANCER_URL = (
 )
 
 
-TIMER_AGENT_INSTRUCTION = """
-你可以使用 timer 启动后台定时器。调用 timer 时，如果
-reminder_interval_seconds 不为空，收到 timer 的初始工具结果后，必须立即使用
-其中的工具调用 ID 调用 subscribe_async_tool。订阅成功后停止调用工具，等待系统
-主动发送进度。reminder_interval_seconds 为空时不要订阅。只有用户明确询问当前
-进度时才调用 id_to_async_tool_status，不要轮询状态。
-"""
-
-
 class TimerInput(ToolInput):
     """Input accepted by the asynchronous timer."""
 
     duration_seconds: float = Field(
         gt=0,
         allow_inf_nan=False,
-        description="定时器总时长，单位为秒，必须大于零。",
+        description="Total timer duration in seconds. Must be greater than zero.",
     )
     reminder_interval_seconds: float | None = Field(
         default=None,
         gt=0,
         allow_inf_nan=False,
         description=(
-            "可选提醒间隔，单位为秒。传入时，启动定时器后必须立即调用 "
-            "subscribe_async_tool 订阅过程提醒。"
+            "Optional reminder interval in seconds. When provided, immediately "
+            "call subscribe_async_tool after starting the timer to subscribe to "
+            "progress updates."
         ),
     )
 
@@ -103,7 +95,15 @@ class TimerOutput(ToolOutput):
 
 
 class TimerTool(AsyncTool):
-    """启动后台定时器，可选按固定秒数间隔主动提醒用户。"""
+    """Start a background timer with optional periodic progress reminders.
+
+    When ``reminder_interval_seconds`` is provided, immediately after receiving
+    the timer's initial tool result, call ``subscribe_async_tool`` with the tool
+    call ID from that result. After subscription succeeds, stop calling tools
+    and wait for the system to deliver progress updates. Do not subscribe when
+    ``reminder_interval_seconds`` is omitted. Call ``id_to_async_tool_status``
+    only when the user explicitly asks for current progress; never poll status.
+    """
 
     name = "timer"
     subscribe_by_default = False
@@ -140,12 +140,16 @@ class TimerTool(AsyncTool):
         del global_state
         tool_state.started_at = time.monotonic()
         duration = cls._format_seconds(tool_input.duration_seconds)
-        message = f"定时器已启动，将在 {duration} 秒后结束。工具调用 ID：{tool_call_id}。"
+        message = (
+            f"Timer started and will finish in {duration} seconds. "
+            f"Tool call ID: {tool_call_id}."
+        )
         if tool_input.reminder_interval_seconds is not None:
             interval = cls._format_seconds(tool_input.reminder_interval_seconds)
             message += (
-                f"用户要求每 {interval} 秒提醒一次，请立即调用 "
-                f"subscribe_async_tool，source_call_id 为 {tool_call_id}。"
+                f" The user requested a reminder every {interval} seconds. "
+                "Immediately call subscribe_async_tool with source_call_id set to "
+                f"{tool_call_id}."
             )
         return Running(message)
 
@@ -181,7 +185,9 @@ class TimerTool(AsyncTool):
             tool_state.elapsed_seconds = cls._elapsed_seconds(tool_input, tool_state)
             elapsed = cls._format_seconds(tool_state.elapsed_seconds)
             total = cls._format_seconds(duration)
-            yield Running(f"定时器已经过 {elapsed} 秒，共 {total} 秒。")
+            yield Running(
+                f"Timer progress: {elapsed} seconds elapsed out of {total} seconds."
+            )
             next_reminder += interval
 
         finish_at = tool_state.started_at + duration
@@ -192,7 +198,9 @@ class TimerTool(AsyncTool):
         total = cls._format_seconds(duration)
         yield Finished(
             TimerOutput(
-                content=f"定时器结束，设定的 {total} 秒已到。",
+                content=(
+                    f"Timer finished after the configured duration of {total} seconds."
+                ),
                 elapsed_seconds=duration,
             )
         )
@@ -210,8 +218,12 @@ class TimerTool(AsyncTool):
         elapsed = cls._format_seconds(elapsed_seconds)
         total = cls._format_seconds(tool_input.duration_seconds)
         if tool_state.stopped:
-            return f"定时器已停止，停止前经过 {elapsed} 秒，共 {total} 秒。"
-        return f"定时器已经过 {elapsed} 秒，共 {total} 秒。"
+            return (
+                f"Timer stopped after {elapsed} seconds out of {total} seconds."
+            )
+        return (
+            f"Timer progress: {elapsed} seconds elapsed out of {total} seconds."
+        )
 
     @classmethod
     def stop(
@@ -227,7 +239,7 @@ class TimerTool(AsyncTool):
 
 
 def build_timer_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a config copy with the timer tool and its Agent instruction."""
+    """Return a config copy with the timer tool appended."""
     updated_config = copy.deepcopy(config)
     agent_config = updated_config.get("llm_agent")
     if not isinstance(agent_config, dict):
@@ -245,12 +257,6 @@ def build_timer_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("llm_agent.params.tools must be a list when provided.")
     params["tools"] = [*configured_tools, TimerTool]
 
-    configured_prompt = params.get("system_prompt", "")
-    if not isinstance(configured_prompt, str):
-        raise ValueError("llm_agent.params.system_prompt must be a string.")
-    params["system_prompt"] = (
-        f"{configured_prompt.rstrip()}\n{TIMER_AGENT_INSTRUCTION.strip()}"
-    ).lstrip()
     return updated_config
 
 
