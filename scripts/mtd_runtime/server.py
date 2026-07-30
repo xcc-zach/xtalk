@@ -1,4 +1,4 @@
-"""Headless MTD decode API backed by the official vLLM Python interface."""
+"""Headless MTD decode API backed by the official asynchronous vLLM engine."""
 
 from __future__ import annotations
 
@@ -87,20 +87,21 @@ def _crop_to_current(
 
 
 class OfficialMtdRuntime:
-    """Own one official vLLM engine and serve immutable snapshot decodes."""
+    """Own one official AsyncLLM engine and serve concurrent snapshot decodes."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        from vllm import LLM
+        from vllm import AsyncEngineArgs, AsyncLLMEngine
         from vllm.model_executor.model_loader import get_model_architecture
 
         self.sample_rate = int(args.sample_rate)
         self.default_instruction = str(args.instruction)
-        self.llm = LLM(
+        engine_args = AsyncEngineArgs(
             model=args.model,
             dtype=args.dtype,
             gpu_memory_utilization=args.gpu_memory_utilization,
             max_model_len=args.max_model_len,
             max_num_batched_tokens=args.max_num_batched_tokens,
+            max_num_seqs=args.max_num_seqs,
             enforce_eager=args.enforce_eager,
             trust_remote_code=True,
             limit_mm_per_prompt={"audio": 1},
@@ -108,14 +109,20 @@ class OfficialMtdRuntime:
             mm_processor_cache_gb=args.mm_processor_cache_gb,
             disable_log_stats=False,
         )
-        self.model_config = self.llm.llm_engine.model_config
+        # In the verified vLLM wheel, the public AsyncLLMEngine export is an
+        # alias of vllm.v1.engine.async_llm.AsyncLLM.
+        self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+        self.model_config = self.engine.model_config
         self.model_cls, self.model_arch = get_model_architecture(self.model_config)
         self.stt_config = self.model_cls.get_speech_to_text_config(
             self.model_config,
             "transcribe",
         )
-        self._decode_lock = asyncio.Lock()
         self._cancelled: set[str] = set()
+        self._active_requests: set[str] = set()
+        self._active_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._max_active_requests = 0
+        self._closed = False
 
     def _generation_prompt(self, audio: np.ndarray, instruction: str) -> Any:
         """Build the official multimodal generation prompt."""
@@ -130,16 +137,17 @@ class OfficialMtdRuntime:
         )
         return self.model_cls.get_generation_prompt(params)
 
-    def _decode_sync(
+    async def _decode_engine(
         self,
         *,
+        request_id: str,
         audio: np.ndarray,
         instruction: str,
         decoder_prefix: str,
         temperature: float,
         max_tokens: int,
     ) -> dict[str, Any]:
-        """Run the blocking official vLLM decode on the worker thread."""
+        """Run one request through AsyncLLM and collect its final output."""
 
         from vllm import SamplingParams
         from vllm.inputs import TextPrompt
@@ -157,24 +165,29 @@ class OfficialMtdRuntime:
         )
         sampling = SamplingParams(temperature=temperature, max_tokens=max_tokens)
         started = time.perf_counter()
-        outputs = self.llm.generate([request], sampling_params=sampling, use_tqdm=False)
+        request_output = None
+        async for output in self.engine.generate(
+            request,
+            sampling,
+            request_id=request_id,
+        ):
+            request_output = output
         wall_ms = (time.perf_counter() - started) * 1000.0
-        request_output = outputs[0]
+        if request_output is None:
+            raise RuntimeError(f"AsyncLLM returned no output for request {request_id}")
         completion_output = request_output.outputs[0]
-        metrics = getattr(request_output, "metrics", None)
+        metrics = request_output.metrics
+        first_token_latency_ms = None
+        if metrics is not None and metrics.first_token_latency is not None:
+            first_token_latency_ms = float(metrics.first_token_latency) * 1000.0
         return {
             "raw_text": decoder_prefix + str(completion_output.text or ""),
             "latency_ms": wall_ms,
             "metrics": {
                 "prompt_tokens": len(request_output.prompt_token_ids or []),
                 "completion_tokens": len(completion_output.token_ids or []),
-                "cached_tokens": getattr(request_output, "num_cached_tokens", None),
-                "first_token_latency_ms": (
-                    float(metrics.first_token_latency) * 1000.0
-                    if metrics is not None
-                    and getattr(metrics, "first_token_latency", None) is not None
-                    else None
-                ),
+                "cached_tokens": request_output.num_cached_tokens,
+                "first_token_latency_ms": first_token_latency_ms,
             },
         }
 
@@ -197,18 +210,42 @@ class OfficialMtdRuntime:
         instruction = str(fields.get("instruction") or self.default_instruction)
         temperature = float(fields.get("temperature") or 0.0)
         max_tokens = int(fields.get("max_tokens") or 2048)
-        async with self._decode_lock:
-            if request_id in self._cancelled:
-                self._cancelled.discard(request_id)
-                raise web.HTTPConflict(text="request cancelled")
-            output = await asyncio.to_thread(
-                self._decode_sync,
+        if request_id in self._active_requests:
+            raise web.HTTPConflict(text=f"duplicate request_id: {request_id}")
+        if request_id in self._cancelled:
+            self._cancelled.discard(request_id)
+            raise web.HTTPConflict(text="request cancelled")
+        self._active_requests.add(request_id)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._active_tasks[request_id] = current_task
+        self._max_active_requests = max(
+            self._max_active_requests,
+            len(self._active_requests),
+        )
+        try:
+            output = await self._decode_engine(
+                request_id=request_id,
                 audio=audio,
                 instruction=instruction,
                 decoder_prefix=decoder_prefix,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+        except asyncio.CancelledError as exc:
+            if request_id in self._cancelled:
+                self._cancelled.discard(request_id)
+                raise web.HTTPConflict(text="request cancelled") from exc
+            await self.engine.abort(request_id)
+            raise
+        except Exception as exc:
+            if request_id in self._cancelled:
+                self._cancelled.discard(request_id)
+                raise web.HTTPConflict(text="request cancelled") from exc
+            raise
+        finally:
+            self._active_requests.discard(request_id)
+            self._active_tasks.pop(request_id, None)
         if request_id in self._cancelled:
             self._cancelled.discard(request_id)
             raise web.HTTPConflict(text="request cancelled")
@@ -222,12 +259,31 @@ class OfficialMtdRuntime:
             context_seconds=context_seconds,
             current_audio_seconds=current_audio_seconds,
         )
+        output["metrics"].update(
+            {
+                "engine": "async_llm",
+                "max_active_requests": self._max_active_requests,
+            }
+        )
         return output
 
-    def cancel(self, request_id: str) -> None:
-        """Mark a queued or running request so its result is discarded."""
+    async def cancel(self, request_id: str) -> None:
+        """Abort a queued or running AsyncLLM request and discard its result."""
 
         self._cancelled.add(request_id)
+        if request_id in self._active_requests:
+            await self.engine.abort(request_id)
+        request_task = self._active_tasks.get(request_id)
+        if request_task is not None and request_task is not asyncio.current_task():
+            request_task.cancel()
+
+    def shutdown(self) -> None:
+        """Release the AsyncLLM engine and its background worker process."""
+
+        if self._closed:
+            return
+        self._closed = True
+        self.engine.shutdown()
 
 
 async def _read_multipart(request: web.Request) -> dict[str, Any]:
@@ -263,7 +319,15 @@ def create_app(runtime: OfficialMtdRuntime) -> web.Application:
     app = web.Application(client_max_size=256 * 1024**2)
 
     async def health(_request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok", "model_arch": runtime.model_arch})
+        return web.json_response(
+            {
+                "status": "ok",
+                "model_arch": runtime.model_arch,
+                "engine": "async_llm",
+                "active_requests": len(runtime._active_requests),
+                "max_active_requests": runtime._max_active_requests,
+            }
+        )
 
     async def decode(request: web.Request) -> web.Response:
         fields = await _read_multipart(request)
@@ -271,12 +335,16 @@ def create_app(runtime: OfficialMtdRuntime) -> web.Application:
         return web.json_response(result)
 
     async def cancel(request: web.Request) -> web.Response:
-        runtime.cancel(request.match_info["request_id"])
+        await runtime.cancel(request.match_info["request_id"])
         return web.json_response({"status": "accepted"}, status=202)
+
+    async def shutdown(_app: web.Application) -> None:
+        runtime.shutdown()
 
     app.router.add_get("/health", health)
     app.router.add_post("/v1/mtd/decode", decode)
     app.router.add_delete("/v1/mtd/requests/{request_id}", cancel)
+    app.on_cleanup.append(shutdown)
     return app
 
 
@@ -292,6 +360,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.72)
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
+    parser.add_argument("--max-num-seqs", type=int, default=8)
     parser.add_argument("--mm-processor-cache-gb", type=float, default=4.0)
     parser.add_argument("--enforce-eager", action="store_true", default=True)
     parser.add_argument(
