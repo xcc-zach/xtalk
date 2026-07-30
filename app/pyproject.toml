@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xtalk-desktop-backend"
+version = "0.1.0"
+description = "XTalk desktop Python sidecar"
+requires-python = ">=3.10"
+dependencies = [
+  "xtalk[silero-vad]",
+  "fastapi",
+  "python-multipart",
+  "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx",
+  "pytest",
+]
+
+[project.scripts]
+xtalk-app-backend = "backend.entrypoint:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+
+[tool.pytest.ini_options]
+addopts = ["-q"]
+testpaths = ["tests/unit", "tests/integration"]
+pythonpath = ["."]
+markers = [
+  "model: requires the repository sample model configuration and optional external model services",
+]
+
+[tool.ruff]
+target-version = "py310"

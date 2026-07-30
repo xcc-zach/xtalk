@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shutdown-backend"
+description = "Enables the shutdown_backend command without any pre-configured scope."
+commands.allow = ["shutdown_backend"]
+
+[[permission]]
+identifier = "deny-shutdown-backend"
+description = "Denies the shutdown_backend command without any pre-configured scope."
+commands.deny = ["shutdown_backend"]
