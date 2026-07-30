@@ -36,11 +36,12 @@ The WebView follows the layout and visual language of `examples/sample_app`
 without importing example implementation code. It provides a centered brand
 bar, Orb and conversation views, a bottom glass control dock, and a right-side
 settings-and-diagnostics drawer. The drawer shows the selected external model
-configuration and can replace it, restart the sidecar, and rediscover the local
-service. Light, dark, and narrow-window layouts share the same desktop adapter
-and offline state model. The macOS bundle includes the microphone usage
-description and audio-input entitlement required when a user starts a voice
-conversation.
+configuration and installed developer tools. It can replace the configuration,
+copy tool directories into AppData, update their enabled state, restart the
+sidecar, and rediscover the local service. Light, dark, and narrow-window
+layouts share the same desktop adapter and offline state model. The macOS
+bundle includes the microphone usage description and audio-input entitlement
+required when a user starts a voice conversation.
 
 ## Authentication contract
 
@@ -74,10 +75,11 @@ close, reopen, and session switching cancel that pending submission; the client
 does not queue or automatically retry a turn that may execute side-effecting
 tools.
 
-The app registers an asynchronous `timer` through the public runtime builder,
-matching `examples/sample_app/custom_async_tool.py`. The example module itself
-is not imported because importing it executes CLI and asset-download setup.
-Unit tests cover `Running`, progress, `Finished`, stop behavior, and the public
+The app registers enabled developer tools through the public runtime builder.
+The bundled asynchronous `timer`, matching
+`examples/sample_app/custom_async_tool.py`, remains a fallback when no enabled
+developer tool declares the `timer` name. Unit tests cover `Running`, progress,
+`Finished`, stop behavior, developer entrypoint loading, and the public
 `ToolEngine` final update. The model smoke independently sends a text request,
 observes `tool_called` for `timer`, and acknowledges a real assistant/TTS turn.
 It does not require a second proactive LLM report because that model-driven
@@ -130,6 +132,28 @@ data because core model discovery is dynamic. Required optional dependency
 groups are explicit `--xtalk-extra` build inputs; they do not introduce
 model-type branches into application behavior.
 
+## Developer tools
+
+A selected directory contains Python files and an exact two-field
+`xtalk_tool.json` manifest:
+
+```json
+{
+  "display_name": "Timer",
+  "entrypoint": "timer_tool:create_tools"
+}
+```
+
+Tauri assigns an internal identifier, recursively copies the directory under
+`AppData/tools/<id>/`, and persists only that identifier plus its enabled state
+in `AppData/tools/registry.json`. The Python sidecar resolves the
+`module:factory` entrypoint for each enabled directory. A factory must return a
+list of tool values accepted by `XtalkBuilder.add_agent_tools()`.
+
+The configured Agent is built after this registry is loaded, so tool changes
+take effect through a controlled sidecar restart. A failed developer factory is
+omitted without preventing the remaining local service from starting.
+
 ## Shutdown
 
 The UI closes its XTalk session before requesting shutdown. Tauri asks the
@@ -144,7 +168,6 @@ and terminates only the child it started if graceful shutdown does not finish.
 - PyInstaller `onedir` support files remain beside the sidecar in development
   and ordinary bundles; macOS app bundles place them in `Contents/Frameworks`
   as required by the bootloader. Runtime validation rejects incomplete layouts.
-- General tool management, local enhancement, provider settings, and optional
-  component supervision belong to later phases. The backend Silero VAD and
-  fixed sample-compatible timer are the first slices implemented beyond the
-  Phase 0 shell.
+- Additional tool dependency management, local enhancement, provider settings,
+  and optional component supervision belong to later phases. Developer tool
+  directories can use Python packages already present in the frozen sidecar.

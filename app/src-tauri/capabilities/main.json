@@ -6,9 +6,14 @@
     "main"
   ],
   "permissions": [
+    "allow-apply-tool-changes",
     "allow-apply-model-config",
     "allow-get-backend-connection",
+    "allow-get-installed-tools",
     "allow-get-model-config-selection",
+    "allow-install-tool-directory",
+    "allow-remove-installed-tool",
+    "allow-set-tool-enabled",
     "allow-shutdown-backend",
     "dialog:allow-open"
   ]

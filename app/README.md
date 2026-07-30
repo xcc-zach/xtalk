@@ -124,6 +124,31 @@ must remain available at the selected path for subsequent launches. The
 frozen sidecar can instantiate only providers whose dependency groups were
 included at build time.
 
+## Developer tool directories
+
+The **Settings and diagnostics** drawer can install a developer tool by
+selecting a directory. Tauri copies that directory into the application's data
+directory and stores enablement state separately. Each selected directory must
+contain an `xtalk_tool.json` file with exactly two fields:
+
+```json
+{
+  "display_name": "Timer",
+  "entrypoint": "timer_tool:create_tools"
+}
+```
+
+The entrypoint uses Python `module:factory` syntax. The zero-argument factory
+must return a list containing LangChain tools, XTalk `SyncTool` or `AsyncTool`
+classes, or zero-argument tool factories accepted by
+`XtalkBuilder.add_agent_tools()`. The copied Python files may import packages
+already included in the frozen sidecar.
+
+Installing, enabling, disabling, or deleting a tool updates the AppData
+registry. Select **Apply and restart local service** to rebuild the configured
+Agent with the enabled tools. The bundled sample-compatible timer remains a
+fallback; an installed enabled tool named `timer` replaces that fallback.
+
 ## Local interface
 
 The desktop UI follows the visual hierarchy of `examples/sample_app`: a

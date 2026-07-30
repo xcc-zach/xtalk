@@ -139,8 +139,7 @@ summary,
 .message-content,
 #message-input,
 .runtime-grid dd,
-.endpoint-list dd,
-.debug-content {
+.endpoint-list dd {
   -webkit-user-select: text;
   user-select: text;
 }
@@ -888,23 +887,6 @@ summary,
   padding: 0 14px 14px;
 }
 
-.debug-content {
-  min-height: 54px;
-  max-height: 230px;
-  padding: 0 14px 14px;
-  overflow-y: auto;
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.security-copy {
-  font-family: inherit;
-}
-
 .settings-section > p {
   margin: -2px 0 12px;
   color: var(--text-muted);
@@ -940,6 +922,111 @@ summary,
 .settings-section .settings-status {
   min-height: 18px;
   margin: 9px 1px -3px;
+}
+
+.settings-section > p code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.developer-tools-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.developer-tools-empty {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.developer-tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.developer-tool-copy {
+  min-width: 0;
+}
+
+.developer-tool-copy strong,
+.developer-tool-copy code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.developer-tool-copy strong {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.developer-tool-copy code {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.developer-tool-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.developer-tool-toggle {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.developer-tool-toggle input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.developer-tool-remove {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 8px;
+  color: var(--danger);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.developer-tool-remove:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.settings-action-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.drawer-action-button-primary {
+  color: var(--primary-text);
+  background: var(--primary);
+}
+
+.drawer-action-button-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
 }
 
 .debug-actions p {

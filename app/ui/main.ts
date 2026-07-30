@@ -2,10 +2,17 @@ import "./styles.css";
 
 import {
   applyNativeModelConfig,
+  applyNativeToolChanges,
   chooseNativeModelConfigFile,
+  chooseNativeToolDirectory,
   getNativeBackendConnection,
+  getNativeInstalledTools,
   getNativeModelConfigSelection,
+  installNativeToolDirectory,
+  removeNativeInstalledTool,
+  setNativeToolEnabled,
   type NativeModelConfigSelection,
+  type NativeToolDefinition,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
@@ -46,6 +53,16 @@ const elements = {
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
   ),
+  developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
+  developerToolsStatus: requireElement<HTMLElement>(
+    "developer-tools-status",
+  ),
+  installToolDirectoryButton: requireElement<HTMLButtonElement>(
+    "install-tool-directory-button",
+  ),
+  applyToolChangesButton: requireElement<HTMLButtonElement>(
+    "apply-tool-changes-button",
+  ),
   messages: requireElement<HTMLElement>("messages"),
   textComposer: requireElement<HTMLFormElement>("text-composer"),
   messageInput: requireElement<HTMLTextAreaElement>("message-input"),
@@ -75,9 +92,12 @@ let discoveringBackend = false;
 let sessionOperation = false;
 let sendingText = false;
 let modelConfigOperation = false;
+let toolOperation = false;
+let toolChangesPending = false;
 let diagnosticsOpen = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
+let installedTools: NativeToolDefinition[] = [];
 let latestSnapshot = EMPTY_SNAPSHOT;
 
 function requireElement<T extends HTMLElement>(id: string): T {
@@ -165,6 +185,7 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
     backendState !== "ready" ||
     discoveringBackend ||
     modelConfigOperation ||
+    toolOperation ||
     sessionOperation ||
     sendingText;
   elements.callButton.dataset.action = callAction;
@@ -174,7 +195,11 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
   elements.callButton.title = callLabel;
 
   elements.muteButton.disabled =
-    !hasBackend || modelConfigOperation || sessionOperation || !live;
+    !hasBackend ||
+    modelConfigOperation ||
+    toolOperation ||
+    sessionOperation ||
+    !live;
   elements.muteButton.classList.toggle("is-muted", snapshot.muted);
   elements.muteButton.setAttribute("aria-pressed", String(snapshot.muted));
   elements.muteButton.setAttribute(
@@ -186,13 +211,16 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
   elements.retryButton.disabled =
     discoveringBackend ||
     modelConfigOperation ||
+    toolOperation ||
     sessionOperation ||
     sendingText;
   elements.selectModelConfigButton.disabled =
     discoveringBackend ||
     modelConfigOperation ||
+    toolOperation ||
     sessionOperation ||
     sendingText;
+  updateToolControls();
   updateComposer(snapshot);
 }
 
@@ -206,6 +234,7 @@ function updateComposer(snapshot: DesktopSessionSnapshot): void {
     connected &&
     !discoveringBackend &&
     !modelConfigOperation &&
+    !toolOperation &&
     !sessionOperation &&
     !sendingText;
   const hasText = elements.messageInput.value.trim().length > 0;
@@ -387,10 +416,116 @@ function renderModelConfigSelection(
   updateControls(latestSnapshot);
 }
 
+function renderInstalledTools(tools: NativeToolDefinition[]): void {
+  installedTools = tools;
+  if (tools.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "developer-tools-empty";
+    empty.textContent = "尚未安装开发者工具";
+    elements.developerToolsList.replaceChildren(empty);
+    updateToolControls();
+    return;
+  }
+
+  const rows = tools.map((tool) => {
+    const row = document.createElement("article");
+    row.className = "developer-tool-row";
+
+    const copy = document.createElement("div");
+    copy.className = "developer-tool-copy";
+
+    const name = document.createElement("strong");
+    name.textContent = tool.displayName;
+
+    const entrypoint = document.createElement("code");
+    entrypoint.textContent = tool.entrypoint;
+
+    copy.append(name, entrypoint);
+
+    const actions = document.createElement("div");
+    actions.className = "developer-tool-actions";
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "developer-tool-toggle";
+
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = tool.enabled;
+    toggle.setAttribute(
+      "aria-label",
+      `${tool.enabled ? "禁用" : "启用"}${tool.displayName}`,
+    );
+    toggle.addEventListener("change", () => {
+      void updateInstalledToolEnabled(tool.id, toggle.checked);
+    });
+
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "启用";
+    toggleLabel.append(toggle, toggleText);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "developer-tool-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `删除${tool.displayName}`);
+    remove.title = "删除已复制的工具";
+    remove.addEventListener("click", () => {
+      void removeInstalledTool(tool.id);
+    });
+
+    actions.append(toggleLabel, remove);
+    row.append(copy, actions);
+    return row;
+  });
+
+  elements.developerToolsList.replaceChildren(...rows);
+  updateToolControls();
+}
+
+function updateToolControls(): void {
+  const busy =
+    toolOperation ||
+    modelConfigOperation ||
+    discoveringBackend ||
+    sessionOperation ||
+    sendingText;
+  elements.installToolDirectoryButton.disabled = busy;
+  elements.applyToolChangesButton.disabled =
+    busy || !toolChangesPending || modelConfigPath === null;
+  for (const control of elements.developerToolsList.querySelectorAll<
+    HTMLInputElement | HTMLButtonElement
+  >("input, button")) {
+    control.disabled = busy;
+  }
+}
+
+function updateDeveloperToolsStatus(message?: string): void {
+  if (message) {
+    elements.developerToolsStatus.textContent = message;
+    return;
+  }
+  if (toolChangesPending) {
+    elements.developerToolsStatus.textContent =
+      "工具配置已修改；应用并重启本地服务后生效";
+    return;
+  }
+  elements.developerToolsStatus.textContent =
+    installedTools.length === 0
+      ? "尚未安装开发者工具"
+      : `已安装 ${installedTools.length} 个开发者工具`;
+}
+
 async function refreshModelConfigSelection(): Promise<NativeModelConfigSelection> {
   const selection = await getNativeModelConfigSelection();
   renderModelConfigSelection(selection);
   return selection;
+}
+
+async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
+  const tools = await getNativeInstalledTools();
+  renderInstalledTools(tools);
+  updateDeveloperToolsStatus();
+  return tools;
 }
 
 async function detachCurrentAdapter(): Promise<void> {
@@ -481,7 +616,9 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
     setBackendStatus("loading", "正在应用模型配置");
     await detachCurrentAdapter();
     await applyNativeModelConfig(selectedPath);
+    toolChangesPending = false;
     const selection = await refreshModelConfigSelection();
+    updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
       ? "配置已应用，本地服务已重启"
       : "配置已应用";
@@ -503,8 +640,134 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
   }
 }
 
+async function chooseAndInstallToolDirectory(): Promise<void> {
+  if (toolOperation) {
+    return;
+  }
+
+  toolOperation = true;
+  showError(null);
+  updateDeveloperToolsStatus("等待选择工具目录");
+  updateControls(latestSnapshot);
+
+  try {
+    const selectedPath = await chooseNativeToolDirectory();
+    if (selectedPath === null) {
+      updateDeveloperToolsStatus("已取消安装工具");
+      return;
+    }
+
+    updateDeveloperToolsStatus("正在复制工具目录到 AppData");
+    const installed = await installNativeToolDirectory(selectedPath);
+    toolChangesPending = true;
+    await refreshInstalledTools();
+    updateDeveloperToolsStatus(
+      `${installed.displayName} 已安装；重启本地服务后生效`,
+    );
+  } catch (error) {
+    await refreshInstalledTools().catch(() => undefined);
+    updateDeveloperToolsStatus("工具目录安装失败");
+    showError(`工具目录安装失败：${formatError(error)}`);
+  } finally {
+    toolOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+async function updateInstalledToolEnabled(
+  toolId: string,
+  enabled: boolean,
+): Promise<void> {
+  if (toolOperation) {
+    return;
+  }
+
+  toolOperation = true;
+  showError(null);
+  updateDeveloperToolsStatus("正在更新工具状态");
+  updateControls(latestSnapshot);
+
+  try {
+    const updated = await setNativeToolEnabled(toolId, enabled);
+    toolChangesPending = true;
+    await refreshInstalledTools();
+    updateDeveloperToolsStatus(
+      `${updated.displayName} 已${updated.enabled ? "启用" : "禁用"}；重启本地服务后生效`,
+    );
+  } catch (error) {
+    await refreshInstalledTools().catch(() => undefined);
+    updateDeveloperToolsStatus("工具状态更新失败");
+    showError(`工具状态更新失败：${formatError(error)}`);
+  } finally {
+    toolOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+async function removeInstalledTool(toolId: string): Promise<void> {
+  if (toolOperation) {
+    return;
+  }
+
+  const tool = installedTools.find((candidate) => candidate.id === toolId);
+  toolOperation = true;
+  showError(null);
+  updateDeveloperToolsStatus("正在删除已复制的工具");
+  updateControls(latestSnapshot);
+
+  try {
+    await removeNativeInstalledTool(toolId);
+    toolChangesPending = true;
+    await refreshInstalledTools();
+    updateDeveloperToolsStatus(
+      `${tool?.displayName ?? "工具"}已删除；重启本地服务后生效`,
+    );
+  } catch (error) {
+    await refreshInstalledTools().catch(() => undefined);
+    updateDeveloperToolsStatus("工具删除失败");
+    showError(`工具删除失败：${formatError(error)}`);
+  } finally {
+    toolOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+async function applyInstalledToolChanges(): Promise<void> {
+  if (toolOperation || !toolChangesPending) {
+    return;
+  }
+  if (modelConfigPath === null) {
+    updateDeveloperToolsStatus("请先选择模型配置");
+    return;
+  }
+
+  toolOperation = true;
+  showError(null);
+  updateDeveloperToolsStatus("正在重启本地服务并加载工具");
+  setBackendStatus("loading", "正在应用开发者工具");
+  updateControls(latestSnapshot);
+
+  try {
+    await detachCurrentAdapter();
+    await applyNativeToolChanges();
+    toolChangesPending = false;
+    updateDeveloperToolsStatus("工具配置已应用，本地服务已重启");
+    await discoverBackend();
+  } catch (error) {
+    const message = `工具配置应用失败：${formatError(error)}`;
+    updateDeveloperToolsStatus("工具配置应用失败");
+    await discoverBackend();
+    showError(message);
+    setDiagnosticsOpen(true);
+  } finally {
+    toolOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
 async function initializeApplication(): Promise<void> {
   try {
+    await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
       setBackendStatus("unconfigured", "请选择模型配置");
@@ -631,6 +894,12 @@ elements.muteButton.addEventListener("click", () => {
 });
 elements.selectModelConfigButton.addEventListener("click", () => {
   void chooseAndApplyModelConfig(false);
+});
+elements.installToolDirectoryButton.addEventListener("click", () => {
+  void chooseAndInstallToolDirectory();
+});
+elements.applyToolChangesButton.addEventListener("click", () => {
+  void applyInstalledToolChanges();
 });
 elements.textComposer.addEventListener("submit", (event) => {
   event.preventDefault();

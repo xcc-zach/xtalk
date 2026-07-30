@@ -125,7 +125,10 @@ def build_application(
     """
 
     effective_config = build_effective_config(startup)
-    xtalk_runtime = build_xtalk_runtime(effective_config)
+    xtalk_runtime = build_xtalk_runtime(
+        effective_config,
+        tools_root=startup.data_dir / "tools",
+    )
     return create_application(
         startup=startup,
         xtalk_runtime=xtalk_runtime,

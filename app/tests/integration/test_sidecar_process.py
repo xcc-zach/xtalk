@@ -21,6 +21,70 @@ VAD_MODEL = APP_ROOT / "resources" / "models" / "audio" / "silero_vad.onnx"
 LAUNCH_TOKEN = "sidecar-integration-token-at-least-32-bytes"
 
 
+def install_test_developer_tool(data_dir: Path) -> Path:
+    """Install one representative developer tool into a test data directory.
+
+    Parameters
+    ----------
+    data_dir : pathlib.Path
+        Temporary application data directory used by the sidecar launch.
+
+    Returns
+    -------
+    pathlib.Path
+        Marker written when the configured entrypoint factory is called.
+    """
+
+    tools_root = data_dir / "tools"
+    tool_directory = tools_root / "developer-timer"
+    tool_directory.mkdir(parents=True)
+    (tool_directory / "xtalk_tool.json").write_text(
+        json.dumps(
+            {
+                "display_name": "Developer timer",
+                "entrypoint": "timer_tool:create_tools",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tool_directory / "timer_tool.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "",
+                "from langchain_core.tools import tool",
+                "",
+                "@tool",
+                "def developer_timer(duration_seconds: float) -> str:",
+                '    """Run a representative developer timer."""',
+                "    return f'Timer finished after {duration_seconds} seconds.'",
+                "",
+                "def create_tools():",
+                "    Path(__file__).with_name('loaded.txt').write_text(",
+                "        'loaded', encoding='utf-8'",
+                "    )",
+                "    return [developer_timer]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tools_root / "registry.json").write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "id": "developer-timer",
+                        "enabled": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tool_directory / "loaded.txt"
+
+
 def sidecar_command() -> list[str]:
     """Resolve the source or packaged sidecar command for integration tests.
 
@@ -198,6 +262,38 @@ def test_provider_free_sidecar_ready_health_and_shutdown(tmp_path: Path) -> None
         encoding="utf-8",
     )
     _exercise_sidecar(config_path, tmp_path)
+
+
+def test_sidecar_loads_enabled_developer_tool_directory(tmp_path: Path) -> None:
+    """Load a copied tool directory through the full sidecar process."""
+
+    marker = install_test_developer_tool(tmp_path)
+    config_path = tmp_path / "developer-tool.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "llm_agent": {
+                    "type": "DefaultAgent",
+                    "params": {
+                        "model": {
+                            "api_key": "test-key",
+                            "model": "test-model",
+                            "base_url": "http://127.0.0.1:9",
+                        },
+                        "proactive": False,
+                    },
+                },
+                "service_config": {
+                    "enable_persistence": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _exercise_sidecar(config_path, tmp_path)
+
+    assert marker.read_text(encoding="utf-8") == "loaded"
 
 
 @pytest.mark.model

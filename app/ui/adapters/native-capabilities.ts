@@ -19,9 +19,28 @@ export interface NativeModelConfigSelection {
   configPath: string | null;
 }
 
+/**
+ * One developer tool directory installed into application data.
+ */
+export interface NativeToolDefinition {
+  /** App-generated stable identifier for this installed copy. */
+  id: string;
+  /** Human-readable name declared by the developer tool. */
+  displayName: string;
+  /** Python `module:factory` entrypoint declared by the tool. */
+  entrypoint: string;
+  /** Whether the sidecar loads this tool during its next restart. */
+  enabled: boolean;
+}
+
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
+const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
+const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
+const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
+const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
+const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
 
 /**
@@ -107,6 +126,100 @@ export async function applyNativeModelConfig(
   return parseNativeBackendConnection(payload);
 }
 
+/**
+ * Opens the native directory picker for a developer tool.
+ *
+ * @returns Selected directory path, or `null` when the user cancels.
+ */
+export async function chooseNativeToolDirectory(): Promise<string | null> {
+  requireTauriRuntime();
+  const selection = await open({
+    directory: true,
+    multiple: false,
+    title: "选择 XTalk 工具目录",
+  });
+  if (selection === null) {
+    return null;
+  }
+  if (Array.isArray(selection)) {
+    throw new Error("Tool directory picker returned multiple paths.");
+  }
+  if (!selection.trim()) {
+    throw new Error("Tool directory picker returned an empty path.");
+  }
+  return selection;
+}
+
+/**
+ * Lists developer tools copied into application data.
+ *
+ * @returns Installed tool definitions sorted by display name.
+ */
+export async function getNativeInstalledTools(): Promise<NativeToolDefinition[]> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(INSTALLED_TOOLS_COMMAND);
+  if (!Array.isArray(payload)) {
+    throw new Error("Tauri returned an invalid installed tools payload.");
+  }
+  return payload.map(parseNativeToolDefinition);
+}
+
+/**
+ * Copies one selected developer tool directory into application data.
+ *
+ * @param sourcePath Directory containing `xtalk_tool.json`.
+ * @returns Installed tool definition.
+ */
+export async function installNativeToolDirectory(
+  sourcePath: string,
+): Promise<NativeToolDefinition> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(INSTALL_TOOL_DIRECTORY_COMMAND, {
+    sourcePath,
+  });
+  return parseNativeToolDefinition(payload);
+}
+
+/**
+ * Persists whether one installed tool should load at sidecar startup.
+ *
+ * @param toolId App-generated installed tool identifier.
+ * @param enabled Desired enabled state.
+ * @returns Updated tool definition.
+ */
+export async function setNativeToolEnabled(
+  toolId: string,
+  enabled: boolean,
+): Promise<NativeToolDefinition> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(SET_TOOL_ENABLED_COMMAND, {
+    toolId,
+    enabled,
+  });
+  return parseNativeToolDefinition(payload);
+}
+
+/**
+ * Deletes one copied developer tool directory from application data.
+ *
+ * @param toolId App-generated installed tool identifier.
+ */
+export async function removeNativeInstalledTool(toolId: string): Promise<void> {
+  requireTauriRuntime();
+  await invoke(REMOVE_INSTALLED_TOOL_COMMAND, { toolId });
+}
+
+/**
+ * Restarts the sidecar so persisted tool changes become active.
+ *
+ * @returns Validated connection details for the restarted sidecar.
+ */
+export async function applyNativeToolChanges(): Promise<NativeBackendConnection> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(APPLY_TOOL_CHANGES_COMMAND);
+  return parseNativeBackendConnection(payload);
+}
+
 function requireTauriRuntime(): void {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
     throw new Error("桌面运行时不可用；当前界面已进入离线模式。");
@@ -132,6 +245,33 @@ function parseNativeBackendConnection(
   }
 
   return { origin, launchToken: normalizedToken };
+}
+
+function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
+  if (!isRecord(payload)) {
+    throw new Error("Tauri returned an invalid tool definition.");
+  }
+  const id = payload.id;
+  const displayName = payload.displayName;
+  const entrypoint = payload.entrypoint;
+  const enabled = payload.enabled;
+  if (
+    typeof id !== "string" ||
+    typeof displayName !== "string" ||
+    typeof entrypoint !== "string" ||
+    typeof enabled !== "boolean" ||
+    !id.trim() ||
+    !displayName.trim() ||
+    !entrypoint.trim()
+  ) {
+    throw new Error("Tool definition contains invalid fields.");
+  }
+  return {
+    id,
+    displayName,
+    entrypoint,
+    enabled,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -72,6 +72,44 @@
             </p>
           </section>
 
+          <section class="debug-section settings-section" aria-labelledby="developer-tools-title">
+            <h3 id="developer-tools-title">开发者工具</h3>
+            <p>
+              选择包含 <code>xtalk_tool.json</code> 的 Python 工具目录。应用会将目录复制到
+              AppData，工具变更在重启本地服务后生效。
+            </p>
+            <div
+              id="developer-tools-list"
+              class="developer-tools-list"
+              aria-label="已安装开发者工具"
+            ></div>
+            <div class="settings-action-stack">
+              <button
+                id="install-tool-directory-button"
+                class="drawer-action-button"
+                type="button"
+              >
+                从目录安装工具
+              </button>
+              <button
+                id="apply-tool-changes-button"
+                class="drawer-action-button drawer-action-button-primary"
+                type="button"
+                disabled
+              >
+                应用并重启本地服务
+              </button>
+            </div>
+            <p
+              id="developer-tools-status"
+              class="settings-status"
+              role="status"
+              aria-live="polite"
+            >
+              正在读取已安装工具
+            </p>
+          </section>
+
           <section class="debug-section" aria-labelledby="runtime-title">
             <h3 id="runtime-title">Runtime</h3>
             <dl class="runtime-grid">
@@ -121,13 +159,6 @@
                 <dd id="token-detail">未获取</dd>
               </div>
             </dl>
-          </details>
-
-          <details class="debug-details" open>
-            <summary>Security</summary>
-            <div class="debug-content security-copy">
-              WebSocket 基址不包含 app token。HTTP 服务 URL 会显式携带 token，但界面和诊断信息永不展示其值。
-            </div>
           </details>
 
           <section class="debug-section debug-actions" aria-labelledby="recovery-title">
