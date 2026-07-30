@@ -67,11 +67,13 @@ class TurnTakingManager(Manager):
         async with self._vad_transition_lock:
             if self._turn_detector_model is None:
                 await self.event_bus.publish(
-                    TurnASREndRequested(session_id=self.session_id)
+                    TurnASREndRequested(session_id=self.session_id),
+                    wait_for_completion=True,
                 )
             else:
                 await self.event_bus.publish(
-                    TurnASRPauseRequested(session_id=self.session_id)
+                    TurnASRPauseRequested(session_id=self.session_id),
+                    wait_for_completion=True,
                 )
 
     @Manager.event_handler(TTSPlaybackFinished)

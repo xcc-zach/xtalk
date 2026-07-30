@@ -85,6 +85,80 @@ class TurnTakingRaceTests(unittest.IsolatedAsyncioTestCase):
             ["asr_start", "response_stop", "asr_end"],
         )
 
+    async def test_next_vad_start_waits_for_asr_end_completion(self) -> None:
+        """Prevent an adjacent speech segment from starting before ASR reset."""
+
+        event_bus = EventBus()
+        self.addAsyncCleanup(event_bus.shutdown)
+        manager = TurnTakingManager(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models(),
+        )
+        transitions: list[str] = []
+        asr_end_started = asyncio.Event()
+        allow_asr_end_to_finish = asyncio.Event()
+
+        async def handle_asr_start(event: TurnASRStartRequested) -> None:
+            """Record each ASR start request."""
+
+            del event
+            transitions.append("asr_start")
+
+        async def handle_response_stop(event: TurnLLMAgentStopRequested) -> None:
+            """Record each response interruption."""
+
+            del event
+            transitions.append("response_stop")
+
+        async def handle_asr_end(event: TurnASREndRequested) -> None:
+            """Hold ASR finalization open to expose a following-start race."""
+
+            del event
+            transitions.append("asr_end_started")
+            asr_end_started.set()
+            await allow_asr_end_to_finish.wait()
+            transitions.append("asr_end_finished")
+
+        event_bus.subscribe(TurnASRStartRequested, handle_asr_start)
+        event_bus.subscribe(TurnLLMAgentStopRequested, handle_response_stop)
+        event_bus.subscribe(TurnASREndRequested, handle_asr_end)
+
+        await manager._on_vad_start(
+            VADSpeechStart(session_id="session"),
+        )
+        end_task = asyncio.create_task(
+            manager._on_vad_end(
+                VADSpeechEnd(session_id="session"),
+            )
+        )
+        await asyncio.wait_for(asr_end_started.wait(), timeout=1.0)
+
+        next_start_task = asyncio.create_task(
+            manager._on_vad_start(
+                VADSpeechStart(session_id="session"),
+            )
+        )
+        await asyncio.sleep(0)
+        self.assertEqual(
+            transitions,
+            ["asr_start", "response_stop", "asr_end_started"],
+        )
+
+        allow_asr_end_to_finish.set()
+        await asyncio.gather(end_task, next_start_task)
+        self.assertEqual(
+            transitions,
+            [
+                "asr_start",
+                "response_stop",
+                "asr_end_started",
+                "asr_end_finished",
+                "asr_start",
+                "response_stop",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
