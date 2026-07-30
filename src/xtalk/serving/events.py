@@ -262,6 +262,23 @@ class TTSTextSynthesized(Event):
 
 
 @dataclass
+class TTSTextDeliveryFinished(Event):
+    """Mark completion of FIFO audio delivery for one TTS text segment.
+
+    Attributes
+    ----------
+    text : str
+        Text associated with the delivered audio segment.
+    succeeded : bool
+        Whether synthesis produced a complete deliverable segment.
+    """
+
+    TYPE: ClassVar[str] = "tts.text_delivery_finished"
+    text: str = ""
+    succeeded: bool = True
+
+
+@dataclass
 class TTSVoiceChange(Event):
     TYPE: ClassVar[str] = "tts.reference_audio_changed"
     voice_name: str = ""

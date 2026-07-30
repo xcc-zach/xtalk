@@ -65,16 +65,20 @@ Configuring `forced_aligner` automatically enables playback calibration; no sepa
 
 ## Play First, Calibrate Later
 
-A forced aligner calibrates the played-text position and must not block audio. The service should immediately send the final, speed-processed PCM while collecting the same audio in the background, then call `async_align` once the complete audio is available.
+A forced aligner calibrates the played-text position and must not block audio. Audio preparation and paced delivery are separate: the producer applies speed processing, enqueues the final PCM for delivery, and publishes `TTSTextSynthesized` with the complete final PCM as soon as synthesis finishes. The playback manager starts `async_align` immediately, while the sender independently drains the queued PCM under playback backpressure and publishes `TTSTextDeliveryFinished` after the segment has been delivered.
 
-No `segment_id` is introduced. Text boundaries, audio chunks, and `TTSChunkPlayed` events must therefore remain strictly FIFO within each session, and audio from different sentences must not be interleaved.
+No `segment_id` is introduced. Preparation boundaries, delivery boundaries, audio chunks, and `TTSChunkPlayed` events remain strictly FIFO within each session, and audio from different segments cannot be interleaved. The playback manager pairs preparation and delivery through two FIFO queues and validates that their text matches. Each prepared segment starts an independent forced-alignment task immediately; there is no per-session alignment concurrency limit, and out-of-order results remain attached to the segment object captured by each task.
 
 ### TTS: Two Calibration Levels
 
-Regular TTS knows the complete sentence before synthesis starts. Its internal queue places a sentence-start marker, audio chunks, and a sentence-end marker in order so the playback manager can determine boundaries.
+Regular TTS knows the complete sentence before synthesis starts. The paced sender publishes `TTSTextSynthesisStarted` when delivery begins and `TTSTextDeliveryFinished` after its sentence-end marker. `TTSTextSynthesized` comes directly from the producer and may arrive before or after delivery starts; strict FIFO pairing binds both event streams to the same playback segment.
 
-1. **Rough calibration**: while audio is being generated, estimate the prefix from the complete text, generated-audio duration, and played-audio duration. Once generation finishes, replace the estimated duration with the actual total duration and continue using the playback ratio.
-2. **Precise calibration**: after the complete sentence audio is available, run the forced aligner in the background and switch to character or word timestamps when it returns.
+| Stage | Audio playback | Active calibration |
+| --- | --- | --- |
+| Sentence synthesis is still in progress | Starts immediately and does not wait for alignment | **L1 rough calibration** using a conservative online estimate |
+| Final PCM is available and forced alignment is running | Continues without interruption | **L1 rough calibration** using `played_ms / total_audio_ms` |
+| Forced alignment is ready | Remains unaffected | **L2 precise calibration** using character or word timestamps |
+| Playback completes before forced alignment | Completes normally | Confirm the complete sentence and cancel its unfinished alignment task |
 
 The open-audio estimate can be conservative:
 
@@ -90,11 +94,13 @@ Count Chinese characters and English words as text units. Attach punctuation to 
 
 ### StreamingTextTTS: Three Calibration Levels
 
-While StreamingTextTTS is active, neither the final text nor the total audio duration is known, but audio chunks should still play immediately. Each session keeps one implicit stream state and accumulates text only after `append_text` accepts it.
+While StreamingTextTTS is active, neither the final text nor the total audio duration is known, but audio chunks still play immediately. Each session keeps one implicit stream state and accumulates text only after `append_text` accepts it. Its audio reader prepares speed-processed PCM independently from paced delivery; when the upstream audio stream ends, it publishes `TTSTextSynthesized` with the complete PCM, switches to the total-duration ratio, and starts forced alignment while queued audio continues to play.
 
-1. **Online estimate**: estimate from the currently accepted text, generated-audio duration, and played-audio duration using the conservative formula above.
-2. **Total-duration ratio**: after the complete audio stream ends, use the complete text and actual total audio duration to calculate `played_ms / total_audio_ms`.
-3. **Precise calibration**: request forced alignment in the background at the same time, then switch to character or word timestamps.
+| Level | Used while | Required information |
+| --- | --- | --- |
+| **L1 online estimate** | The text and audio streams are still being generated | Accepted text, prepared-audio duration, and confirmed played-audio duration |
+| **L2 total-duration ratio** | The complete audio stream is available and forced alignment is running | Complete accepted text, final processed PCM, and actual total audio duration |
+| **L3 precise calibration** | Forced alignment has returned usable units | Character- or word-level timestamps mapped onto the complete text |
 
 The actual total duration must be calculated from the PCM sent to the frontend, not by simply dividing the original duration by playback speed.
 
@@ -103,3 +109,13 @@ The actual total duration must be calculated from the PCM sent to the frontend, 
 `ResponseUpdate` remains monotonic. If precise alignment is ahead, advance immediately. If it is behind the displayed position, do not move backwards; pause progress until the precise timeline catches up.
 
 If alignment fails, continue using the rough result. Complete playback does not need to wait for alignment. On early interruption, prefer an available precise result, briefly wait for an in-flight alignment task, and fall back to the rough prefix on timeout. StreamingTextTTS interrupted before its complete audio is generated normally has only the online estimate unless the service exposes how much input text it has consumed.
+
+### Debugging Frontend Text Updates
+
+Set `XTALK_LOG_LEVEL='xtalk.serving.modules.tts_playback_manager=DEBUG'` to inspect the decision behind every frontend-facing `ResponseUpdate`. Each update is emitted as one log record, for example:
+
+```text
+TTS response update - session: ..., source: regular:L2-precise, mode: regular, level: L2-precise, state: ready, played_ms: 820.0, total_ms: 1600.0, delta: 'text added by this update', text: 'complete displayed prefix'
+```
+
+`source` is `playback-complete` when completing a played segment confirms its remaining text, or `<mode>:<level>` when the active calibration level advances the prefix. An update that crosses a segment boundary can contain both sources joined by `+`. The defensive `final-commit` source is used only when a final fallback update cannot be attributed to either case. `delta` and `text` use escaped string representations, so embedded line breaks remain within one physical log line. These fields can contain conversation content and should only be enabled when needed for debugging.
