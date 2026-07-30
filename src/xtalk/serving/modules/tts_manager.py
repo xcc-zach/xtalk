@@ -183,6 +183,7 @@ class TTSManager(Manager):
         """Forward incremental text to the active streaming TTS model."""
         if self._streaming_tts is None:
             return
+        prepared_audio_ms = max(0.0, self._streaming_audio_duration_ms)
         logger.debug(
             "[realtime-tts-race] stage=append_upstream_begin "
             "session=%s chunk_chars=%d buffered_chars=%d",
@@ -213,6 +214,7 @@ class TTSManager(Manager):
             TTSStreamingTextAccepted(
                 session_id=self.session_id,
                 text=text,
+                prepared_audio_ms=prepared_audio_ms,
             ),
             wait_for_completion=True,
         )

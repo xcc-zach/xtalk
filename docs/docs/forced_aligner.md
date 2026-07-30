@@ -96,6 +96,10 @@ Count Chinese characters and English words as text units. Attach punctuation to 
 
 While StreamingTextTTS is active, neither the final text nor the total audio duration is known, but audio chunks still play immediately. Each session keeps one implicit stream state and accumulates text only after `append_text` accepts it. Its audio reader prepares speed-processed PCM independently from paced delivery; when the upstream audio stream ends, it publishes `TTSTextSynthesized` with the complete PCM, switches to the total-duration ratio, and starts forced alignment while queued audio continues to play.
 
+Each accepted text increment carries the duration of speed-processed PCM already prepared before that increment is forwarded. L1 converts only the new increment into immutable timing units anchored no earlier than that prepared-audio watermark, the already emitted or played audio, and the previous unit's end. Accepting text alone cannot advance `ResponseUpdate`; a unit becomes visible only after confirmed playback crosses its fixed end time plus the safety lag. Later text therefore cannot redistribute previously played time across an expanded text buffer.
+
+StreamingTextTTS L1 uses fixed conservative estimates of 280 ms per Chinese character, 380 ms per English word, 160 ms per punctuation mark, and a 300 ms playback safety lag.
+
 | Level | Used while | Required information |
 | --- | --- | --- |
 | **L1 online estimate** | The text and audio streams are still being generated | Accepted text, prepared-audio duration, and confirmed played-audio duration |
