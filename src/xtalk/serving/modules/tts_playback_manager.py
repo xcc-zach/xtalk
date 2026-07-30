@@ -21,6 +21,7 @@ from ..events import (
     TTSPlaybackStopped,
     TTSStopped,
     TTSStreamingTextAccepted,
+    TTSTextDeliveryFinished,
     TTSTextSynthesisStarted,
     TTSTextSynthesized,
 )
@@ -58,6 +59,7 @@ class _PlaybackSegment:
     played_audio_ms: float = 0.0
     audio_sample_rate: int | None = None
     audio_parts: list[bytes] = field(default_factory=list)
+    audio_prepared: bool = False
     alignment_audio_valid: bool = True
     alignment_state: str = "collecting"
     alignment_units: list[ForcedAlignmentUnit] = field(default_factory=list)
@@ -102,6 +104,8 @@ class TTSPlaybackManager(Manager):
         self._current_response_text = ""
         self._pending_text = ""
         self._segments: deque[_PlaybackSegment] = deque()
+        self._started_waiting_for_preparation: deque[_PlaybackSegment] = deque()
+        self._prepared_waiting_for_start: deque[_PlaybackSegment] = deque()
         self._generated_chunk_ms: deque[float] = deque()
         self._unassigned_audio_chunks: deque[_AudioChunk] = deque()
         self._collecting_segment: _PlaybackSegment | None = None
@@ -111,7 +115,6 @@ class TTSPlaybackManager(Manager):
         self._awaiting_stop_ack = False
         self._turn_id = 0
         self._played_without_segment_ms = 0.0
-        self._prebound_audio_ms = 0.0
         self._completed_text = ""
         self._reported_text = ""
         self._received_audio = False
@@ -125,12 +128,13 @@ class TTSPlaybackManager(Manager):
         self._cancel_stop_commit_task()
         self._cancel_alignment_tasks()
         self._segments.clear()
+        self._started_waiting_for_preparation.clear()
+        self._prepared_waiting_for_start.clear()
         self._generated_chunk_ms.clear()
         self._unassigned_audio_chunks.clear()
         self._collecting_segment = None
         self._streaming_segment = None
         self._played_without_segment_ms = 0.0
-        self._prebound_audio_ms = 0.0
         self._completed_text = ""
         self._reported_text = ""
         self._received_audio = False
@@ -158,24 +162,39 @@ class TTSPlaybackManager(Manager):
 
     @Manager.event_handler(TTSTextSynthesisStarted, priority=20)
     async def _start_text_segment(self, event: TTSTextSynthesisStarted) -> None:
-        """Open one regular TTS segment before its first audio chunk."""
+        """Bind the next FIFO regular TTS segment to paced audio delivery."""
 
         text = event.text or ""
         if not text:
             return
         if self._collecting_segment is not None:
             logger.warning(
-                "TTS sentence started before the prior sentence ended - session: %s",
+                "TTS sentence started before the prior delivery ended - session: %s",
                 self.session_id,
             )
+            self._reset_playback_tracking()
             return
 
-        segment = _PlaybackSegment(
-            text=text,
-            turn_id=self._turn_id,
-            tts_mode="regular",
-        )
-        self._segments.append(segment)
+        if self._prepared_waiting_for_start:
+            segment = self._prepared_waiting_for_start.popleft()
+            if not self._validate_paired_text(segment, text, "delivery start"):
+                return
+        else:
+            if self._started_waiting_for_preparation:
+                logger.warning(
+                    "TTS delivery start overtook prepared audio - session: %s",
+                    self.session_id,
+                )
+                self._reset_playback_tracking()
+                return
+            segment = _PlaybackSegment(
+                text=text,
+                turn_id=self._turn_id,
+                tts_mode="regular",
+            )
+            self._segments.append(segment)
+            self._started_waiting_for_preparation.append(segment)
+
         self._collecting_segment = segment
         self._attach_unassigned_audio(segment)
         await self._apply_pending_playback_time()
@@ -215,10 +234,6 @@ class TTSPlaybackManager(Manager):
             return
         self._received_audio = True
         self._generated_chunk_ms.append(chunk_ms)
-        if self._prebound_audio_ms > 1e-6:
-            self._prebound_audio_ms = max(0.0, self._prebound_audio_ms - chunk_ms)
-            return
-
         chunk = _AudioChunk(
             audio_chunk=event.audio_chunk,
             sample_rate=event.sample_rate,
@@ -232,54 +247,137 @@ class TTSPlaybackManager(Manager):
         await self._publish_progress_if_grew()
 
     @Manager.event_handler(TTSTextSynthesized, priority=20)
-    async def _close_text_segment(self, event: TTSTextSynthesized) -> None:
-        """Close the current FIFO segment and start background alignment."""
+    async def _prepare_text_segment(self, event: TTSTextSynthesized) -> None:
+        """Bind complete final PCM and start alignment without waiting for delivery."""
 
         text = event.text or ""
         if not text:
             return
 
+        if self._streaming_segment is not None:
+            segment = self._streaming_segment
+            segment.text = text
+        else:
+            if (
+                self._started_waiting_for_preparation
+                and self._prepared_waiting_for_start
+            ):
+                logger.warning(
+                    "TTS FIFO preparation state became ambiguous - session: %s",
+                    self.session_id,
+                )
+                self._reset_playback_tracking()
+                return
+            if self._started_waiting_for_preparation:
+                segment = self._started_waiting_for_preparation.popleft()
+                if not self._validate_paired_text(segment, text, "PCM preparation"):
+                    return
+            else:
+                segment = _PlaybackSegment(
+                    text=text,
+                    turn_id=self._turn_id,
+                    tts_mode="regular",
+                )
+                self._segments.append(segment)
+                self._prepared_waiting_for_start.append(segment)
+
+        await self._apply_prepared_audio(segment, event)
+
+    @Manager.event_handler(TTSTextDeliveryFinished, priority=20)
+    async def _finish_text_delivery(
+        self,
+        event: TTSTextDeliveryFinished,
+    ) -> None:
+        """Close the current FIFO delivery without delaying audio preparation."""
+
         segment = self._collecting_segment or self._streaming_segment
         if segment is None:
-            segment = _PlaybackSegment(
-                text=text,
-                turn_id=self._turn_id,
-                tts_mode="regular",
+            logger.warning(
+                "TTS delivery finished without an active segment - session: %s",
+                self.session_id,
             )
-            self._segments.append(segment)
-            self._attach_unassigned_audio(segment)
-        segment.text = text
+            return
+        if not self._validate_paired_text(segment, event.text or "", "delivery end"):
+            return
 
-        preloaded_audio = event.audio_chunk or b""
-        preloaded_sample_rate = int(event.sample_rate or 0)
-        if (
-            preloaded_audio
-            and preloaded_sample_rate > 0
-            and segment.generated_audio_ms <= 1e-6
-        ):
-            preloaded_duration_ms = self._chunk_duration_ms(
-                audio_chunk=preloaded_audio,
-                sample_rate=preloaded_sample_rate,
-            )
-            self._attach_audio_chunk(
-                segment,
-                _AudioChunk(
-                    audio_chunk=preloaded_audio,
-                    sample_rate=preloaded_sample_rate,
-                    duration_ms=preloaded_duration_ms,
-                ),
-            )
-            self._prebound_audio_ms += preloaded_duration_ms
+        if segment is self._collecting_segment:
+            self._collecting_segment = None
+        if segment is self._streaming_segment:
+            self._streaming_segment = None
 
-        total_audio_ms = segment.generated_audio_ms
-        if total_audio_ms <= 0.0:
-            total_audio_ms = max(0.0, float(event.audio_duration or 0.0))
+        if not event.succeeded:
+            self._discard_segment(segment)
+        await self._apply_pending_playback_time()
+        await self._publish_progress_if_grew()
+
+    def _validate_paired_text(
+        self,
+        segment: _PlaybackSegment,
+        text: str,
+        phase: str,
+    ) -> bool:
+        """Validate strict FIFO text pairing and reset unsafe state on mismatch."""
+
+        if segment.text == text:
+            return True
+        logger.warning(
+            "TTS FIFO text mismatch - session: %s, phase: %s, "
+            "expected_length: %s, actual_length: %s",
+            self.session_id,
+            phase,
+            len(segment.text),
+            len(text),
+        )
+        self._reset_playback_tracking()
+        return False
+
+    async def _apply_prepared_audio(
+        self,
+        segment: _PlaybackSegment,
+        event: TTSTextSynthesized,
+    ) -> None:
+        """Attach complete final PCM and start precise alignment immediately."""
+
+        prepared_audio = event.audio_chunk or b""
+        prepared_sample_rate = int(event.sample_rate or 0)
+        if prepared_audio:
+            if prepared_sample_rate <= 0:
+                logger.warning(
+                    "Ignoring prepared TTS audio without a sample rate - session: %s",
+                    self.session_id,
+                )
+                self._discard_segment(segment)
+                return
+            if (
+                segment.audio_sample_rate is not None
+                and segment.audio_sample_rate != prepared_sample_rate
+            ):
+                segment.alignment_audio_valid = False
+                logger.warning(
+                    "TTS prepared audio changed sample rate - session: %s, "
+                    "expected: %s, got: %s",
+                    self.session_id,
+                    segment.audio_sample_rate,
+                    prepared_sample_rate,
+                )
+            segment.audio_sample_rate = prepared_sample_rate
+            segment.audio_parts = [prepared_audio]
+            segment.audio_prepared = True
+            total_audio_ms = self._chunk_duration_ms(
+                audio_chunk=prepared_audio,
+                sample_rate=prepared_sample_rate,
+            )
+        else:
+            total_audio_ms = segment.generated_audio_ms
+            if total_audio_ms <= 0.0:
+                total_audio_ms = max(0.0, float(event.audio_duration or 0.0))
+
         if total_audio_ms <= 0.0 or not segment.audio_sample_rate:
             logger.warning(
                 "Ignoring synthesized TTS text without audio - session: %s, "
                 "text_length: %s",
                 self.session_id,
-                len(text),
+                len(segment.text),
             )
             self._discard_segment(segment)
             return
@@ -290,11 +388,6 @@ class TTSPlaybackManager(Manager):
         else:
             segment.alignment_state = "disabled"
             segment.audio_parts.clear()
-
-        if segment is self._collecting_segment:
-            self._collecting_segment = None
-        if segment is self._streaming_segment:
-            self._streaming_segment = None
 
         self._try_start_segment_alignment(segment)
         await self._apply_pending_playback_time()
@@ -339,20 +432,36 @@ class TTSPlaybackManager(Manager):
             )
 
         segment.generated_audio_ms += chunk.duration_ms
-        if self._forced_alignment_enabled and segment.alignment_audio_valid:
+        if (
+            self._forced_alignment_enabled
+            and segment.alignment_audio_valid
+            and not segment.audio_prepared
+        ):
             segment.audio_parts.append(chunk.audio_chunk)
 
     def _discard_segment(self, segment: _PlaybackSegment) -> None:
-        """Discard an empty segment without treating its text as played."""
+        """Discard an unusable segment without treating its text as played."""
 
         if segment is self._collecting_segment:
             self._collecting_segment = None
         if segment is self._streaming_segment:
             self._streaming_segment = None
-        try:
+        self._remove_segment_from_pairing_queues(segment)
+        if segment in self._segments:
             self._segments.remove(segment)
-        except ValueError:
-            pass
+        if segment.alignment_task is not None and not segment.alignment_task.done():
+            segment.alignment_task.cancel()
+
+    def _remove_segment_from_pairing_queues(
+        self,
+        segment: _PlaybackSegment,
+    ) -> None:
+        """Remove one segment from either side of FIFO preparation pairing."""
+
+        if segment in self._started_waiting_for_preparation:
+            self._started_waiting_for_preparation.remove(segment)
+        if segment in self._prepared_waiting_for_start:
+            self._prepared_waiting_for_start.remove(segment)
 
     def _build_reported_text(self) -> str:
         """Return the current played text prefix across completed and active segments."""
@@ -700,6 +809,7 @@ class TTSPlaybackManager(Manager):
             return
         self._segments.popleft()
         self._completed_text += segment.text
+        self._remove_segment_from_pairing_queues(segment)
         segment.audio_parts.clear()
         if segment is self._collecting_segment:
             self._collecting_segment = None
@@ -714,11 +824,62 @@ class TTSPlaybackManager(Manager):
         played_text = self._build_reported_text()
         if len(played_text) <= len(self._reported_text):
             return
-        self._reported_text = played_text
+        await self._emit_response_update(played_text)
+
+    async def _emit_response_update(self, text: str) -> None:
+        """Publish and log one frontend-facing played-text update."""
+
+        previous_text = self._reported_text
+        previous_length = len(previous_text)
+        completed_length = min(len(self._completed_text), len(text))
+        segment = self._segments[0] if self._segments else None
+        sources: list[str] = []
+
+        if previous_length < completed_length:
+            sources.append("playback-complete")
+
+        active_prefix_start = max(previous_length, completed_length)
+        if segment is not None and len(text) > active_prefix_start:
+            mode = segment.tts_mode
+            level = self._alignment_level(segment)
+            state = segment.alignment_state
+            played_ms = f"{segment.played_audio_ms:.1f}"
+            total_ms = (
+                f"{segment.total_audio_ms:.1f}"
+                if segment.total_audio_ms is not None
+                else "n/a"
+            )
+            sources.append(f"{mode}:{level}")
+        else:
+            mode = "n/a"
+            level = "n/a"
+            state = "n/a"
+            played_ms = "n/a"
+            total_ms = "n/a"
+
+        if not sources:
+            sources.append("final-commit")
+
+        delta = text[previous_length:] if text.startswith(previous_text) else text
+        self._reported_text = text
+        logger.debug(
+            "TTS response update - session: %s, source: %s, mode: %s, "
+            "level: %s, state: %s, played_ms: %s, total_ms: %s, "
+            "delta: %r, text: %r",
+            self.session_id,
+            "+".join(sources),
+            mode,
+            level,
+            state,
+            played_ms,
+            total_ms,
+            delta,
+            text,
+        )
         await self.event_bus.publish(
             ResponseUpdate(
                 session_id=self.session_id,
-                text=played_text,
+                text=text,
             )
         )
 
@@ -839,13 +1000,7 @@ class TTSPlaybackManager(Manager):
         """Publish the final playback-confirmed text for the active turn."""
 
         if self._reported_text != text:
-            await self.event_bus.publish(
-                ResponseUpdate(
-                    session_id=self.session_id,
-                    text=text,
-                )
-            )
-            self._reported_text = text
+            await self._emit_response_update(text)
         await self.event_bus.publish(
             ResponseFinish(
                 session_id=self.session_id,
