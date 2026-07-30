@@ -78,13 +78,23 @@ curl -X POST http://127.0.0.1:18714/v1/audio/transcriptions \
 
 ## 2. 启动官方 vLLM runtime
 
-`scripts/mtd_runtime/server.py` 在进程内加载官方 vLLM engine，并额外处理注册说话人的固定 decoder prefix、时间戳解析和 exemplar 区间裁剪。使用该入口时不需要再单独执行 `vllm serve`。
+`scripts/mtd_runtime/server.py` 在进程内加载官方 vLLM `AsyncLLM`
+engine，并额外处理注册说话人的固定 decoder prefix、时间戳解析和
+exemplar 区间裁剪。使用该入口时不需要再单独执行 `vllm
+serve`。
+
+runtime 不再用全局 decode lock 包住 `LLM.generate()`。不同 X-Talk session
+使用各自的 `OfficialMtdClient` HTTP session，但请求共享同一个
+`AsyncLLM` engine，由 vLLM 进行跨 session 调度和动态 batching。单个
+X-Talk session 内的 manager 仍按顺序处理 snapshot，因此 partial/final revision
+顺序不变。
 
 ```bash
 python scripts/mtd_runtime/server.py \
   --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
   --host 127.0.0.1 \
-  --port 18604
+  --port 18604 \
+  --max-num-seqs 8
 ```
 
 如果权重已经下载到本地，可以将 `--model` 替换为权重目录。服务启动后检查健康状态：
@@ -92,6 +102,12 @@ python scripts/mtd_runtime/server.py \
 ```bash
 curl http://127.0.0.1:18604/health
 ```
+
+`--max-num-seqs` 限制同时由 engine 调度的 sequence 数，应根据 GPU
+显存、最大输入长度和实际并发量调整。`/health` 返回
+`active_requests` 和进程生命周期内的 `max_active_requests`，可用于确认
+并发请求确实进入 engine。取消请求时，runtime 会调用
+`AsyncLLM.abort(request_id)`，而不只是在解码完成后丢弃结果。
 
 ## 3. 配置 X-Talk
 
@@ -187,3 +203,43 @@ SGLang-Omni 的原生 transcription API 不接收固定 decoder completion prefi
 - `SpeakerDiarizationSegmentFinal`、`SpeakerDiarizationTurnFinal` 和 `MultiSpeakerTurnReady` 均正常发布，没有出现 `UNKNOWN`，final 没有阻塞。
 
 上述结果是在服务完成 warmup 后测得。冷启动首次请求不应计入在线时延。
+
+## 6. AsyncLLM 并发验证与后端对比口径
+
+在单张 RTX 4090 上，使用 20 秒 AISHELL-4 会议音频快照、
+`--max-num-seqs 8` 和已 warmup 服务实测：
+
+| 测试 | 串行 wall time | AsyncLLM 并发 wall time | 并发时单请求范围 | 结果 |
+| --- | ---: | ---: | ---: | --- |
+| 2 路 | 3.143 s | 1.582 s | 1.544–1.576 s | `max_active_requests=2` |
+| 4 路 | 6.186 s | 1.891 s | 1.557–1.869 s | `max_active_requests=4` |
+| 8 路 | 12.280 s | 1.885 s | 1.507–1.843 s | `max_active_requests=8` |
+
+8 路时吞吐约为 4.24 requests/s。两个真实
+`OfficialMtdClient.clone()` 客户端同时提交请求的 wall time 为 1.606 s，
+说明 X-Talk 的 session clone 链路也能进入同一 engine 并发执行。取消一个
+120 秒请求时，`DELETE` 在 1.5 ms 内返回 `202`，被取消的 decode
+在 0.478 s 时返回 `409`，同时运行的 20 秒请求仍在 1.684 s 正常完成。
+
+为了修正原后端对比口径，又在同一台机器的两张同型号 RTX 4090 上，
+固定相同的 4 段 20 秒音频、相同 prompt、`max_tokens=512` 和 warmup
+状态，分别运行 AsyncLLM 与 SGLang-Omni：
+
+| 并发度 | AsyncLLM wall time | SGLang-Omni wall time | SGLang-Omni wall-time 优势 |
+| ---: | ---: | ---: | ---: |
+| 串行 4 路 | 6.162 s | 1.363 s | 4.52× |
+| 2 路 | 1.563 s | 0.341 s | 4.59× |
+| 4 路 | 1.800 s | 0.409 s | 4.40× |
+| 8 路 | 1.827 s | 0.428 s | 4.27× |
+
+8 路串行的参考值为 AsyncLLM 12.280 s、SGLang-Omni 2.622 s。四段
+音频中三段的 raw output 完全相同；剩余一段仅有末尾时间戳
+`19.99` 与 `19.98` 的 10 ms 差异，转录文本和 speaker tag 一致。这只能用于
+验证本次 runtime 改造的输出一致性，不是数据集级准确率评测。
+
+因此，旧结论需要局部修正：SGLang-Omni 在当前部署参数下的单请求与并发
+速度优势仍然成立；“vLLM 的不同 session 会被 runtime 全局锁串行化”已不再
+成立。AsyncLLM 解决的主要是跨 session 排队、batching 和真正 abort，它没有
+消除两个引擎的单请求算子与图优化差距。当前 vLLM 测试启用
+`enforce_eager`，SGLang-Omni 则使用 batch 1/2/4/8 CUDA Graph，所以这组数字代表
+当前推荐部署配置，不是排除所有优化变量后的纯框架微基准。
