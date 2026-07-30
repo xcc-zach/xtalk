@@ -139,6 +139,9 @@ class LatencyManager(EventListenerMixin):
     @Manager.event_handler(VADSpeechStart, priority=50)
     async def _on_vad_start(self, event: VADSpeechStart) -> None:
         """Reset per-turn timing when VAD starts."""
+        if event.origin != "client":
+            self._frontend_vad_start_ts = None
+            self._backend_vad_start_ts = None
         self._vad_end_ts = None
         self._backend_vad_end_recv_ts = None
         self._asr_final_ts = None

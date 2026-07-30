@@ -10,8 +10,10 @@ from ..events import (
     EnhancedAudioFrameReceived,
     Event,
     TurnASREndRequested,
+    TurnInputAbortRequested,
     TurnASRPauseRequested,
     TurnASRStartRequested,
+    VADSpeechEnd,
 )
 from ..interfaces import Manager
 
@@ -87,6 +89,7 @@ class AudioConsumer:
         # Cache for recognition used in _recognize_and_publish
         self._recognized_text = ""
         self._turn_chat_history: str | None = None
+        self._recognition_generation = 0
         # Assume PCM 16bit mono
         bytes_per_second = self.SAMPLE_RATE * 1 * (16 // 8)
         # Store audio before ASR starts; make sure ASR do not leave alone the first words
@@ -164,6 +167,18 @@ class AudioConsumer:
             )
             await self._reset_states()
 
+    async def abort(self) -> None:
+        """Discard the unfinished audio turn without publishing ASR results."""
+        self._invalidate_recognition()
+        async with self._lifecycle_lock:
+            # Also invalidate work that may have started while waiting for the
+            # lifecycle lock held by pause/end finalization.
+            self._invalidate_recognition()
+            self._ended = True
+            self._paused = False
+            await self._stop_consumer()
+            await self._reset_states()
+
     async def _audio_consumer(self):
         while True:
             self._consumer_idle_event.set()
@@ -192,6 +207,10 @@ class AudioConsumer:
     def _consumer_running(self):
         return self._consumer_running_event.is_set()
 
+    def _invalidate_recognition(self) -> None:
+        """Prevent recognition calls already in flight from publishing."""
+        self._recognition_generation += 1
+
     def _start_consumer(self):
         self._consumer_running_event.set()
 
@@ -209,6 +228,7 @@ class AudioConsumer:
         # is_final_chunk means whether user has a pause on his speech, passed on to ASRResultPartial
         if is_asr_end and not is_final_chunk:
             raise ValueError("ASR ends but chunk is not final chunk")
+        recognition_generation = self._recognition_generation
         recognized_text = self._recognized_text
         if len(audio) > 0 or is_final_chunk:
             recognized_text = await self._asr_model.async_recognize_stream(
@@ -216,6 +236,8 @@ class AudioConsumer:
                 is_final=is_final_chunk,
                 chat_history=self._turn_chat_history,
             )
+        if recognition_generation != self._recognition_generation:
+            return
         if (
             is_asr_end
             and self._is_blank_text(recognized_text)
@@ -298,22 +320,51 @@ class ASRManager(Manager):
     ):
         self.event_bus = event_bus
         self._audio_consumer = AudioConsumer(event_bus, session_id, models, config)
+        self._text_turn_active = False
+        self._input_lock = asyncio.Lock()
 
     @Manager.event_handler(EnhancedAudioFrameReceived)
     async def _handle_audio_frame(self, event: EnhancedAudioFrameReceived):
-        audio_frame = event.audio_data
-        await self._audio_consumer.accept_audio_frame(audio_frame)
+        async with self._input_lock:
+            if self._text_turn_active:
+                return
+            audio_frame = event.audio_data
+            await self._audio_consumer.accept_audio_frame(audio_frame)
+
+    @Manager.event_handler(TurnInputAbortRequested, priority=100)
+    async def _handle_input_abort(self, event: TurnInputAbortRequested) -> None:
+        """Discard acoustic input before a synthetic text turn begins."""
+        if event.origin != "text":
+            return
+        self._text_turn_active = True
+        self._audio_consumer._invalidate_recognition()
+        async with self._input_lock:
+            await self._audio_consumer.abort()
+
+    @Manager.event_handler(VADSpeechEnd, priority=100)
+    async def _handle_text_vad_end(self, event: VADSpeechEnd) -> None:
+        """Resume accepting microphone frames after a synthetic text turn."""
+        if event.origin != "text":
+            return
+        async with self._input_lock:
+            self._text_turn_active = False
 
     @Manager.event_handler(TurnASRStartRequested)
     async def _handle_asr_start(self, _):
+        if self._text_turn_active:
+            return
         await self._audio_consumer.start()
 
     @Manager.event_handler(TurnASREndRequested)
     async def _handle_asr_end(self, _):
+        if self._text_turn_active:
+            return
         await self._audio_consumer.end()
 
     @Manager.event_handler(TurnASRPauseRequested)
     async def _handle_asr_pause(self, _):
+        if self._text_turn_active:
+            return
         await self._audio_consumer.pause()
 
     async def shutdown(self):

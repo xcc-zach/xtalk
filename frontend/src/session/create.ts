@@ -17,6 +17,28 @@ export { createSession };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAYS_MS = [0, 1000, 2000, 5000, 5000];
+const MAX_TEXT_INPUT_CHARACTERS = 2048;
+const TEXT_INPUT_RECEIPT_TIMEOUT_MS = 10000;
+
+type FinishASRData = {
+    text: string;
+    origin: string;
+};
+
+function isMatchingFinishASRData(
+    data: unknown,
+    normalizedText: string,
+): data is FinishASRData {
+    return (
+        typeof data === "object"
+        && data !== null
+        && "text" in data
+        && typeof data.text === "string"
+        && data.text === normalizedText
+        && "origin" in data
+        && data.origin === "text"
+    );
+}
 
 /**
  * Creates a session client bound to the provided websocket endpoint.
@@ -78,6 +100,9 @@ function createSession(
         getAccessToken: authController.getAccessToken,
         inputConfig: resolvedInputConfig,
         onUnexpectedDisconnect: () => {
+            cancelPendingText(
+                new Error("Session disconnected before text confirmation"),
+            );
             if (manualCloseRequested || pendingOpen || reconnectPromise) {
                 return;
             }
@@ -113,6 +138,13 @@ function createSession(
     let reconnectPromise: Promise<void> | null = null;
     let canRetryRuntimeAfterRestoredAuth = restoredSnapshot?.accessToken != null;
     let manualCloseRequested = false;
+    let pendingTextCancel: ((reason?: unknown) => void) | null = null;
+
+    function cancelPendingText(reason: unknown): void {
+        const cancel = pendingTextCancel;
+        pendingTextCancel = null;
+        cancel?.(reason);
+    }
 
     function shouldAutoReconnect(): boolean {
         return (
@@ -128,6 +160,7 @@ function createSession(
     }
 
     async function openRuntime(): Promise<void> {
+        cancelPendingText(new Error("Session reopened before text confirmation"));
         await authController.ensureLoggedIn();
         await runtimeController.close();
         try {
@@ -218,6 +251,7 @@ function createSession(
         },
         async close() {
             manualCloseRequested = true;
+            cancelPendingText(new Error("Session closed before text confirmation"));
             await runtimeController.close();
             conversation.state.connectionState = "disconnected";
         },
@@ -249,6 +283,54 @@ function createSession(
                 runtime.outputAudioSession,
             );
         },
+        async sendText(text: string) {
+            const normalizedText = text.trim();
+            if (!normalizedText) {
+                throw new Error("Text input must not be blank");
+            }
+            if (normalizedText.length > MAX_TEXT_INPUT_CHARACTERS) {
+                throw new Error(
+                    `Text input must not exceed ${MAX_TEXT_INPUT_CHARACTERS} characters`,
+                );
+            }
+            if (conversation.state.connectionState !== "connected") {
+                throw new Error("Session is not connected");
+            }
+            if (pendingTextCancel) {
+                throw new Error("Another text input is awaiting confirmation");
+            }
+
+            const runtime = runtimeController.requireRuntime();
+            const receipt = actionHandler.waitForActionMatching<FinishASRData>(
+                "finish_asr",
+                (data) => isMatchingFinishASRData(data, normalizedText),
+            );
+            pendingTextCancel = receipt.cancel;
+            const timeoutId = globalThis.setTimeout(() => {
+                receipt.cancel(new Error("Timed out waiting for text confirmation"));
+            }, TEXT_INPUT_RECEIPT_TIMEOUT_MS);
+
+            try {
+                await Promise.all([
+                    actionHandler.handleAction(
+                        "client_submit_text",
+                        { text: normalizedText },
+                        runtime.websocket,
+                        conversation,
+                        runtime.outputAudioSession,
+                    ),
+                    receipt.promise,
+                ]);
+            } catch (error) {
+                receipt.cancel(error);
+                throw error;
+            } finally {
+                globalThis.clearTimeout(timeoutId);
+                if (pendingTextCancel === receipt.cancel) {
+                    pendingTextCancel = null;
+                }
+            }
+        },
         async uploadFile(file: Blob, endpoint?: string | URL) {
             await sessionAPI.uploadFile(file, endpoint);
         },
@@ -256,6 +338,9 @@ function createSession(
             return await sessionAPI.getSessions();
         },
         async switchSession(sessionId: string | null) {
+            cancelPendingText(
+                new Error("Session switched before text confirmation"),
+            );
             await sessionAPI.switchSession(sessionId);
         },
         set muted(value: boolean) {
