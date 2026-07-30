@@ -46,7 +46,7 @@ class MossTTSRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 "type": "started",
                 "session_id": start_event["session_id"],
                 "audio_codec": "pcm_s16le",
-                "sample_rate": 24000,
+                "sample_rate": 48000,
                 "channels": 1,
             }
         )
@@ -85,7 +85,7 @@ class MossTTSRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(client, StreamingTextTTS)
 
         await client.start()
-        self.assertEqual(client.output_sample_rate, 24000)
+        self.assertEqual(client.output_sample_rate, 48000)
         await client.append_text("你好")
         await client.append_text("，世界")
         await client.flush()

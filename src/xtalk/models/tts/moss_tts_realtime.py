@@ -76,12 +76,12 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
 
     Notes
     -----
-    The service emits mono signed 16-bit little-endian PCM at 24 kHz. The
+    The service emits mono signed 16-bit little-endian PCM at 48 kHz. The
     ``output_sample_rate`` attribute is updated from the server's ``started``
     event so xtalk publishes audio with the correct rate.
     """
 
-    output_sample_rate = 24000
+    output_sample_rate = 48000
 
     def __init__(
         self,
@@ -257,7 +257,7 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
         Returns
         -------
         bytes
-            Concatenated mono PCM S16LE audio at 24 kHz.
+            Concatenated mono PCM S16LE audio at 48 kHz.
 
         Raises
         ------
@@ -286,7 +286,7 @@ class MossTTSRealtime(TTS, StreamingTextTTS):
         Returns
         -------
         bytes
-            Concatenated mono PCM S16LE audio at 24 kHz.
+            Concatenated mono PCM S16LE audio at 48 kHz.
         """
         del kwargs
         client = self.clone()
