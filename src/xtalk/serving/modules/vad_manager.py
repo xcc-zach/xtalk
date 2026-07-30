@@ -19,6 +19,7 @@ Notes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -27,6 +28,7 @@ from ...models import VAD, Models
 from ..event_bus import EventBus
 from ..events import (
     EnhancedAudioFrameReceived,
+    TurnInputAbortRequested,
     VADSpeechEnd,
     VADSpeechStart,
 )
@@ -82,6 +84,8 @@ class VADManager(Manager):
         # Buffer until enough data for a full frame
         self._buf = bytearray()
         self._st = _VadState()
+        self._state_lock = asyncio.Lock()
+        self._text_turn_active = False
 
     # ----------------------------
     # Event handling
@@ -90,30 +94,51 @@ class VADManager(Manager):
     async def _on_audio_frame(self, event: EnhancedAudioFrameReceived) -> None:
         """Process audio frames and run backend VAD when enabled."""
         try:
-            if self.vad is None:
-                return
+            async with self._state_lock:
+                if self.vad is None or self._text_turn_active:
+                    return
 
-            if not event.audio_data:
-                return
+                if not event.audio_data:
+                    return
 
-            # Accumulate and slice into fixed-length frames
-            self._buf.extend(event.audio_data)
-            frame_bytes = self.frame_samples * self.bytes_per_sample
+                # Accumulate and slice into fixed-length frames
+                self._buf.extend(event.audio_data)
+                frame_bytes = self.frame_samples * self.bytes_per_sample
 
-            while len(self._buf) >= frame_bytes:
-                frame = bytes(self._buf[:frame_bytes])
-                del self._buf[:frame_bytes]
+                while len(self._buf) >= frame_bytes:
+                    frame = bytes(self._buf[:frame_bytes])
+                    del self._buf[:frame_bytes]
 
-                try:
-                    is_speech = bool(await self.vad.async_is_speech(frame))
-                except Exception as e:
-                    logger.error("[VADManager] VAD error: %s", e)
-                    is_speech = False
+                    try:
+                        is_speech = bool(await self.vad.async_is_speech(frame))
+                    except Exception as e:
+                        logger.error("[VADManager] VAD error: %s", e)
+                        is_speech = False
 
-                await self._advance_state(is_speech)
+                    await self._advance_state(is_speech)
 
         except Exception as e:
             logger.error("[VADManager] handle frame failed: %s", e)
+
+    @Manager.event_handler(TurnInputAbortRequested, priority=110)
+    async def _on_input_abort(self, event: TurnInputAbortRequested) -> None:
+        """Suppress and clear acoustic VAD state for a synthetic text turn."""
+        if event.origin != "text":
+            return
+        async with self._state_lock:
+            self._text_turn_active = True
+            self._clear_detection_state()
+            if self.vad is not None:
+                self.vad.reset()
+
+    @Manager.event_handler(VADSpeechEnd, priority=110)
+    async def _on_text_vad_end(self, event: VADSpeechEnd) -> None:
+        """Resume acoustic VAD after a synthetic text boundary completes."""
+        if event.origin != "text":
+            return
+        async with self._state_lock:
+            self._clear_detection_state()
+            self._text_turn_active = False
 
     async def _advance_state(self, is_speech: bool) -> None:
         """Advance the state machine and emit start/end events based on durations."""
@@ -151,11 +176,18 @@ class VADManager(Manager):
         )
         await self.event_bus.publish(evt, wait_for_completion=True)
 
+    def _clear_detection_state(self) -> None:
+        """Clear buffered audio and duration-smoothing state."""
+        self._buf.clear()
+        self._st = _VadState()
+
     # ----------------------------
     # Lifecycle
     # ----------------------------
     async def shutdown(self) -> None:  # type: ignore[override]
         """Reset VAD state and release any remote session resources."""
+        self._text_turn_active = False
+        self._clear_detection_state()
         if self.vad is not None:
             try:
                 self.vad.reset()

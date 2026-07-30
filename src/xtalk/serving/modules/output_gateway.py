@@ -154,10 +154,20 @@ class OutputGateway(EventListenerMixin):
 
     # ── Shared helpers ──────────────────────────────────────────────
 
-    async def _forward_asr(self, action: str, event) -> None:
+    async def _forward_asr(
+        self,
+        action: str,
+        event: ASRResultPartial | ASRResultFinal,
+    ) -> None:
         """Forward an ASR result (partial or final) to the frontend."""
         display_text = event.display_text or event.text
-        await self._forward(action, {"text": display_text})
+        await self._forward(
+            action,
+            {
+                "text": display_text,
+                "origin": event.origin,
+            },
+        )
 
     # ── Session ─────────────────────────────────────────────────────
 

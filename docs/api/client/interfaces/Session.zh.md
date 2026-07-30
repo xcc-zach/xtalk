@@ -140,7 +140,7 @@
 
 > **getSessions**(): `Promise`&lt;`SessionSummary`[]&gt;
 
-定义于: `session/types.ts:143`
+定义于: `session/types.ts:152`
 
 获取当前用户可用的持久化会话。
 
@@ -252,11 +252,35 @@
 
 ***
 
+### sendText()
+
+> **sendText**(`text`): `Promise`&lt;`void`&gt;
+
+定义于: `session/types.ts:141`
+
+通过已连接的实时会话提交一个已结束的文本回合。
+
+当 `finish_asr` 以 `origin="text"` 回显规范化文本后，该 Promise resolve。
+
+#### 参数
+
+##### text
+
+`string`
+
+用户为下一个回合输入的文本。
+
+#### 返回
+
+`Promise`&lt;`void`&gt;
+
+***
+
 ### switchSession()
 
 > **switchSession**(`sessionId`): `Promise`&lt;`void`&gt;
 
-定义于: `session/types.ts:149`
+定义于: `session/types.ts:158`
 
 将当前会话切换到一个已持久化会话，或启动一个新会话。
 
@@ -278,7 +302,7 @@
 
 > **uploadFile**(`file`, `endpoint?`): `Promise`&lt;`void`&gt;
 
-定义于: `session/types.ts:139`
+定义于: `session/types.ts:148`
 
 将文件上传到当前会话上下文中。
 

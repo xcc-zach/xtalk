@@ -17,6 +17,8 @@ from ...models import Models, TurnDetector
 
 
 class TurnTakingManager(Manager):
+    """Coordinate VAD boundaries with ASR and response interruption."""
+
     def __init__(
         self,
         event_bus: EventBus,
@@ -46,9 +48,19 @@ class TurnTakingManager(Manager):
         )
 
     @Manager.event_handler(VADSpeechStart)
-    async def _on_vad_start(self, _event: VADSpeechStart):
+    async def _on_vad_start(self, event: VADSpeechStart):
         """Start ASR immediately, then finish interrupting the previous response."""
         async with self._vad_transition_lock:
+            if event.origin == "text":
+                await self.event_bus.publish(
+                    TurnLLMAgentStopRequested(
+                        session_id=self.session_id,
+                        reason="text_input",
+                    ),
+                    wait_for_completion=True,
+                )
+                return
+
             await self.event_bus.publish(
                 TurnASRStartRequested(session_id=self.session_id),
                 wait_for_completion=True,
@@ -62,9 +74,12 @@ class TurnTakingManager(Manager):
                 )
 
     @Manager.event_handler(VADSpeechEnd)
-    async def _on_vad_end(self, _event: VADSpeechEnd):
+    async def _on_vad_end(self, event: VADSpeechEnd):
         """Finalize only after any in-flight response interruption completes."""
         async with self._vad_transition_lock:
+            if event.origin == "text":
+                return
+
             if self._turn_detector_model is None:
                 await self.event_bus.publish(
                     TurnASREndRequested(session_id=self.session_id),

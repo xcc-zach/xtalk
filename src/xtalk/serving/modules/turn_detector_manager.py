@@ -92,6 +92,8 @@ class TurnDetectorManager(Manager):
         try:
             if self.turn_detector is None:
                 return
+            if event.origin == "text":
+                return
 
             if not event.text:
                 return
@@ -110,7 +112,7 @@ class TurnDetectorManager(Manager):
         try:
             if self.turn_detector is None:
                 return
-            if event.origin == "turn_detector":
+            if event.origin in {"text", "turn_detector"}:
                 return
 
             self._disable_proxy_vad()
@@ -122,7 +124,7 @@ class TurnDetectorManager(Manager):
     @Manager.event_handler(VADSpeechEnd)
     async def _on_vad_speech_end(self, event: VADSpeechEnd) -> None:
         """Track externally supplied VAD end events so proxy mode stays disabled."""
-        if event.origin == "turn_detector":
+        if event.origin in {"text", "turn_detector"}:
             return
         self._disable_proxy_vad()
 

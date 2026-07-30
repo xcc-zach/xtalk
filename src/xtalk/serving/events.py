@@ -109,18 +109,23 @@ class VADSpeechEnd(Event):
 
 @dataclass
 class ASRResultPartial(Event):
+    """Incremental user transcript produced by audio ASR or text input."""
+
     TYPE: ClassVar[str] = "asr.result_partial"
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
     speech_pause: bool = False
+    origin: str = "asr"
 
 
 @dataclass
 class ASRResultFinal(Event):
-    # Emit when ready for generation
+    """Final user transcript that is ready for response generation."""
+
     TYPE: ClassVar[str] = "asr.result_final"
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
+    origin: str = "asr"
 
 
 @dataclass
@@ -480,6 +485,20 @@ class TurnLLMAgentPauseRequested(Event):
 class TurnLLMAgentStopRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_stop_requested"
     reason: str = ""  # e.g., vad_start|verification_valid
+
+
+@dataclass
+class TurnInputAbortRequested(Event):
+    """Request cancellation of an unfinished input turn.
+
+    Attributes
+    ----------
+    origin : str
+        Origin of the replacement turn requesting cancellation.
+    """
+
+    TYPE: ClassVar[str] = "turn.input_abort_requested"
+    origin: str = ""
 
 
 @dataclass

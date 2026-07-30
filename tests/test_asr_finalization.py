@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from xtalk.models import ASR, Models
@@ -45,6 +46,46 @@ class _BlankFinalASR(ASR):
         return _BlankFinalASR()
 
 
+class _BlockingASR(ASR):
+    """Hold a streaming recognition result until the test releases it."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def recognize(self, audio: bytes) -> str:
+        """Return a fixed one-shot recognition result."""
+
+        del audio
+        return "stale"
+
+    async def async_recognize_stream(
+        self,
+        audio: bytes,
+        *,
+        is_final: bool = False,
+        chat_history: str | None = None,
+    ) -> str:
+        """Wait before returning a result from the superseded audio turn."""
+
+        del audio
+        del is_final
+        del chat_history
+        self.started.set()
+        await self.release.wait()
+        return "stale"
+
+    def reset(self) -> None:
+        """Reset the stateless test recognizer."""
+
+        return None
+
+    def clone(self) -> "_BlockingASR":
+        """Return another independently controlled recognizer."""
+
+        return _BlockingASR()
+
+
 class ASRFinalizationTests(unittest.IsolatedAsyncioTestCase):
     """Verify that finalization cannot discard a useful partial transcript."""
 
@@ -72,6 +113,34 @@ class ASRFinalizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(events[1], ASRResultFinal)
         self.assertEqual(events[0].text, _BlankFinalASR.PARTIAL_TEXT)
         self.assertEqual(events[1].text, _BlankFinalASR.PARTIAL_TEXT)
+
+    async def test_abort_drops_in_flight_recognition_result(self) -> None:
+        """Do not publish stale speech text after a text turn aborts audio."""
+
+        event_bus = EventBus(enable_history=True)
+        asr = _BlockingASR()
+        consumer = AudioConsumer(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({ASR: asr}),
+        )
+        self.addAsyncCleanup(consumer.shutdown)
+
+        await asyncio.sleep(0)
+        await consumer.start()
+        end_task = asyncio.create_task(consumer.end())
+        await asyncio.wait_for(asr.started.wait(), timeout=1.0)
+
+        abort_task = asyncio.create_task(consumer.abort())
+        await asyncio.sleep(0)
+        self.assertGreaterEqual(consumer._recognition_generation, 1)
+        asr.release.set()
+        await asyncio.wait_for(
+            asyncio.gather(end_task, abort_task),
+            timeout=1.0,
+        )
+
+        self.assertEqual(event_bus.get_history(), [])
 
 
 if __name__ == "__main__":

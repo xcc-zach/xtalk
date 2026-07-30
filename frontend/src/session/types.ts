@@ -131,6 +131,15 @@ interface Session {
      */
     changeVoice(voiceName: string): Promise<void>;
     /**
+     * Submits a finalized text turn through the connected realtime session.
+     *
+     * The promise resolves after a `finish_asr` action echoes the normalized
+     * text with `origin` set to `text`.
+     *
+     * @param text User-authored text for the next turn.
+     */
+    sendText(text: string): Promise<void>;
+    /**
      * Uploads a file into the current session context.
      *
      * @param file File blob to upload.
