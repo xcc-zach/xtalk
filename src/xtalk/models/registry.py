@@ -39,10 +39,16 @@ class ModelImplInfo:
         """Return the canonical name followed by aliases."""
         return (self.name, *self.aliases)
 
+    @property
+    def config_key(self) -> str:
+        """Return the canonical config key for this implementation."""
+        return _infer_config_key(_infer_search_spec(self.interface))
+
 
 _MODEL_TYPES_BY_SLOT: dict[str, ModelTypeInfo] = {}
 _MODEL_TYPE_ORDER: list[ModelTypeInfo] = []
 _MODEL_IMPLS_BY_SLOT: dict[str, dict[str, ModelImplInfo]] = {}
+_MODEL_IMPLS_BY_CLASS: dict[type[Any], ModelImplInfo] = {}
 
 
 def _infer_config_key(search_spec: ImportSpec) -> str:
@@ -61,7 +67,11 @@ def _infer_search_spec(interface: type[Any]) -> ImportSpec:
 def _register_slot_alias(slot: str, info: ModelTypeInfo, *, replace: bool) -> None:
     """Register one slot or alias for a model type."""
     existing = _MODEL_TYPES_BY_SLOT.get(slot)
-    if existing is not None and existing.interface is not info.interface and not replace:
+    if (
+        existing is not None
+        and existing.interface is not info.interface
+        and not replace
+    ):
         raise ValueError(f"model slot {slot!r} is already registered")
     _MODEL_TYPES_BY_SLOT[slot] = info
     _MODEL_IMPLS_BY_SLOT.setdefault(slot, {})
@@ -70,9 +80,7 @@ def _register_slot_alias(slot: str, info: ModelTypeInfo, *, replace: bool) -> No
 def _infer_model_interface(impl_cls: type[Any]) -> type[Any]:
     """Infer the registered model interface from an implementation class."""
     matches = [
-        base
-        for base in impl_cls.__mro__[1:]
-        if "__model_type_key__" in base.__dict__
+        base for base in impl_cls.__mro__[1:] if "__model_type_key__" in base.__dict__
     ]
     if not matches:
         raise TypeError(
@@ -178,9 +186,7 @@ def model(
         interface = _infer_model_interface(impl_cls)
         type_info = get_model_type_info(interface.__model_type_key__)
         if type_info is None:
-            raise TypeError(
-                f"{interface.__name__} is not registered with @model_type"
-            )
+            raise TypeError(f"{interface.__name__} is not registered with @model_type")
 
         impl_name = name or impl_cls.__name__
         if not impl_name:
@@ -208,6 +214,7 @@ def model(
                     raise ValueError(
                         f"model {impl_key!r} is already registered for {slot_name!r}"
                     )
+        _MODEL_IMPLS_BY_CLASS[impl_cls] = impl_info
         return impl_cls
 
     if cls is not None:
@@ -265,6 +272,24 @@ def get_model_class(slot: str, name: str) -> type[Any] | None:
     if impl_info is None:
         return None
     return impl_info.model_class
+
+
+def _get_model_impl_info(model_class: type[Any]) -> ModelImplInfo | None:
+    """Return registration metadata for a model implementation class.
+
+    Parameters
+    ----------
+    model_class : type[Any]
+        Model implementation class decorated with :func:`model`.
+
+    Returns
+    -------
+    ModelImplInfo | None
+        Registered implementation metadata, or ``None`` when the class has
+        not been registered.
+    """
+
+    return _MODEL_IMPLS_BY_CLASS.get(model_class)
 
 
 __all__ = [

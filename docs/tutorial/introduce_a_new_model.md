@@ -1,5 +1,5 @@
 > **Note**
-> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the default `llm_agent` with this custom agent through config.
+> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the configured `llm_agent` during staged configuration.
 
 You may want to introduce a new model for an existing model type, such as a new text-to-speech model. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
 
@@ -67,7 +67,7 @@ class EchoAgent(Agent):
 
 Notes:
 
-- `@model` must run before `Xtalk.from_config(...)`, which means the module defining the class must be imported first.
+- `@model` must run before `Xtalk.configure(...).set_model(...)`, which means the module defining the class must be imported first.
 - `async_accept` is the main async runtime entrypoint.
 - `accept` bridges to `async_accept` for synchronous compatibility.
 - `clone()` should return a model instance suitable for a new session, avoiding shared mutable state across sessions.
@@ -76,9 +76,10 @@ Notes:
   `AgentTurnBoundary()` after each response. This triggers TTS flush and
   response finish without ending the stream itself.
 
-## 3. Use the New Model in Config
+## 3. Select the New Model
 
-The model type is still `llm_agent`; only change that type's `type` value to `EchoAgent`.
+When the model choice belongs in the JSON file, set the `llm_agent` type to
+`EchoAgent` and continue using `Xtalk.from_config(...)`:
 
 ```json
 {
@@ -89,24 +90,45 @@ The model type is still `llm_agent`; only change that type's `type` value to `Ec
 }
 ```
 
-## 4. Register Before Creating Xtalk
-
-Because `EchoAgent` is defined in the same server file, Python executes the class definition and `@model` registration before reaching `Xtalk.from_config(...)`.
+When the base config should remain reusable, select the registered Python class
+during staged configuration instead:
 
 ```python
-with open(args.config, "r", encoding="utf-8") as f:
-    config = json.load(f)
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .set_model(EchoAgent)
+    .build()
+)
+```
 
-xtalk_instance = Xtalk.from_config("path/to/config.json")
+`set_model()` infers the model slot and registered config name from
+`EchoAgent`. It preserves the configured model parameters and supports
+registered names that differ from the Python class name.
+
+## 4. Register Before Creating Xtalk
+
+Because `EchoAgent` is defined in the same server file, Python executes the
+class definition and `@model` registration before reaching `set_model(...)`.
+
+```python
+xtalk_instance = (
+    Xtalk.configure(args.config)
+    .set_model(EchoAgent)
+    .build()
+)
 xtalk_instance.mount_routes(app)
 ```
 
 If the model is defined in a separate file, import that file first:
 
 ```python
-import my_app.echo_agent
+from my_app.echo_agent import EchoAgent
 
-xtalk_instance = Xtalk.from_config("path/to/config.json")
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .set_model(EchoAgent)
+    .build()
+)
 ```
 
 ## 5. Complete Config Example

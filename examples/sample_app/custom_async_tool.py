@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import copy
 import json
 import logging
 import mimetypes
@@ -13,7 +12,6 @@ import urllib.request
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -238,28 +236,6 @@ class TimerTool(AsyncTool):
         tool_state.stopped = True
 
 
-def build_timer_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a config copy with the timer tool appended."""
-    updated_config = copy.deepcopy(config)
-    agent_config = updated_config.get("llm_agent")
-    if not isinstance(agent_config, dict):
-        raise ValueError("The config must define an llm_agent object.")
-
-    params = agent_config.get("params")
-    if params is None:
-        params = {}
-        agent_config["params"] = params
-    if not isinstance(params, dict):
-        raise ValueError("llm_agent.params must be an object.")
-
-    configured_tools = params.get("tools", [])
-    if not isinstance(configured_tools, list):
-        raise ValueError("llm_agent.params.tools must be a list when provided.")
-    params["tools"] = [*configured_tools, TimerTool]
-
-    return updated_config
-
-
 def download_frontend_utilities() -> None:
     """Download browser-side runtime and model assets for the sample app.
 
@@ -408,9 +384,11 @@ args = parser.parse_args()
 
 app = FastAPI(title="Xtalk Dev Server")
 
-with open(args.config, "r", encoding="utf-8") as config_file:
-    server_config = json.load(config_file)
-xtalk_instance = Xtalk.from_config(build_timer_config(server_config))
+xtalk_instance = (
+    Xtalk.configure(args.config)
+    .add_agent_tools([TimerTool])
+    .build()
+)
 xtalk_instance.mount_routes(app)
 
 
