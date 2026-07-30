@@ -1,0 +1,4 @@
+{
+  "display_name": "本地文件浏览器",
+  "entrypoint": "local_files_tool:create_tools"
+}

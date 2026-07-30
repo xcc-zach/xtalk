@@ -30,9 +30,10 @@ sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出
 
 WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
 界面包含居中品牌栏、Orb/对话双视图、底部玻璃控制坞和右侧“设置与诊断”抽屉。
-抽屉显示当前外部模型配置，可重新选择配置、重启 sidecar 并重新探测本地服务。
-浅色、深色与窄窗口布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户
-开始语音对话时所需的麦克风用途说明和 audio-input entitlement。
+抽屉显示当前外部模型配置与已安装开发者工具，可重新选择配置、将工具目录复制到
+AppData、修改启用状态、重启 sidecar 并重新探测本地服务。浅色、深色与窄窗口布局
+共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话时所需的
+麦克风用途说明和 audio-input entitlement。
 
 ## 认证契约
 
@@ -59,13 +60,13 @@ UTF-8 编码不超过 8 KiB，再通过普通 VAD、ASR、Agent、Tool、TTS 与
 每个客户端 Session 同一时间只能有一条文本等待确认。断线、关闭、重新打开或切换
 Session 都会取消待确认请求；客户端不会排队或自动重试可能执行有副作用工具的回合。
 
-app 通过公共 runtime builder 注册一个异步 `timer`，其契约与
-`examples/sample_app/custom_async_tool.py` 相同。不能直接 import 示例模块，因为
-导入会执行其 CLI 和资源下载初始化。单元测试覆盖 `Running`、进度、`Finished` 与
-stop，并通过公共 `ToolEngine` 验证最终更新；模型 smoke 则独立从文本入口发起请求，
-观察 `tool_called: timer`，确认真实的助手回复与 TTS 音频播放。测试不强制要求第二次
-LLM 主动报告，因为模型驱动的报告可能与首轮响应重叠；app 不为这一时序增加 timer
-专用的 serving 修补。
+app 通过公共 runtime builder 注册已启用的开发者工具。若没有已启用工具声明
+`timer` 名称，则继续注册契约与 `examples/sample_app/custom_async_tool.py` 相同的
+随包异步计时器作为回退。单元测试覆盖 `Running`、进度、`Finished`、stop、开发者
+入口加载，并通过公共 `ToolEngine` 验证最终更新；模型 smoke 则独立从文本入口发起
+请求，观察 `tool_called: timer`，确认真实的助手回复与 TTS 音频播放。测试不强制要求
+第二次 LLM 主动报告，因为模型驱动的报告可能与首轮响应重叠；app 不为这一时序增加
+timer 专用的 serving 修补。
 
 文本输入要求已有活动的 XTalk Session。公共 SDK 的 `open()` 仍会初始化麦克风采集，
 因此即使随后只输入文字，启动 Session 也需要麦克风权限。
@@ -103,6 +104,25 @@ XTalk 原始配置错误返回。
 及其包数据。所需可选依赖组通过 `--xtalk-extra` 显式传入构建过程，不在应用行为中
 引入模型类型分支。
 
+## 开发者工具
+
+用户选择的目录包含 Python 文件，以及字段严格限定为两个的 `xtalk_tool.json`：
+
+```json
+{
+  "display_name": "Timer",
+  "entrypoint": "timer_tool:create_tools"
+}
+```
+
+Tauri 生成内部标识，将目录递归复制到 `AppData/tools/<id>/`，并仅在
+`AppData/tools/registry.json` 中保存该标识和启用状态。Python sidecar 为每个已启用
+目录解析 `module:factory` 入口；工厂必须返回一个列表，其中元素可直接交给
+`XtalkBuilder.add_agent_tools()`。
+
+配置中的 Agent 会在读取该注册表后构建，因此工具变更通过受控重启 sidecar 生效。
+单个开发者工厂加载失败时会被忽略，不会阻止其余本地服务启动。
+
 ## 关闭
 
 UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 sidecar shutdown endpoint，
@@ -115,5 +135,5 @@ UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 sidecar 
 - 开发环境和常规 bundle 中，PyInstaller `onedir` 支持文件与 sidecar 相邻；macOS
   app bundle 按 bootloader 要求将其放入 `Contents/Frameworks`。运行时验证会拒绝
   不完整布局。
-- 通用工具管理、本地增强器、provider 设置和可选组件 supervisor 属于后续阶段；
-  后端 Silero VAD 与固定的 sample-compatible timer 是 Phase 0 壳之后首批落地能力。
+- 工具额外依赖管理、本地增强器、provider 设置和可选组件 supervisor 属于后续阶段；
+  开发者工具目录当前可使用冻结 sidecar 中已经存在的 Python 包。

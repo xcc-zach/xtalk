@@ -1,0 +1,4 @@
+{
+  "display_name": "计时器",
+  "entrypoint": "timer_tool:create_tools"
+}

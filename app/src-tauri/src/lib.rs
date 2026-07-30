@@ -3,11 +3,13 @@
 #![warn(missing_docs)]
 
 mod sidecar;
+mod tools;
 
 use std::{path::PathBuf, sync::Arc};
 
 use sidecar::{BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection};
 use tauri::{Manager, State, WindowEvent};
+use tools::NativeToolDefinition;
 
 /// Runs the XTalk Desktop native shell.
 pub fn run() {
@@ -15,9 +17,14 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            apply_tool_changes,
             apply_model_config,
             get_backend_connection,
+            get_installed_tools,
             get_model_config_selection,
+            install_tool_directory,
+            remove_installed_tool,
+            set_tool_enabled,
             shutdown_backend
         ])
         .setup(|app| {
@@ -56,6 +63,44 @@ async fn apply_model_config(
 ) -> Result<NativeBackendConnection, String> {
     supervisor
         .apply_model_config(&app, config_path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_installed_tools(app: tauri::AppHandle) -> Result<Vec<NativeToolDefinition>, String> {
+    tools::list_installed_tools(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn install_tool_directory(
+    app: tauri::AppHandle,
+    source_path: PathBuf,
+) -> Result<NativeToolDefinition, String> {
+    tools::install_tool_directory(&app, &source_path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn set_tool_enabled(
+    app: tauri::AppHandle,
+    tool_id: String,
+    enabled: bool,
+) -> Result<NativeToolDefinition, String> {
+    tools::set_tool_enabled(&app, &tool_id, enabled)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn remove_installed_tool(app: tauri::AppHandle, tool_id: String) -> Result<(), String> {
+    tools::remove_installed_tool(&app, &tool_id)
+}
+
+#[tauri::command]
+async fn apply_tool_changes(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .restart(&app)
         .await
         .map_err(|error| error.to_string())
 }

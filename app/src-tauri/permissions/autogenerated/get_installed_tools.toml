@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-installed-tools"
+description = "Enables the get_installed_tools command without any pre-configured scope."
+commands.allow = ["get_installed_tools"]
+
+[[permission]]
+identifier = "deny-get-installed-tools"
+description = "Denies the get_installed_tools command without any pre-configured scope."
+commands.deny = ["get_installed_tools"]

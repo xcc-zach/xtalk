@@ -109,6 +109,36 @@ def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
     assert runtime.tools == []
 
 
+def test_adapter_allows_installed_timer_to_replace_the_builtin(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Prefer an enabled developer timer over the bundled fallback."""
+
+    class DeveloperTimer:
+        """Stand in for a developer-provided timer tool."""
+
+        name = "timer"
+
+    config = {"llm_agent": {"type": "DefaultAgent", "params": {}}}
+    _FakeXtalk.latest_builder = None
+    monkeypatch.setattr(xtalk_adapter, "Xtalk", _FakeXtalk)
+    monkeypatch.setattr(
+        xtalk_adapter,
+        "load_enabled_tools",
+        lambda tools_root: [DeveloperTimer],
+    )
+
+    runtime = xtalk_adapter.build_xtalk_runtime(
+        config,
+        tools_root=tmp_path / "tools",
+    )
+
+    assert _FakeXtalk.latest_builder is not None
+    assert _FakeXtalk.latest_builder.tools == [DeveloperTimer]
+    assert runtime.tools == [DeveloperTimer]
+
+
 def test_adapter_mounts_routes_through_the_runtime_public_method() -> None:
     """Delegate route registration without inspecting runtime internals."""
 

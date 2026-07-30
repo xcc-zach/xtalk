@@ -170,6 +170,21 @@ impl BackendSupervisor {
         Ok(connection)
     }
 
+    /// Restarts the sidecar with the currently selected model configuration.
+    pub(crate) async fn restart(
+        &self,
+        app: &AppHandle,
+    ) -> Result<NativeBackendConnection, BackendError> {
+        let config_path = self
+            .state
+            .lock()
+            .await
+            .config_path
+            .clone()
+            .ok_or(BackendError::Unavailable)?;
+        self.apply_model_config(app, config_path).await
+    }
+
     async fn restore_previous_manager(&self, app: &AppHandle, config_path: Option<PathBuf>) {
         let manager = if let Some(path) = config_path.as_ref() {
             match BackendManager::start(app, path.clone()).await {
