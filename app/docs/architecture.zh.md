@@ -9,15 +9,18 @@ runtime builder 与工具 API，包括原生工具所需、文档已公开的
 
 ## 启动协议
 
-1. Tauri 生成本次启动随机 token，并创建应用数据目录。
-2. Tauri 启动已打包的 Python sidecar，秘密不进入 argv。
-3. Tauri 通过 sidecar stdin 写入一条有大小上限的 JSON 启动消息。
-4. sidecar 加载指定的 XTalk 配置，绑定由操作系统分配的 loopback 端口，启动
+1. Tauri 读取用户此前选择的外部模型配置路径。
+2. 没有有效路径时，窗口会在不启动 sidecar 的情况下打开，WebView 随即弹出原生
+   JSON 文件选择器。
+3. Tauri 生成本次启动随机 token，并创建应用数据目录。
+4. Tauri 启动已打包的 Python sidecar，秘密不进入 argv。
+5. Tauri 通过 sidecar stdin 写入一条有大小上限的 JSON 启动消息。
+6. sidecar 加载指定的 XTalk 配置，绑定由操作系统分配的 loopback 端口，启动
    FastAPI，然后输出一行 readiness JSON。
-5. Tauri 严格校验 readiness 协议，并通过最小 command 向 WebView 提供 endpoint
+7. Tauri 严格校验 readiness 协议，并通过最小 command 向 WebView 提供 endpoint
    和 token。
-6. UI 创建 `xtalk-client` Session，并关闭前端 VAD 与增强器。
-7. Tauri 将随包 Silero 模型作为顶层配置回退项传给 sidecar；当所选配置没有显式
+8. UI 创建 `xtalk-client` Session，并关闭前端 VAD 与增强器。
+9. Tauri 将随包 Silero 模型作为顶层配置回退项传给 sidecar；当所选配置没有显式
    声明 VAD 时，由 Python sidecar 产生语音边界。
 
 sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出现在 URL
@@ -26,9 +29,10 @@ sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出
 ## 本地界面
 
 WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
-界面包含居中品牌栏、Orb/对话双视图、底部玻璃控制坞和右侧诊断抽屉；浅色、深色与
-窄窗口布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话
-时所需的麦克风用途说明和 audio-input entitlement。
+界面包含居中品牌栏、Orb/对话双视图、底部玻璃控制坞和右侧“设置与诊断”抽屉。
+抽屉显示当前外部模型配置，可重新选择配置、重启 sidecar 并重新探测本地服务。
+浅色、深色与窄窗口布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户
+开始语音对话时所需的麦克风用途说明和 audio-input entitlement。
 
 ## 认证契约
 
@@ -79,7 +83,13 @@ WebView 通过公开 `xtalk-client` WebSocket 发送 16 kHz 单声道 PCM，前�
 
 ## 配置
 
-启动消息选择一个 JSON 配置，也可以携带顶层 fallback 和 JSON overlay。fallback
+release 包不包含默认 XTalk 模型配置。原生文件选择器接收一个外部 JSON 文件；
+Tauri 要求根节点为对象、限制大小不超过 1 MiB、规范化路径，并且只在 AppConfig
+中持久化该路径。配置内容和 provider 凭据仍保留在外部文件中。更换配置时先验证
+新文件，再停止当前 sidecar、启动新 sidecar、持久化成功的选择，最后让 WebView
+重新探测本地服务。
+
+启动消息选择该 JSON 配置，也可以携带顶层 fallback 和 JSON overlay。fallback
 只填充所选配置中完全缺失的 key；显式模型槽位作为完整值保留。随后以 overlay 为
 最高优先级执行通用深度合并。Python 端仍不检查模型类型名称，唯一强制项是把
 `service_config.data_dir` 指向 AppData。配置中的模型缺失、未知或参数错误仍作为
@@ -100,8 +110,8 @@ UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 sidecar 
 
 ## Phase 0 限制
 
-- 随包默认配置有意不包含 provider；在 Phase 1 设置流程生成用户配置前，模型集成
-  测试使用 sample 配置。
+- 外部模型配置必须一直保留在所选路径。若未来进入平台沙箱分发，还需要保存安全
+  作用域书签，才能继续使用这种路径持久化方式。
 - 开发环境和常规 bundle 中，PyInstaller `onedir` 支持文件与 sidecar 相邻；macOS
   app bundle 按 bootloader 要求将其放入 `Contents/Frameworks`。运行时验证会拒绝
   不完整布局。

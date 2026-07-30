@@ -68,6 +68,14 @@ def test_checked_in_audio_model_manifest_matches_packaged_model() -> None:
     module.verify_audio_model_manifest()
 
 
+def test_release_has_no_bundled_default_model_config() -> None:
+    """Keep provider configuration external to the release bundle."""
+
+    module = load_script("verify_resources")
+
+    module.verify_no_bundled_default_config()
+
+
 def test_wheel_requirement_adds_sorted_unique_extras() -> None:
     """Compose optional wheel dependencies without model-specific logic."""
 

@@ -168,13 +168,24 @@ def verify_audio_model_manifest(
         )
 
 
-def verify_default_config() -> None:
-    """Verify that the bundled default configuration is valid JSON."""
+def verify_no_bundled_default_config() -> None:
+    """Reject a release bundle that contains a default model configuration."""
 
-    path = APP_ROOT / "resources" / "config" / "default.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("default config root must be an object")
+    config_path = APP_ROOT / "resources" / "config" / "default.json"
+    if config_path.exists():
+        raise ValueError("release resources must not contain config/default.json")
+
+    tauri_config_path = APP_ROOT / "src-tauri" / "tauri.conf.json"
+    tauri_config = json.loads(tauri_config_path.read_text(encoding="utf-8"))
+    resources = tauri_config.get("bundle", {}).get("resources", {})
+    if not isinstance(resources, dict):
+        raise ValueError("Tauri bundle resources must be an object")
+    if any(
+        "config/default.json" in str(source)
+        or "config/default.json" in str(destination)
+        for source, destination in resources.items()
+    ):
+        raise ValueError("Tauri bundle must not package config/default.json")
 
 
 def main() -> int:
@@ -186,7 +197,7 @@ def main() -> int:
         Process exit status.
     """
 
-    verify_default_config()
+    verify_no_bundled_default_config()
     verify_manifest(load_manifest())
     verify_audio_model_manifest()
     print("resource verification passed")

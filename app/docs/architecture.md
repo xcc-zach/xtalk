@@ -11,16 +11,19 @@ code.
 
 ## Startup protocol
 
-1. Tauri creates an ephemeral launch token and application data directories.
-2. Tauri starts the packaged Python sidecar without placing secrets in argv.
-3. Tauri writes one bounded JSON launch message to the sidecar's stdin.
-4. The sidecar loads the selected XTalk configuration, binds an OS-assigned
+1. Tauri loads the persisted path of the user's external model configuration.
+2. When no valid path is selected, the window opens without a sidecar and the
+   WebView immediately opens the native JSON file picker.
+3. Tauri creates an ephemeral launch token and application data directories.
+4. Tauri starts the packaged Python sidecar without placing secrets in argv.
+5. Tauri writes one bounded JSON launch message to the sidecar's stdin.
+6. The sidecar loads the selected XTalk configuration, binds an OS-assigned
    loopback port, starts FastAPI, and emits one readiness JSON line.
-5. Tauri validates the readiness protocol and exposes the endpoint and token
+7. Tauri validates the readiness protocol and exposes the endpoint and token
    through a narrow command to the WebView.
-6. The UI creates an `xtalk-client` session with frontend VAD and enhancement
+8. The UI creates an `xtalk-client` session with frontend VAD and enhancement
    disabled.
-7. Tauri supplies the packaged Silero model as a top-level configuration
+9. Tauri supplies the packaged Silero model as a top-level configuration
    fallback, so the Python sidecar produces speech boundaries when the selected
    configuration does not declare its own VAD.
 
@@ -32,10 +35,12 @@ public SDK cannot appear in URL logs.
 The WebView follows the layout and visual language of `examples/sample_app`
 without importing example implementation code. It provides a centered brand
 bar, Orb and conversation views, a bottom glass control dock, and a right-side
-diagnostics drawer. Light, dark, and narrow-window layouts share the same
-desktop adapter and offline state model. The macOS bundle includes the
-microphone usage description and audio-input entitlement required when a user
-starts a voice conversation.
+settings-and-diagnostics drawer. The drawer shows the selected external model
+configuration and can replace it, restart the sidecar, and rediscover the local
+service. Light, dark, and narrow-window layouts share the same desktop adapter
+and offline state model. The macOS bundle includes the microphone usage
+description and audio-input entitlement required when a user starts a voice
+conversation.
 
 ## Authentication contract
 
@@ -98,13 +103,21 @@ base runtime asset.
 
 ## Configuration
 
-The launch message selects a JSON configuration and may carry top-level
-fallbacks plus a JSON overlay. Fallbacks only fill keys absent from the selected
-configuration; an explicit model slot is preserved as a complete value. The
-overlay is then deep-merged at the highest precedence. The Python side remains
-model-type agnostic and only forces `service_config.data_dir` into AppData.
-Missing, unknown, or invalid configured models remain XTalk configuration
-errors.
+Release bundles contain no default XTalk model configuration. The native picker
+accepts one external JSON file; Tauri requires an object root, enforces a 1 MiB
+limit, canonicalizes the path, and persists only that path under AppConfig. The
+configuration contents and provider credentials remain in the external file.
+Replacing the selection first validates the new file, stops the active
+sidecar, starts another sidecar, persists the successful selection, and asks
+the WebView to rediscover the service.
+
+The launch message selects that JSON configuration and may carry top-level
+fallbacks plus a JSON overlay. Fallbacks only fill keys absent from the
+selected configuration; an explicit model slot is preserved as a complete
+value. The overlay is then deep-merged at the highest precedence. The Python
+side remains model-type agnostic and only forces
+`service_config.data_dir` into AppData. Missing, unknown, or invalid configured
+models remain XTalk configuration errors.
 
 Tests use `server_configs/sample.json` as the base model configuration. Optional
 turn-detector tests inject a complete standard `type`/`params` object from an
@@ -125,9 +138,9 @@ and terminates only the child it started if graceful shutdown does not finish.
 
 ## Phase 0 limitations
 
-- The bundled default configuration is intentionally provider-free; the sample
-  configuration is used for model integration tests until the Phase 1 settings
-  flow creates a user configuration.
+- The external model configuration must remain available at its selected path.
+  Sandboxed distribution would require a platform security-scoped bookmark
+  before this path-based persistence can be used there.
 - PyInstaller `onedir` support files remain beside the sidecar in development
   and ordinary bundles; macOS app bundles place them in `Contents/Frameworks`
   as required by the bootloader. Runtime validation rejects incomplete layouts.

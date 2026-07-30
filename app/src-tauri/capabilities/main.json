@@ -1,12 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Allows the main XTalk window to obtain and stop its managed backend.",
+  "description": "Allows the main XTalk window to configure and control its managed backend.",
   "windows": [
     "main"
   ],
   "permissions": [
+    "allow-apply-model-config",
     "allow-get-backend-connection",
-    "allow-shutdown-backend"
+    "allow-get-model-config-selection",
+    "allow-shutdown-backend",
+    "dialog:allow-open"
   ]
 }

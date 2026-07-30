@@ -1,6 +1,7 @@
 //! Lifecycle management for the packaged Python sidecar.
 
 use std::{
+    fs,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -26,7 +27,9 @@ use tokio::{
 
 const SIDECAR_NAME: &str = "app-backend";
 const PROTOCOL_VERSION: u16 = 1;
-const DEFAULT_CONFIG_RESOURCE: &str = "config/default.json";
+const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
+const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
+const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
 const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
 const SIDECAR_RUNTIME_RESOURCE: &str = "app-backend-runtime";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +52,159 @@ pub(crate) struct NativeBackendConnection {
     pub(crate) launch_token: String,
 }
 
+/// Persisted model configuration selected by the desktop user.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeModelConfigSelection {
+    /// Canonical external JSON configuration path, when one is selected.
+    pub(crate) config_path: Option<PathBuf>,
+}
+
+struct BackendSupervisorState {
+    config_path: Option<PathBuf>,
+    manager: Option<Arc<BackendManager>>,
+}
+
+/// Supervises the optional sidecar selected by the desktop user.
+pub(crate) struct BackendSupervisor {
+    state: Mutex<BackendSupervisorState>,
+    operation_gate: Mutex<()>,
+    app_close_started: AtomicBool,
+}
+
+impl BackendSupervisor {
+    /// Loads the persisted selection and starts its sidecar when possible.
+    pub(crate) async fn initialize(app: &AppHandle) -> Arc<Self> {
+        let config_path = match resolve_initial_model_config(app) {
+            Ok(config_path) => config_path,
+            Err(_) => {
+                eprintln!("the saved model configuration selection is unavailable");
+                None
+            }
+        };
+        let manager = if let Some(path) = config_path.as_ref() {
+            match BackendManager::start(app, path.clone()).await {
+                Ok(manager) => Some(manager),
+                Err(_) => {
+                    eprintln!("app-backend could not start with the selected configuration");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Arc::new(Self {
+            state: Mutex::new(BackendSupervisorState {
+                config_path,
+                manager,
+            }),
+            operation_gate: Mutex::new(()),
+            app_close_started: AtomicBool::new(false),
+        })
+    }
+
+    /// Returns the currently selected external model configuration.
+    pub(crate) async fn selection(&self) -> NativeModelConfigSelection {
+        NativeModelConfigSelection {
+            config_path: self.state.lock().await.config_path.clone(),
+        }
+    }
+
+    /// Returns connection details for the active sidecar.
+    pub(crate) async fn connection(&self) -> Result<NativeBackendConnection, BackendError> {
+        let manager = self
+            .state
+            .lock()
+            .await
+            .manager
+            .clone()
+            .ok_or(BackendError::Unavailable)?;
+        manager.connection()
+    }
+
+    /// Restarts the sidecar with a validated user-selected configuration.
+    pub(crate) async fn apply_model_config(
+        &self,
+        app: &AppHandle,
+        config_path: PathBuf,
+    ) -> Result<NativeBackendConnection, BackendError> {
+        let config_path = validate_model_config_path(&config_path)?;
+        let _operation_guard = self.operation_gate.lock().await;
+        let (previous_config_path, previous_manager) = {
+            let mut state = self.state.lock().await;
+            (state.config_path.clone(), state.manager.take())
+        };
+
+        if let Some(manager) = previous_manager {
+            manager.shutdown().await?;
+        }
+
+        let manager = match BackendManager::start(app, config_path.clone()).await {
+            Ok(manager) => manager,
+            Err(error) => {
+                self.restore_previous_manager(app, previous_config_path)
+                    .await;
+                return Err(error);
+            }
+        };
+        let connection = match manager.connection() {
+            Ok(connection) => connection,
+            Err(error) => {
+                let _ = manager.shutdown().await;
+                self.restore_previous_manager(app, previous_config_path)
+                    .await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = persist_model_config_selection(app, &config_path) {
+            let _ = manager.shutdown().await;
+            self.restore_previous_manager(app, previous_config_path)
+                .await;
+            return Err(error);
+        }
+
+        let mut state = self.state.lock().await;
+        state.config_path = Some(config_path);
+        state.manager = Some(manager);
+        Ok(connection)
+    }
+
+    async fn restore_previous_manager(&self, app: &AppHandle, config_path: Option<PathBuf>) {
+        let manager = if let Some(path) = config_path.as_ref() {
+            match BackendManager::start(app, path.clone()).await {
+                Ok(manager) => Some(manager),
+                Err(_) => {
+                    eprintln!("the previous app-backend configuration could not be restored");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut state = self.state.lock().await;
+        state.config_path = config_path;
+        state.manager = manager;
+    }
+
+    /// Marks the first main-window close request as accepted.
+    pub(crate) fn begin_app_close(&self) -> bool {
+        self.app_close_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Stops the active sidecar, when one exists.
+    pub(crate) async fn shutdown(&self) -> Result<(), BackendError> {
+        let _operation_guard = self.operation_gate.lock().await;
+        let manager = self.state.lock().await.manager.take();
+        if let Some(manager) = manager {
+            manager.shutdown().await?;
+        }
+        Ok(())
+    }
+}
+
 /// Owns the sidecar connection details and child-process lifecycle.
 pub(crate) struct BackendManager {
     endpoint: String,
@@ -57,15 +213,13 @@ pub(crate) struct BackendManager {
     exit: watch::Receiver<bool>,
     terminated: AtomicBool,
     shutting_down: AtomicBool,
-    app_close_started: AtomicBool,
     shutdown_gate: Mutex<()>,
 }
 
 impl BackendManager {
     /// Starts the packaged sidecar and completes its readiness handshake.
-    pub(crate) async fn start(app: &AppHandle) -> Result<Arc<Self>, BackendError> {
+    async fn start(app: &AppHandle, config_path: PathBuf) -> Result<Arc<Self>, BackendError> {
         let token = generate_launch_token()?;
-        let config_path = resolve_config_path(app)?;
         let vad_model_path = resolve_required_resource(app, VAD_MODEL_RESOURCE, false)?;
         resolve_required_resource(app, SIDECAR_RUNTIME_RESOURCE, true)?;
         let sidecar_directory = sidecar_working_directory()?;
@@ -118,7 +272,6 @@ impl BackendManager {
             exit,
             terminated: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
-            app_close_started: AtomicBool::new(false),
             shutdown_gate: Mutex::new(()),
         });
 
@@ -138,13 +291,6 @@ impl BackendManager {
             origin: self.endpoint.clone(),
             launch_token: self.token.clone(),
         })
-    }
-
-    /// Marks the first main-window close request as accepted.
-    pub(crate) fn begin_app_close(&self) -> bool {
-        self.app_close_started
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
     }
 
     /// Requests an authenticated shutdown, then kills the child after a finite grace period.
@@ -216,6 +362,13 @@ struct StartupMessage<'a> {
     config_overlay: Value,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedModelConfigSelection {
+    version: u16,
+    config_path: PathBuf,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadyMessage {
@@ -252,9 +405,14 @@ pub(crate) enum BackendError {
     Token(String),
     #[error("a required sidecar file or directory is missing")]
     MissingResource,
-    #[cfg(debug_assertions)]
-    #[error("the debug config override is missing or is not a regular file")]
-    InvalidConfigOverride,
+    #[error("the selected model configuration is missing or is not a regular file")]
+    InvalidModelConfigPath,
+    #[error("the selected model configuration exceeds the 1 MiB limit")]
+    ModelConfigTooLarge,
+    #[error("the selected model configuration root must be a JSON object")]
+    InvalidModelConfigRoot,
+    #[error("the saved model configuration selection has an unsupported version")]
+    UnsupportedModelConfigSelection,
     #[error("the sidecar runtime resource has no parent directory")]
     InvalidResourceLayout,
     #[error("app-backend did not become ready within the startup timeout")]
@@ -423,19 +581,70 @@ fn build_config_fallbacks(vad_model_path: &Path) -> Value {
     })
 }
 
-fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+fn resolve_initial_model_config(app: &AppHandle) -> Result<Option<PathBuf>, BackendError> {
     #[cfg(debug_assertions)]
     if let Some(config_path) = std::env::var_os("XTALK_APP_CONFIG_PATH") {
-        let config_path = PathBuf::from(config_path);
-        if !config_path.is_file() {
-            return Err(BackendError::InvalidConfigOverride);
-        }
-        return config_path
-            .canonicalize()
-            .map_err(|_| BackendError::InvalidConfigOverride);
+        return validate_model_config_path(&PathBuf::from(config_path)).map(Some);
     }
 
-    resolve_required_resource(app, DEFAULT_CONFIG_RESOURCE, false)
+    load_model_config_selection(app)
+}
+
+fn load_model_config_selection(app: &AppHandle) -> Result<Option<PathBuf>, BackendError> {
+    let selection_path = model_config_selection_path(app)?;
+    if !selection_path.is_file() {
+        return Ok(None);
+    }
+
+    let selection: PersistedModelConfigSelection =
+        serde_json::from_slice(&fs::read(selection_path)?)?;
+    if selection.version != MODEL_CONFIG_SELECTION_VERSION {
+        return Err(BackendError::UnsupportedModelConfigSelection);
+    }
+    validate_model_config_path(&selection.config_path).map(Some)
+}
+
+fn persist_model_config_selection(app: &AppHandle, config_path: &Path) -> Result<(), BackendError> {
+    let selection_path = model_config_selection_path(app)?;
+    let parent = selection_path
+        .parent()
+        .ok_or(BackendError::InvalidResourceLayout)?;
+    fs::create_dir_all(parent)?;
+    fs::write(
+        selection_path,
+        serde_json::to_vec_pretty(&PersistedModelConfigSelection {
+            version: MODEL_CONFIG_SELECTION_VERSION,
+            config_path: config_path.to_path_buf(),
+        })?,
+    )?;
+    Ok(())
+}
+
+fn model_config_selection_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    Ok(app
+        .path()
+        .app_config_dir()?
+        .join(MODEL_CONFIG_SELECTION_FILE))
+}
+
+fn validate_model_config_path(path: &Path) -> Result<PathBuf, BackendError> {
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| BackendError::InvalidModelConfigPath)?;
+    let metadata =
+        fs::metadata(&canonical_path).map_err(|_| BackendError::InvalidModelConfigPath)?;
+    if !metadata.is_file() {
+        return Err(BackendError::InvalidModelConfigPath);
+    }
+    if metadata.len() > MAX_MODEL_CONFIG_BYTES {
+        return Err(BackendError::ModelConfigTooLarge);
+    }
+
+    let config: Value = serde_json::from_slice(&fs::read(&canonical_path)?)?;
+    if !config.is_object() {
+        return Err(BackendError::InvalidModelConfigRoot);
+    }
+    Ok(canonical_path)
 }
 
 fn resolve_required_resource(
@@ -620,14 +829,22 @@ fn parse_http_response(response: &[u8]) -> Result<HttpResponse, BackendError> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf, process};
 
     use serde_json::{json, Value};
 
     use super::{
-        build_config_fallbacks, parse_http_response, validate_health_response, validate_ready_line,
-        BackendError, StartupMessage, PROTOCOL_VERSION,
+        build_config_fallbacks, parse_http_response, validate_health_response,
+        validate_model_config_path, validate_ready_line, BackendError, StartupMessage,
+        PROTOCOL_VERSION,
     };
+
+    fn temporary_model_config(name: &str, contents: &[u8]) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("xtalk-desktop-{}-{name}.json", process::id()));
+        fs::write(&path, contents).expect("test model config must be writable");
+        path
+    }
 
     #[test]
     fn accepts_the_exact_ready_protocol() {
@@ -715,5 +932,31 @@ mod tests {
             })
         );
         assert_eq!(payload["config_overlay"], json!({}));
+    }
+
+    #[test]
+    fn accepts_an_external_object_model_config() {
+        let path = temporary_model_config(
+            "valid-model-config",
+            br#"{"service_config":{"enable_persistence":true}}"#,
+        );
+
+        let validated = validate_model_config_path(&path).expect("object config must be accepted");
+
+        assert_eq!(
+            validated,
+            path.canonicalize().expect("test path must canonicalize")
+        );
+        fs::remove_file(path).expect("test config must be removable");
+    }
+
+    #[test]
+    fn rejects_a_non_object_model_config() {
+        let path = temporary_model_config("array-model-config", br#"[]"#);
+
+        let error = validate_model_config_path(&path).expect_err("array config must be rejected");
+
+        assert!(matches!(error, BackendError::InvalidModelConfigRoot));
+        fs::remove_file(path).expect("test config must be removable");
     }
 }

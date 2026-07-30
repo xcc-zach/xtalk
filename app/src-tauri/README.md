@@ -43,10 +43,18 @@ Linux destination assumes Tauri installs the external sidecar at
 `/usr/bin/app-backend` and remains a build acceptance item until each selected
 bundle target is inspected.
 
-## Development config
+## User-selected model configuration
 
-Release builds always send the bundled `config/default.json` path to the
-sidecar. Debug builds can read another config without copying or modifying it:
+Release bundles do not contain a default XTalk model configuration. On first
+launch the WebView opens the native JSON file picker. After the user selects a
+configuration, Tauri validates that it is a JSON object no larger than 1 MiB,
+starts the sidecar, and persists only the canonical external file path under
+the application configuration directory. Changing the selection stops the old
+sidecar, starts a new one, and lets the WebView rediscover its loopback
+endpoint.
+
+Debug builds may use an initial external configuration without going through
+the picker:
 
 ```sh
 XTALK_APP_CONFIG_PATH=/absolute/path/to/server_configs/sample.json npm run tauri dev
@@ -57,9 +65,11 @@ and sends a top-level VAD fallback to the sidecar. The selected configuration
 wins when it already declares `vad`; otherwise the fallback loads `SileroVAD`
 from the packaged absolute model path.
 
-The override path and launch token are sent to the sidecar only in its first
+The selected path and launch token are sent to the sidecar only in its first
 stdin JSON line. They are never added to process arguments or diagnostic
-messages.
+messages. Configuration contents, including provider credentials, remain in
+the user-selected file and are not copied into the application bundle or the
+selection record.
 
 `Info.plist` and `Entitlements.plist` provide the macOS microphone usage
 description and hardened-runtime audio-input entitlement. The WebView requests

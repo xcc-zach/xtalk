@@ -16,7 +16,6 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = APP_ROOT.parent
-DEFAULT_CONFIG = APP_ROOT / "resources" / "config" / "default.json"
 SAMPLE_CONFIG = REPOSITORY_ROOT / "server_configs" / "sample.json"
 VAD_MODEL = APP_ROOT / "resources" / "models" / "audio" / "silero_vad.onnx"
 LAUNCH_TOKEN = "sidecar-integration-token-at-least-32-bytes"
@@ -185,9 +184,20 @@ def _exercise_sidecar(config_path: Path, tmp_path: Path) -> None:
 
 
 def test_provider_free_sidecar_ready_health_and_shutdown(tmp_path: Path) -> None:
-    """Start the bundled setup-state config without remote providers."""
+    """Start an external setup-state config without remote providers."""
 
-    _exercise_sidecar(DEFAULT_CONFIG, tmp_path)
+    config_path = tmp_path / "provider-free.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "service_config": {
+                    "enable_persistence": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _exercise_sidecar(config_path, tmp_path)
 
 
 @pytest.mark.model

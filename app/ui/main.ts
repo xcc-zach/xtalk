@@ -1,6 +1,12 @@
 import "./styles.css";
 
-import { getNativeBackendConnection } from "./adapters/native-capabilities";
+import {
+  applyNativeModelConfig,
+  chooseNativeModelConfigFile,
+  getNativeBackendConnection,
+  getNativeModelConfigSelection,
+  type NativeModelConfigSelection,
+} from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
   type DesktopSessionSnapshot,
@@ -14,6 +20,8 @@ const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
   muted: false,
   messages: [],
 };
+
+type BackendState = "loading" | "ready" | "offline" | "unconfigured";
 
 const elements = {
   backendStatusButton: requireElement<HTMLButtonElement>(
@@ -33,6 +41,11 @@ const elements = {
   ),
   streamStateDetail: requireElement<HTMLElement>("stream-state-detail"),
   mutedStateDetail: requireElement<HTMLElement>("muted-state-detail"),
+  modelConfigDetail: requireElement<HTMLElement>("model-config-detail"),
+  modelConfigStatus: requireElement<HTMLElement>("model-config-status"),
+  selectModelConfigButton: requireElement<HTMLButtonElement>(
+    "select-model-config-button",
+  ),
   messages: requireElement<HTMLElement>("messages"),
   textComposer: requireElement<HTMLFormElement>("text-composer"),
   messageInput: requireElement<HTMLTextAreaElement>("message-input"),
@@ -50,9 +63,6 @@ const elements = {
   toggleDebugButton: requireElement<HTMLButtonElement>(
     "toggle-debug-button",
   ),
-  dockDiagnosticsButton: requireElement<HTMLButtonElement>(
-    "dock-diagnostics-button",
-  ),
   closeDebugButton: requireElement<HTMLButtonElement>("close-debug-button"),
   callButton: requireElement<HTMLButtonElement>("call-button"),
   muteButton: requireElement<HTMLButtonElement>("mute-button"),
@@ -64,8 +74,10 @@ let unsubscribe: (() => void) | null = null;
 let discoveringBackend = false;
 let sessionOperation = false;
 let sendingText = false;
+let modelConfigOperation = false;
 let diagnosticsOpen = false;
-let backendState: "loading" | "ready" | "offline" = "loading";
+let backendState: BackendState = "loading";
+let modelConfigPath: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
 
 function requireElement<T extends HTMLElement>(id: string): T {
@@ -90,7 +102,7 @@ function showError(message: string | null): void {
 }
 
 function setBackendStatus(
-  state: "loading" | "ready" | "offline",
+  state: BackendState,
   label: string,
 ): void {
   backendState = state;
@@ -149,14 +161,20 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
       : "开始对话";
 
   elements.callButton.disabled =
-    !hasBackend || discoveringBackend || sessionOperation || sendingText;
+    !hasBackend ||
+    backendState !== "ready" ||
+    discoveringBackend ||
+    modelConfigOperation ||
+    sessionOperation ||
+    sendingText;
   elements.callButton.dataset.action = callAction;
   elements.callButton.classList.toggle("is-loading", sessionOperation);
   elements.callButton.setAttribute("aria-label", callLabel);
   elements.callButton.setAttribute("aria-busy", String(sessionOperation));
   elements.callButton.title = callLabel;
 
-  elements.muteButton.disabled = !hasBackend || sessionOperation || !live;
+  elements.muteButton.disabled =
+    !hasBackend || modelConfigOperation || sessionOperation || !live;
   elements.muteButton.classList.toggle("is-muted", snapshot.muted);
   elements.muteButton.setAttribute("aria-pressed", String(snapshot.muted));
   elements.muteButton.setAttribute(
@@ -166,7 +184,15 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
   elements.muteButton.title = snapshot.muted ? "打开麦克风" : "关闭麦克风";
 
   elements.retryButton.disabled =
-    discoveringBackend || sessionOperation || sendingText;
+    discoveringBackend ||
+    modelConfigOperation ||
+    sessionOperation ||
+    sendingText;
+  elements.selectModelConfigButton.disabled =
+    discoveringBackend ||
+    modelConfigOperation ||
+    sessionOperation ||
+    sendingText;
   updateComposer(snapshot);
 }
 
@@ -177,7 +203,11 @@ function updateComposer(snapshot: DesktopSessionSnapshot): void {
     snapshot.connectionState === "connected" &&
     snapshot.sessionId !== null;
   const available =
-    connected && !discoveringBackend && !sessionOperation && !sendingText;
+    connected &&
+    !discoveringBackend &&
+    !modelConfigOperation &&
+    !sessionOperation &&
+    !sendingText;
   const hasText = elements.messageInput.value.trim().length > 0;
   const placeholder = composerPlaceholder(snapshot);
 
@@ -204,6 +234,9 @@ function composerPlaceholder(snapshot: DesktopSessionSnapshot): string {
   }
   if (discoveringBackend || backendState === "loading") {
     return "本地服务启动中";
+  }
+  if (backendState === "unconfigured") {
+    return "请先选择模型配置";
   }
   if (backendState === "offline" || adapter === null) {
     return "本地服务不可用";
@@ -246,9 +279,15 @@ function updateOrbPresentation(snapshot: DesktopSessionSnapshot): void {
     return;
   }
 
+  if (backendState === "unconfigured") {
+    elements.orbTitle.textContent = "需要模型配置";
+    elements.orbCaption.textContent = "请在设置与诊断中选择 JSON 配置";
+    return;
+  }
+
   if (backendState === "offline") {
     elements.orbTitle.textContent = "本地服务不可用";
-    elements.orbCaption.textContent = "打开诊断后可重新探测";
+    elements.orbCaption.textContent = "打开设置与诊断后可重新配置";
     return;
   }
 
@@ -335,8 +374,46 @@ function messageRoleLabel(
   }
 }
 
+function renderModelConfigSelection(
+  selection: NativeModelConfigSelection,
+): void {
+  modelConfigPath = selection.configPath;
+  elements.modelConfigDetail.textContent =
+    selection.configPath ?? "未选择";
+  elements.modelConfigDetail.title = selection.configPath ?? "";
+  elements.modelConfigStatus.textContent = selection.configPath
+    ? "已选择；更换文件会重启本地服务"
+    : "尚未选择模型配置";
+  updateControls(latestSnapshot);
+}
+
+async function refreshModelConfigSelection(): Promise<NativeModelConfigSelection> {
+  const selection = await getNativeModelConfigSelection();
+  renderModelConfigSelection(selection);
+  return selection;
+}
+
+async function detachCurrentAdapter(): Promise<void> {
+  const previousAdapter = adapter;
+  unsubscribe?.();
+  unsubscribe = null;
+  adapter = null;
+  renderSnapshot(EMPTY_SNAPSHOT);
+  if (previousAdapter) {
+    await previousAdapter.disconnect().catch(() => undefined);
+  }
+}
+
 async function discoverBackend(): Promise<void> {
   if (discoveringBackend) {
+    return;
+  }
+  if (modelConfigPath === null) {
+    setBackendStatus("unconfigured", "请选择模型配置");
+    elements.backendDetail.textContent = "尚未启动";
+    elements.websocketDetail.textContent = "未配置";
+    elements.tokenDetail.textContent = "未获取";
+    updateControls(latestSnapshot);
     return;
   }
 
@@ -348,14 +425,7 @@ async function discoverBackend(): Promise<void> {
   elements.tokenDetail.textContent = "未获取";
   updateControls(latestSnapshot);
 
-  const previousAdapter = adapter;
-  unsubscribe?.();
-  unsubscribe = null;
-  adapter = null;
-  renderSnapshot(EMPTY_SNAPSHOT);
-  if (previousAdapter) {
-    await previousAdapter.disconnect().catch(() => undefined);
-  }
+  await detachCurrentAdapter();
 
   try {
     const connection = await getNativeBackendConnection();
@@ -375,9 +445,79 @@ async function discoverBackend(): Promise<void> {
     setBackendStatus("offline", "本地服务不可用");
     elements.backendDetail.textContent = "离线模式";
     showError(`无法连接本地服务：${formatError(error)}`);
+    setDiagnosticsOpen(true);
   } finally {
     discoveringBackend = false;
     updateControls(latestSnapshot);
+  }
+}
+
+async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
+  if (modelConfigOperation) {
+    return;
+  }
+
+  modelConfigOperation = true;
+  showError(null);
+  elements.modelConfigStatus.textContent = "等待选择 JSON 配置";
+  updateControls(latestSnapshot);
+
+  try {
+    const selectedPath = await chooseNativeModelConfigFile();
+    if (selectedPath === null) {
+      if (required && modelConfigPath === null) {
+        setBackendStatus("unconfigured", "请选择模型配置");
+        elements.modelConfigStatus.textContent =
+          "首次启动需要选择模型配置文件";
+      } else {
+        elements.modelConfigStatus.textContent = modelConfigPath
+          ? "已取消；继续使用当前配置"
+          : "已取消；尚未选择模型配置";
+      }
+      return;
+    }
+
+    elements.modelConfigStatus.textContent = "正在重启本地服务";
+    setBackendStatus("loading", "正在应用模型配置");
+    await detachCurrentAdapter();
+    await applyNativeModelConfig(selectedPath);
+    const selection = await refreshModelConfigSelection();
+    elements.modelConfigStatus.textContent = selection.configPath
+      ? "配置已应用，本地服务已重启"
+      : "配置已应用";
+    await discoverBackend();
+  } catch (error) {
+    const message = `模型配置应用失败：${formatError(error)}`;
+    await refreshModelConfigSelection().catch(() => undefined);
+    if (modelConfigPath === null) {
+      setBackendStatus("unconfigured", "请选择模型配置");
+    } else {
+      await discoverBackend();
+    }
+    elements.modelConfigStatus.textContent = "配置应用失败";
+    showError(message);
+    setDiagnosticsOpen(true);
+  } finally {
+    modelConfigOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+async function initializeApplication(): Promise<void> {
+  try {
+    const selection = await refreshModelConfigSelection();
+    if (selection.configPath === null) {
+      setBackendStatus("unconfigured", "请选择模型配置");
+      setDiagnosticsOpen(true);
+      await chooseAndApplyModelConfig(true);
+      return;
+    }
+    await discoverBackend();
+  } catch (error) {
+    setBackendStatus("offline", "桌面运行时不可用");
+    elements.modelConfigStatus.textContent = "无法读取模型配置状态";
+    showError(`无法初始化应用：${formatError(error)}`);
+    setDiagnosticsOpen(true);
   }
 }
 
@@ -462,9 +602,6 @@ elements.backendStatusButton.addEventListener("click", () => {
 elements.toggleDebugButton.addEventListener("click", () => {
   setDiagnosticsOpen(!diagnosticsOpen);
 });
-elements.dockDiagnosticsButton.addEventListener("click", () => {
-  setDiagnosticsOpen(!diagnosticsOpen);
-});
 elements.closeDebugButton.addEventListener("click", () => {
   setDiagnosticsOpen(false);
 });
@@ -492,6 +629,9 @@ elements.muteButton.addEventListener("click", () => {
     adapter.setMuted(!adapter.snapshot.muted);
   }
 });
+elements.selectModelConfigButton.addEventListener("click", () => {
+  void chooseAndApplyModelConfig(false);
+});
 elements.textComposer.addEventListener("submit", (event) => {
   event.preventDefault();
   void sendTextMessage();
@@ -509,7 +649,11 @@ elements.messageInput.addEventListener("keydown", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", () => {
-  void discoverBackend();
+  if (modelConfigPath === null) {
+    void chooseAndApplyModelConfig(true);
+  } else {
+    void discoverBackend();
+  }
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && diagnosticsOpen) {
@@ -522,4 +666,4 @@ window.addEventListener("offline", updateNetworkStatus);
 updateNetworkStatus();
 renderSnapshot(EMPTY_SNAPSHOT);
 resizeMessageInput();
-void discoverBackend();
+void initializeApplication();

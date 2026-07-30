@@ -45,7 +45,6 @@
       "binaries/app-backend"
     ],
     "resources": {
-      "../resources/config/default.json": "config/default.json",
       "../resources/licenses/silero-vad-LICENSE.txt": "licenses/silero-vad-LICENSE.txt",
       "../resources/models/audio/silero_vad.onnx": "models/audio/silero_vad.onnx",
       "binaries/app-backend-runtime/": "app-backend-runtime/"

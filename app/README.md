@@ -110,13 +110,27 @@ dependency groups are build inputs, not model-type branches in application
 code. `silero-vad` is mandatory because every desktop launch provides it as a
 top-level fallback when the selected configuration has no explicit `vad`.
 
+## Model configuration
+
+Release bundles contain no default XTalk model configuration or provider
+credentials. On first launch the native file picker asks the user to select an
+external JSON configuration. Tauri persists only its canonical path in the
+application configuration directory. The **Settings and diagnostics** drawer
+shows the current path and lets the user choose another file; applying a new
+selection restarts the sidecar and rediscovers its loopback service.
+
+The selected file must contain a JSON object and be no larger than 1 MiB. It
+must remain available at the selected path for subsequent launches. The
+frozen sidecar can instantiate only providers whose dependency groups were
+included at build time.
+
 ## Local interface
 
 The desktop UI follows the visual hierarchy of `examples/sample_app`: a
 centered brand bar, Orb/chat views, a bottom glass control dock, and a right
-diagnostics drawer. It preserves the desktop adapter boundary and provides
-light, dark, and narrow-window layouts. The chat view accepts text with Enter
-to send and Shift+Enter for a newline. Text is sent with the public
+settings-and-diagnostics drawer. It preserves the desktop adapter boundary and
+provides light, dark, and narrow-window layouts. The chat view accepts text
+with Enter to send and Shift+Enter for a newline. Text is sent with the public
 `Session.sendText()` API and appears only after XTalk confirms the user turn
 with a matching `finish_asr` action over the session WebSocket.
 
