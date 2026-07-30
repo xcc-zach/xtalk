@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "filename": "resources/models/audio/silero_vad.onnx",
+      "id": "silero-vad",
+      "license": "MIT",
+      "license_file": "resources/licenses/silero-vad-LICENSE.txt",
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "source": "https://raw.githubusercontent.com/snakers4/silero-vad/76e3dc408eb2a5c655c34e230d2d5459b4439daa/src/silero_vad/data/silero_vad.onnx",
+      "version": "76e3dc408eb2a5c655c34e230d2d5459b4439daa"
+    }
+  ],
+  "schema_version": 1
+}

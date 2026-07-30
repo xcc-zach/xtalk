@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
+    <meta
+      name="description"
+      content="XTalk 本地桌面客户端。远程服务离线时仍可查看本地运行状态和诊断。"
+    />
+    <link rel="icon" href="/assets/app-icon.svg" type="image/svg+xml" />
+    <title>XTalk Desktop</title>
+  </head>
+  <body>
+    <div class="app">
+      <button
+        id="drawer-backdrop"
+        class="drawer-backdrop"
+        type="button"
+        tabindex="-1"
+        aria-label="关闭调试信息"
+      ></button>
+
+      <aside
+        id="debug-drawer"
+        class="app-drawer app-drawer-right"
+        aria-hidden="true"
+        aria-labelledby="debug-title"
+      >
+        <div class="drawer-header">
+          <div>
+            <div class="drawer-eyebrow">Desktop inspector</div>
+            <h2 id="debug-title">运行诊断</h2>
+          </div>
+          <button
+            id="close-debug-button"
+            class="icon-button icon-button-quiet"
+            type="button"
+            aria-label="关闭调试信息"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="debug-scroll">
+          <section class="debug-section" aria-labelledby="runtime-title">
+            <h3 id="runtime-title">Runtime</h3>
+            <dl class="runtime-grid">
+              <div>
+                <dt>Connection</dt>
+                <dd id="connection-state-detail">disconnected</dd>
+              </div>
+              <div>
+                <dt>Stream</dt>
+                <dd id="stream-state-detail">idle</dd>
+              </div>
+              <div>
+                <dt>Muted</dt>
+                <dd id="muted-state-detail">false</dd>
+              </div>
+              <div>
+                <dt>Network</dt>
+                <dd id="network-detail">checking</dd>
+              </div>
+              <div class="runtime-wide">
+                <dt>Session</dt>
+                <dd id="session-detail">--</dd>
+              </div>
+              <div class="runtime-wide">
+                <dt>User</dt>
+                <dd id="user-detail">--</dd>
+              </div>
+            </dl>
+          </section>
+
+          <details class="debug-details" open>
+            <summary>
+              <span>Local sidecar</span>
+              <span id="backend-summary" class="summary-value">loading</span>
+            </summary>
+            <dl class="endpoint-list">
+              <div>
+                <dt>Origin</dt>
+                <dd id="backend-detail">等待 Tauri 提供 endpoint</dd>
+              </div>
+              <div>
+                <dt>WebSocket</dt>
+                <dd id="websocket-detail">未配置</dd>
+              </div>
+              <div>
+                <dt>Launch credential</dt>
+                <dd id="token-detail">未获取</dd>
+              </div>
+            </dl>
+          </details>
+
+          <details class="debug-details" open>
+            <summary>Security</summary>
+            <div class="debug-content security-copy">
+              WebSocket 基址不包含 app token。HTTP 服务 URL 会显式携带 token，但界面和诊断信息永不展示其值。
+            </div>
+          </details>
+
+          <section class="debug-section debug-actions" aria-labelledby="recovery-title">
+            <h3 id="recovery-title">Recovery</h3>
+            <p>本地服务不可用时，主界面仍保持可访问。可在 sidecar 就绪后重新探测。</p>
+            <button id="retry-button" class="drawer-action-button" type="button">
+              重新探测本地服务
+            </button>
+          </section>
+        </div>
+      </aside>
+
+      <header class="topbar">
+        <button
+          id="backend-status-button"
+          class="topbar-status"
+          type="button"
+          aria-label="打开本地服务诊断"
+          aria-controls="debug-drawer"
+          aria-expanded="false"
+        >
+          <span id="backend-status-dot" class="status-dot" data-state="loading"></span>
+          <span id="backend-status-label">正在启动</span>
+        </button>
+
+        <div class="brand">XTalk</div>
+
+        <button
+          id="toggle-debug-button"
+          class="icon-button"
+          type="button"
+          aria-label="打开调试信息"
+          aria-controls="debug-drawer"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+          </svg>
+        </button>
+      </header>
+
+      <main class="workspace">
+        <section id="orb-view" class="view-panel orb-view" aria-hidden="false">
+          <button id="show-chat-button" class="orb-button" type="button" aria-label="显示聊天记录">
+            <span class="orb-surface" aria-hidden="true"></span>
+            <span class="orb-core" aria-hidden="true"></span>
+          </button>
+          <div class="orb-copy" aria-live="polite">
+            <strong id="orb-title">本地服务启动中</strong>
+            <span id="orb-caption">界面可离线使用</span>
+          </div>
+        </section>
+
+        <section
+          id="chat-view"
+          class="view-panel chat-view is-hidden"
+          aria-hidden="true"
+          aria-label="对话记录"
+        >
+          <div id="messages" aria-live="polite"></div>
+          <div class="chat-composer-shell">
+            <button
+              id="show-orb-button"
+              class="chat-mini-orb"
+              type="button"
+              aria-label="返回语音圆球模式"
+              title="返回语音圆球模式"
+            >
+              <span aria-hidden="true"></span>
+            </button>
+
+            <form
+              id="text-composer"
+              class="text-composer"
+              aria-label="发送文本消息"
+              novalidate
+            >
+              <label class="visually-hidden" for="message-input">文本消息</label>
+              <textarea
+                id="message-input"
+                rows="1"
+                maxlength="2048"
+                placeholder="连接对话后可发送文字"
+                autocomplete="off"
+                enterkeyhint="send"
+                aria-describedby="composer-hint composer-status"
+                disabled
+              ></textarea>
+              <button
+                id="send-text-button"
+                class="composer-send-button"
+                type="submit"
+                aria-label="发送消息"
+                title="发送消息"
+                disabled
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 19V5M6 11l6-6 6 6" />
+                </svg>
+                <span class="composer-spinner" aria-hidden="true"></span>
+              </button>
+              <span id="composer-hint" class="visually-hidden">
+                按 Enter 发送，按 Shift+Enter 换行
+              </span>
+              <span
+                id="composer-status"
+                class="visually-hidden"
+                role="status"
+                aria-live="polite"
+              >
+                连接对话后可发送文本消息
+              </span>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <div class="control-dock" aria-label="语音控制">
+        <button
+          id="dock-diagnostics-button"
+          class="control-button control-button-secondary"
+          type="button"
+          aria-label="打开运行诊断"
+          title="运行诊断"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+          </svg>
+        </button>
+
+        <button
+          id="mute-button"
+          class="control-button control-button-secondary"
+          type="button"
+          aria-label="关闭麦克风"
+          aria-pressed="false"
+          title="关闭麦克风"
+          disabled
+        >
+          <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
+          </svg>
+          <svg class="icon-mic-off" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 9v3a3 3 0 0 0 4.2 2.75M15 10V6a3 3 0 0 0-5.5-1.65M5 11a7 7 0 0 0 11.3 5.52M19 11a7 7 0 0 1-.76 3.18M12 18v3M9 21h6M4 4l16 16" />
+          </svg>
+        </button>
+
+        <button
+          id="call-button"
+          class="control-button control-button-primary"
+          type="button"
+          data-action="start"
+          aria-label="开始对话"
+          title="开始对话"
+          disabled
+        >
+          <svg class="icon-wave" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 12v1M8 9v7M12 5v14M16 8v9M20 11v3" />
+          </svg>
+          <svg class="icon-close" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+          <span class="control-spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true">
+        <div id="error-banner" class="toast toast-error" role="alert" hidden></div>
+      </div>
+    </div>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

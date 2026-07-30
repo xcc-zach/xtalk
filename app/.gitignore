@@ -1,0 +1,14 @@
+.build/
+.pytest_cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+node_modules/
+resources/artifacts/
+resources/manifests/core-artifacts.lock.json
+src-tauri/binaries/app-backend-*
+src-tauri/binaries/app-backend-runtime/
+src-tauri/gen/
+src-tauri/target/
