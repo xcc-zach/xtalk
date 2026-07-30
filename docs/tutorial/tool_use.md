@@ -1,29 +1,25 @@
-> **Note**
-> See [`examples/sample_app/mental_consultant_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/mental_consultant_server.py) for details.
-    
-X-Talk supports textual tool customization through `add_agent_tools`:
+## Custom Tools
+
+X-Talk attaches Python-only tools during staged configuration, before the
+configured Agent is instantiated:
+
 ```python
-xtalk_instance.add_agent_tools([build_mental_questionnaire_tool])
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .add_agent_tools([TimerTool])
+    .build()
+)
 ```
 
-`add_agent_tools` must be called before any sessions are created.
-    
-Here tool should be a [Langchain tool](https://docs.langchain.com/oss/python/langchain/tools):
-```python
-from langchain.tools import tool
+`add_agent_tools` is an `XtalkBuilder` method. It accepts LangChain tool
+instances, native X-Talk `SyncTool` or `AsyncTool` classes, and zero-argument
+tool factories. Repeated calls append tools in order without modifying the
+source configuration dictionary.
 
-@tool
-def search_database(query: str, limit: int = 10) -> str:
-    """Search the customer database for records matching the query.
-
-    Args:
-        query: Search terms to look for
-        limit: Maximum number of results to return
-    """
-    return f"Found {limit} results for '{query}'"
-```
-
-If you want each session to keep an independent internal tool state, you can also use a tool factory (see `build_mental_questionnaire_tool` in [`examples/sample_app/mental_consultant_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/mental_consultant_server.py)).
+Use a factory when every session needs an independent tool instance. Native
+asynchronous tools keep their mutable state in each tool call. See
+[`examples/sample_app/custom_async_tool.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_async_tool.py)
+for a complete timer example.
 
 ## Built-in Tools
     

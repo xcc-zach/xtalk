@@ -221,6 +221,8 @@ class Qwen3ASRFlashRealtime(ASR):
         self._callback: Optional[_RealtimeASRCallback] = None
         self._conv: Optional[OmniRealtimeConversation] = None
         self._connected: bool = False
+        self._turn_audio = bytearray()
+        self._turn_text = ""
 
     def recognize(self, audio: bytes) -> str:
         conv, cb = self._create_conversation()
@@ -255,10 +257,14 @@ class Qwen3ASRFlashRealtime(ASR):
         assert self._callback is not None
 
         if audio:
+            self._turn_audio.extend(audio)
             self._append_audio_bytes_with_reconnect(self._conv, audio)
 
         if not is_final:
-            return self._callback.get_last_partial()
+            partial_text = self._callback.get_last_partial()
+            if partial_text.strip():
+                self._turn_text = partial_text
+            return partial_text or self._turn_text
 
         self._send_tail_silence_with_reconnect(self._conv)
 
@@ -266,18 +272,27 @@ class Qwen3ASRFlashRealtime(ASR):
             try:
                 self._conv.commit()
             except Exception:
-                self.reset()
-                self._ensure_session()
-                assert self._conv is not None
+                self._conv = self._reconnect_preserving_turn()
+                self._replay_turn_audio(self._conv)
+                self._send_tail_silence(self._conv)
                 self._conv.commit()
 
         final = self._callback.wait_final(timeout=self._config.final_wait_timeout_sec)
-        return self._callback.finalize_segment(final)
+        final_text = self._callback.finalize_segment(final)
+        if final_text.strip():
+            self._turn_text = final_text
+        return final_text or self._turn_text
 
     def stream_chunk_bytes_hint(self) -> int | None:
         return self._config.stream_chunk_bytes_hint
 
     def reset(self) -> None:
+        self._close_session()
+        self._turn_audio.clear()
+        self._turn_text = ""
+
+    def _close_session(self) -> None:
+        """Close the current remote session without clearing turn state."""
         with self._lock:
             conv = self._conv
             was_connected = self._connected
@@ -286,6 +301,18 @@ class Qwen3ASRFlashRealtime(ASR):
             self._connected = False
         if conv is not None:
             self._safe_close_if_connected(conv, was_connected)
+
+    def _reconnect_preserving_turn(self) -> OmniRealtimeConversation:
+        """Reconnect while retaining buffered audio and the latest transcript."""
+        self._close_session()
+        self._ensure_session()
+        assert self._conv is not None
+        return self._conv
+
+    def _replay_turn_audio(self, conv: OmniRealtimeConversation) -> None:
+        """Replay all audio accumulated in the current turn."""
+        if self._turn_audio:
+            self._append_audio_bytes(conv, bytes(self._turn_audio))
 
     def clone(self) -> "ASR":
         return Qwen3ASRFlashRealtime(api_key=self._api_key, config=self._config)
@@ -312,7 +339,7 @@ class Qwen3ASRFlashRealtime(ASR):
             with self._lock:
                 self._connected = True
         except Exception:
-            self.reset()
+            self._close_session()
             raise
 
     def _create_conversation(
@@ -385,18 +412,17 @@ class Qwen3ASRFlashRealtime(ASR):
         self, conv: OmniRealtimeConversation, audio: bytes
     ) -> None:
         last_err: Optional[BaseException] = None
+        audio_to_send = audio
         for attempt in range(self._config.reconnect_on_send_error_max_attempts + 1):
             try:
-                self._append_audio_bytes(conv, audio)
+                self._append_audio_bytes(conv, audio_to_send)
                 return
             except Exception as e:
                 last_err = e
                 if attempt >= self._config.reconnect_on_send_error_max_attempts:
                     break
-                self.reset()
-                self._ensure_session()
-                assert self._conv is not None
-                conv = self._conv
+                conv = self._reconnect_preserving_turn()
+                audio_to_send = bytes(self._turn_audio)
         msg = str(last_err) if last_err is not None else ""
         raise RuntimeError(
             f"append_audio failed after reconnect attempts: {msg}"
@@ -404,18 +430,19 @@ class Qwen3ASRFlashRealtime(ASR):
 
     def _send_tail_silence_with_reconnect(self, conv: OmniRealtimeConversation) -> None:
         last_err: Optional[BaseException] = None
+        replay_turn = False
         for attempt in range(self._config.reconnect_on_send_error_max_attempts + 1):
             try:
+                if replay_turn:
+                    self._replay_turn_audio(conv)
                 self._send_tail_silence(conv)
                 return
             except Exception as e:
                 last_err = e
                 if attempt >= self._config.reconnect_on_send_error_max_attempts:
                     break
-                self.reset()
-                self._ensure_session()
-                assert self._conv is not None
-                conv = self._conv
+                conv = self._reconnect_preserving_turn()
+                replay_turn = True
         msg = str(last_err) if last_err is not None else ""
         raise RuntimeError(
             f"send_tail_silence failed after reconnect attempts: {msg}"

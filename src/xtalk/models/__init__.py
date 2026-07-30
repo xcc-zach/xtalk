@@ -9,8 +9,8 @@ __all__ = [
     "ASR",
     "Captioner",
     "Embeddings",
-    "ForceAligner",
-    "ForceAlignmentUnit",
+    "ForcedAligner",
+    "ForcedAlignmentUnit",
     "Models",
     "PuntRestorer",
     "Rewriter",
@@ -30,10 +30,13 @@ _INTERFACE_IMPORTS = {
     "ASR": ("xtalk.models.asr.interfaces", "ASR"),
     "Captioner": ("xtalk.models.captioner.interfaces", "Captioner"),
     "Embeddings": ("xtalk.models.embeddings.interfaces", "Embeddings"),
-    "ForceAligner": ("xtalk.models.force_aligner.interfaces", "ForceAligner"),
-    "ForceAlignmentUnit": (
-        "xtalk.models.force_aligner.interfaces",
-        "ForceAlignmentUnit",
+    "ForcedAligner": (
+        "xtalk.models.forced_aligner.interfaces",
+        "ForcedAligner",
+    ),
+    "ForcedAlignmentUnit": (
+        "xtalk.models.forced_aligner.interfaces",
+        "ForcedAlignmentUnit",
     ),
     "Models": ("xtalk.models.container", "Models"),
     "PuntRestorer": ("xtalk.models.punt_restorer.interfaces", "PuntRestorer"),

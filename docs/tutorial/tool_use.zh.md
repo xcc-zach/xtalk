@@ -1,29 +1,23 @@
-> **Note**
-> 详情请参阅 [`examples/sample_app/mental_consultant_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/mental_consultant_server.py)。
+## 自定义工具
 
-X-Talk 支持通过 `add_agent_tools` 自定义文本工具：
+X-Talk 在配置阶段挂载仅存在于 Python 运行时中的工具，并在完成挂载后实例化配置的
+Agent：
+
 ```python
-xtalk_instance.add_agent_tools([build_mental_questionnaire_tool])
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .add_agent_tools([TimerTool])
+    .build()
+)
 ```
 
-请注意，`add_agent_tools` 需要在任何会话创建之前调用。
+`add_agent_tools` 是 `XtalkBuilder` 的方法。它支持 LangChain 工具实例、X-Talk 原生
+`SyncTool` 或 `AsyncTool` 类，以及无参数工具工厂。多次调用会按顺序追加工具，且不会
+修改传入的原始配置字典。
 
-这里的工具应当是一个 [Langchain tool](https://docs.langchain.com/oss/python/langchain/tools)：
-```python
-from langchain.tools import tool
-
-@tool
-def search_database(query: str, limit: int = 10) -> str:
-    """在客户数据库中搜索与查询匹配的记录。
-
-    Args:
-        query: 要搜索的关键词
-        limit: 返回结果的最大数量
-    """
-    return f"Found {limit} results for '{query}'"
-```
-
-如果您希望每个会话中的工具都维持彼此独立的内部状态，也可以使用工具工厂（参见 [`examples/sample_app/mental_consultant_server.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/mental_consultant_server.py) 中的 `build_mental_questionnaire_tool`）。
+如果每个会话都需要独立的工具实例，请使用工具工厂。原生异步工具的可变状态由每次
+工具调用分别保存。完整定时器示例请参阅
+[`examples/sample_app/custom_async_tool.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_async_tool.py)。
 
 ## 内置工具
 

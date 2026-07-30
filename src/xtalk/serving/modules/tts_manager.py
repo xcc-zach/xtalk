@@ -6,7 +6,6 @@ from typing import Any, NamedTuple, Optional
 
 from ...models import (
     TTS,
-    ForceAligner,
     Models,
     SpeechSpeedController,
     StreamingTextTTS,
@@ -27,6 +26,9 @@ from ..events import (
     # Outbound events (unchanged for OutputGateway)
     TTSStarted,
     TTSStopped,
+    TTSStreamingTextAccepted,
+    TTSTextDeliveryFinished,
+    TTSTextSynthesisStarted,
     TTSTextSynthesized,
     TTSVoiceChange,
     TurnTTSFlushRequested,
@@ -48,6 +50,19 @@ class TTSQueueItem(NamedTuple):
     audio_chunk: bytes
     sample_rate: int
     speed_processed: bool = False
+
+
+class _TTSSentenceStart(NamedTuple):
+    """FIFO marker emitted before one regular TTS sentence."""
+
+    text: str
+
+
+class _TTSSentenceEnd(NamedTuple):
+    """FIFO marker emitted after one regular TTS sentence."""
+
+    text: str
+    succeeded: bool = True
 
 
 class _TTSSynthesisError(RuntimeError):
@@ -92,7 +107,9 @@ class TTSManager(Manager):
         self._first_sentence_ready = False
 
         # Queue for audio chunks fed to downstream consumers
-        self.tts_queue: asyncio.Queue[TTSQueueItem] = asyncio.Queue()
+        self.tts_queue: asyncio.Queue[
+            TTSQueueItem | _TTSSentenceStart | _TTSSentenceEnd
+        ] = asyncio.Queue()
 
         self._segments_queue: Optional[asyncio.Queue] = None
         self._segments_task: Optional[asyncio.Task] = None
@@ -100,6 +117,8 @@ class TTSManager(Manager):
         self._streaming_audio_task: Optional[asyncio.Task] = None
         self._streaming_text: str = ""
         self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts: list[bytes] = []
+        self._streaming_sample_rate = 0
 
         # Consumer status
         self._consumer_running = False
@@ -109,26 +128,13 @@ class TTSManager(Manager):
         self.speed_controller = self.models.get(SpeechSpeedController)
         self.current_speed: float = 1.0
 
-        force_alignment_config = self.config.get("force_alignment", {})
-        if not isinstance(force_alignment_config, dict):
-            force_alignment_config = {}
-        self._prealign_before_playback = bool(self.models.get(ForceAligner)) and bool(
-            force_alignment_config.get("enabled", True)
-        )
-
         self._resume_event = asyncio.Event()
         self._resume_event.set()
         self._last_chunk_sent_for_tts = False
         self._outstanding_chunk_ms: deque[float] = deque()
         self._outstanding_total_ms = 0.0
         self._outstanding_condition = asyncio.Condition()
-        self._sentence_tasks: set[asyncio.Task[None]] = set()
-        self._sentence_sequence = 0
-        self._next_sentence_to_release = 0
-        self._sentence_release_condition = asyncio.Condition()
-        self._sentence_prepare_semaphore = asyncio.Semaphore(2)
         self._tts_generation_failure: str | None = None
-
 
     def _ensure_segments_queue(self) -> asyncio.Queue:
         """Ensure a queue exists for sentence segments."""
@@ -137,10 +143,19 @@ class TTSManager(Manager):
         return self._segments_queue
 
     def _is_tts_active(self) -> bool:
-        """Return whether normal or streaming TTS work is active."""
+        """Return whether synthesis, queued delivery, or playback is active."""
+
         if self._streaming_tts is not None:
             return True
-        return bool(self._segments_task and not self._segments_task.done())
+        if self._streaming_audio_task and not self._streaming_audio_task.done():
+            return True
+        if self._segments_task and not self._segments_task.done():
+            return True
+        return bool(
+            self.consumer_task
+            and not self.consumer_task.done()
+            and (not self.tts_queue.empty() or self._outstanding_total_ms > 0.0)
+        )
 
     async def _start_streaming_tts(self, tts_model: StreamingTextTTS) -> bool:
         """Start a live text-streaming TTS session and its audio reader."""
@@ -158,6 +173,7 @@ class TTSManager(Manager):
         self._streaming_tts = tts_model
         self._consumer_running = True
         await self._publish_tts_started()
+        await self._start_consumer()
         self._streaming_audio_task = asyncio.create_task(
             self._streaming_audio_loop(tts_model)
         )
@@ -167,6 +183,14 @@ class TTSManager(Manager):
         """Forward incremental text to the active streaming TTS model."""
         if self._streaming_tts is None:
             return
+        prepared_audio_ms = max(0.0, self._streaming_audio_duration_ms)
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_begin "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
         try:
             await self._streaming_tts.append_text(text)
         except Exception as e:
@@ -179,6 +203,21 @@ class TTSManager(Manager):
             return
 
         self._streaming_text += text
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_complete "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
+        await self.event_bus.publish(
+            TTSStreamingTextAccepted(
+                session_id=self.session_id,
+                text=text,
+                prepared_audio_ms=prepared_audio_ms,
+            ),
+            wait_for_completion=True,
+        )
         if not self._first_sentence_ready:
             self._first_sentence_ready = True
             await self.event_bus.publish(LLMFirstSentence(session_id=self.session_id))
@@ -187,10 +226,30 @@ class TTSManager(Manager):
         """Flush residual streaming text and stop the upstream live session."""
         if self._streaming_tts is None:
             return
+        will_flush = bool(self._streaming_text.strip())
+        logger.debug(
+            "[realtime-tts-race] stage=flush_decision "
+            "session=%s buffered_chars=%d will_flush=%s",
+            self.session_id,
+            len(self._streaming_text),
+            will_flush,
+        )
         try:
-            if self._streaming_text.strip():
+            if will_flush:
                 await self._streaming_tts.flush()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_begin "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
             await self._streaming_tts.stop()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_complete "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
         except Exception as e:
             logger.error(
                 "Failed to flush/stop streaming TTS - session: %s, error: %s",
@@ -233,7 +292,8 @@ class TTSManager(Manager):
                 pass
 
     async def _streaming_audio_loop(self, tts_model: StreamingTextTTS) -> None:
-        """Publish live TTS audio chunks as soon as the model yields them."""
+        """Prepare live TTS audio independently from paced delivery."""
+
         try:
             sample_rate = int(
                 getattr(
@@ -243,46 +303,38 @@ class TTSManager(Manager):
                 )
                 or 48000
             )
-            speed = 1.0
-            if self.speed_controller is not None and self.current_speed != 1.0:
-                speed = max(0.01, float(self.current_speed or 1.0))
-
+            self._streaming_sample_rate = sample_rate
             async for audio in tts_model.audio_stream():
                 if not audio:
                     continue
-                self._streaming_audio_duration_ms += self._chunk_duration_ms(
-                    audio,
-                    sample_rate,
-                )
                 processed_audio = audio
                 if self.speed_controller is not None and self.current_speed != 1.0:
                     processed_audio = await self.speed_controller.async_process(
                         audio,
                         self.current_speed,
                     )
+                if not processed_audio:
+                    continue
 
-                for chunk in self._split_audio_chunk(processed_audio, sample_rate):
-                    if not self._resume_event.is_set():
-                        await self._resume_event.wait()
-                    await self._wait_for_outstanding_budget()
-                    if not self._consumer_running:
-                        break
-                    await self.event_bus.publish(
-                        TTSChunkReady(
-                            session_id=self.session_id,
-                            audio_chunk=chunk,
-                            sample_rate=sample_rate,
-                        ),
-                        wait_for_completion=True,
+                self._streaming_audio_parts.append(processed_audio)
+                self._streaming_audio_duration_ms += self._chunk_duration_ms(
+                    processed_audio,
+                    sample_rate,
+                )
+                await self.tts_queue.put(
+                    TTSQueueItem(
+                        processed_audio,
+                        sample_rate,
+                        speed_processed=True,
                     )
-                    await self._track_outstanding_chunk(
-                        self._chunk_duration_ms(chunk, sample_rate)
-                    )
+                )
 
-            await self._publish_streaming_text_synthesized(speed)
-            await self.event_bus.publish(TTSFinished(session_id=self.session_id))
+            synthesized_text = await self._publish_streaming_text_synthesized()
+            if synthesized_text:
+                await self.tts_queue.put(_TTSSentenceEnd(synthesized_text))
+            self._last_chunk_sent_for_tts = True
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as e:
             logger.error(
                 "Streaming TTS audio loop crashed - session: %s, error: %s",
@@ -293,25 +345,33 @@ class TTSManager(Manager):
         finally:
             if self._streaming_tts is tts_model:
                 self._streaming_tts = None
-            self._consumer_running = False
             async with self._outstanding_condition:
                 self._outstanding_condition.notify_all()
 
-    async def _publish_streaming_text_synthesized(self, speed: float) -> None:
-        """Publish a turn-level synthesized text marker for streaming TTS."""
+    async def _publish_streaming_text_synthesized(self) -> str:
+        """Publish complete processed PCM for one streaming TTS turn."""
+
         text = self._streaming_text.strip()
-        if not text:
-            return
+        audio = b"".join(self._streaming_audio_parts)
+        sample_rate = self._streaming_sample_rate
+        if not text or not audio or sample_rate <= 0:
+            return ""
+
         await self.event_bus.publish(
             TTSTextSynthesized(
                 session_id=self.session_id,
                 text=text,
-                audio_duration=self._streaming_audio_duration_ms / speed,
+                audio_duration=self._chunk_duration_ms(audio, sample_rate),
+                audio_chunk=audio,
+                sample_rate=sample_rate,
             ),
             wait_for_completion=True,
         )
         self._streaming_text = ""
         self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts.clear()
+        self._streaming_sample_rate = 0
+        return text
 
     @Manager.event_handler(TurnTTSStartRequested, priority=100)
     async def _handle_turn_tts_start(self, event: TurnTTSStartRequested) -> None:
@@ -339,6 +399,14 @@ class TTSManager(Manager):
         text = event.text
         if not text:
             return
+        logger.debug(
+            "[realtime-tts-race] stage=append_handler_enter "
+            "session=%s chunk_chars=%d buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
         if self._streaming_tts is not None:
             await self._append_streaming_text(text)
             return
@@ -346,6 +414,13 @@ class TTSManager(Manager):
 
     @Manager.event_handler(TurnTTSFlushRequested, priority=98)
     async def _handle_turn_tts_flush(self, event: TurnTTSFlushRequested) -> None:
+        logger.debug(
+            "[realtime-tts-race] stage=flush_handler_enter "
+            "session=%s buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
         if self._streaming_tts is not None:
             await self._flush_and_stop_streaming_tts()
             return
@@ -396,6 +471,8 @@ class TTSManager(Manager):
         self._last_chunk_sent_for_tts = False
         self._streaming_text = ""
         self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts.clear()
+        self._streaming_sample_rate = 0
         self._tts_generation_failure = None
 
         # Stop consumer
@@ -411,7 +488,6 @@ class TTSManager(Manager):
             except asyncio.CancelledError:
                 pass
         self._segments_task = None
-        await self._cancel_sentence_tasks()
 
         # Drain queue
         while True:
@@ -524,6 +600,7 @@ class TTSManager(Manager):
     async def _tts_consumer(self) -> None:
         """Consume queued TTS output and publish audio events."""
 
+        active_sentence_text = ""
         try:
             while self._consumer_running:
                 # When paused, avoid consuming queue items or emitting events
@@ -536,8 +613,27 @@ class TTSManager(Manager):
                     # Pull from the queue with a short timeout
                     item = await asyncio.wait_for(self.tts_queue.get(), timeout=0.1)
 
-                    # Publish audio chunks (skip if paused)
-                    if isinstance(item, TTSQueueItem) and item.audio_chunk:
+                    if isinstance(item, _TTSSentenceStart):
+                        active_sentence_text = item.text
+                        await self.event_bus.publish(
+                            TTSTextSynthesisStarted(
+                                session_id=self.session_id,
+                                text=item.text,
+                            ),
+                            wait_for_completion=True,
+                        )
+                    elif isinstance(item, _TTSSentenceEnd):
+                        sentence_text = active_sentence_text or item.text
+                        await self.event_bus.publish(
+                            TTSTextDeliveryFinished(
+                                session_id=self.session_id,
+                                text=sentence_text,
+                                succeeded=item.succeeded,
+                            ),
+                            wait_for_completion=True,
+                        )
+                        active_sentence_text = ""
+                    elif isinstance(item, TTSQueueItem) and item.audio_chunk:
                         # Apply speed control when enabled
                         processed_audio = item.audio_chunk
                         if (
@@ -564,9 +660,11 @@ class TTSManager(Manager):
                             await self.event_bus.publish(
                                 event, wait_for_completion=True
                             )
-                            await self._track_outstanding_chunk(
-                                self._chunk_duration_ms(chunk, item.sample_rate)
+                            chunk_ms = self._chunk_duration_ms(
+                                chunk,
+                                item.sample_rate,
                             )
+                            await self._track_outstanding_chunk(chunk_ms)
                     # Mark task as done after processing
                     self.tts_queue.task_done()
 
@@ -643,27 +741,12 @@ class TTSManager(Manager):
             )
         )
 
-    async def _cancel_sentence_tasks(self) -> None:
-        """Cancel prepared sentences and reset their ordered-release state."""
-
-        tasks = tuple(self._sentence_tasks)
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._sentence_tasks.clear()
-        async with self._sentence_release_condition:
-            self._sentence_sequence = 0
-            self._next_sentence_to_release = 0
-            self._sentence_release_condition.notify_all()
-
     async def shutdown(self) -> None:
         """Shut down TTS manager and reset state."""
         await self.reset_tts()
 
     async def _add_text_for_tts(self, text: str, *, final: bool) -> None:
-        """Generate TTS audio and pipeline force-aligned sentence preparation."""
+        """Generate and enqueue FIFO-ordered TTS sentence audio."""
 
         self.pending_sentence_buffer += text
         sentences, remaining = self._split_text_by_delimiters(
@@ -680,116 +763,80 @@ class TTSManager(Manager):
             await self.event_bus.publish(LLMFirstSentence(session_id=self.session_id))
 
         for sentence in sentences:
-            if self._prealign_before_playback:
-                self._schedule_sentence_preparation(sentence)
-            else:
-                await self._enqueue_sentence_stream(sentence)
+            await self._enqueue_sentence_stream(sentence)
 
         if final:
-            if self._prealign_before_playback:
-                await self._wait_for_sentence_tasks()
             self._last_chunk_sent_for_tts = True
 
-    def _schedule_sentence_preparation(self, sentence: str) -> None:
-        """Prepare one force-aligned sentence concurrently and release it in order."""
-
-        sequence = self._sentence_sequence
-        self._sentence_sequence += 1
-        task = asyncio.create_task(
-            self._enqueue_sentence_stream(sentence, sequence=sequence)
-        )
-        self._sentence_tasks.add(task)
-        task.add_done_callback(self._sentence_tasks.discard)
-
-    async def _wait_for_sentence_tasks(self) -> None:
-        """Wait until every scheduled sentence has reached the playback queue."""
-
-        while self._sentence_tasks:
-            await asyncio.gather(
-                *tuple(self._sentence_tasks),
-                return_exceptions=True,
-            )
-
-    async def _enqueue_sentence_stream(
-        self,
-        sentence: str,
-        *,
-        sequence: int | None = None,
-    ) -> None:
-        """Synthesize one sentence and enqueue it after ordered alignment."""
+    async def _enqueue_sentence_stream(self, sentence: str) -> None:
+        """Prepare final sentence PCM while enqueueing it for paced delivery."""
 
         tts_model = self.models.get(TTS)
         if not tts_model:
             await self._publish_error(
                 "tts_model_missing", "TTS model is not configured"
             )
-            await self._skip_sentence_sequence(sequence)
             return
         if self._tts_generation_failure is not None:
-            await self._skip_sentence_sequence(sequence)
             return
 
-        sequence_released = False
+        sentence_started = False
+        sentence_ended = False
         try:
-            async with self._sentence_prepare_semaphore:
-                if self._tts_generation_failure is not None:
-                    raise _TTSSynthesisError(self._tts_generation_failure)
-                sample_rate = int(
-                    getattr(tts_model, "sample_rate", 48000) or 48000
-                )
-                synthesized_duration_ms = 0.0
-                speed = 1.0
-                if (
-                    self.speed_controller is not None
-                    and self.current_speed != 1.0
-                ):
-                    speed = max(0.01, float(self.current_speed or 1.0))
-                buffered_chunks: list[bytes] = []
-                async for ch in self._synthesize_stream_with_fallback(
-                    tts_model,
-                    sentence,
-                ):
-                    synthesized_duration_ms += self._chunk_duration_ms(
-                        ch,
+            sample_rate = int(getattr(tts_model, "sample_rate", 48000) or 48000)
+            sentence_speed = self.current_speed
+            await self.tts_queue.put(_TTSSentenceStart(sentence))
+            sentence_started = True
+            audio_parts: list[bytes] = []
+            async for chunk in self._synthesize_stream_with_fallback(
+                tts_model,
+                sentence,
+            ):
+                processed_chunk = chunk
+                if self.speed_controller is not None and sentence_speed != 1.0:
+                    processed_chunk = await self.speed_controller.async_process(
+                        chunk,
+                        sentence_speed,
+                    )
+                if not processed_chunk:
+                    continue
+
+                audio_parts.append(processed_chunk)
+                await self.tts_queue.put(
+                    TTSQueueItem(
+                        processed_chunk,
                         sample_rate,
+                        speed_processed=True,
                     )
-                    if self._prealign_before_playback:
-                        buffered_chunks.append(ch)
-                    else:
-                        await self.tts_queue.put(TTSQueueItem(ch, sample_rate))
-
-                if synthesized_duration_ms <= 0.0:
-                    raise _TTSSynthesisError("TTS returned no audio data.")
-
-                if self._prealign_before_playback:
-                    playback_chunks = await self._prepare_sentence_audio(
-                        buffered_chunks
-                    )
-                else:
-                    playback_chunks = []
-
-            if self._prealign_before_playback:
-                await self._publish_prepared_sentence(
-                    sequence=sequence,
-                    text=sentence,
-                    chunks=playback_chunks,
-                    sample_rate=sample_rate,
                 )
-                sequence_released = True
-                return
 
+            if not audio_parts:
+                raise _TTSSynthesisError("TTS returned no audio data.")
+
+            prepared_audio = b"".join(audio_parts)
             await self.event_bus.publish(
                 TTSTextSynthesized(
                     session_id=self.session_id,
                     text=sentence,
-                    audio_duration=synthesized_duration_ms / speed,
+                    audio_duration=self._chunk_duration_ms(
+                        prepared_audio,
+                        sample_rate,
+                    ),
+                    audio_chunk=prepared_audio,
+                    sample_rate=sample_rate,
                 ),
                 wait_for_completion=True,
             )
+            await self.tts_queue.put(_TTSSentenceEnd(sentence))
+            sentence_ended = True
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            if sentence_started and not sentence_ended:
+                await self.tts_queue.put(
+                    _TTSSentenceEnd(sentence, succeeded=False)
+                )
             first_failure = self._tts_generation_failure is None
             if first_failure:
                 self._tts_generation_failure = str(e)
@@ -800,71 +847,6 @@ class TTSManager(Manager):
                     e,
                 )
                 await self._publish_error("tts_generation_error", str(e))
-            if not sequence_released:
-                await self._skip_sentence_sequence(sequence)
-
-    async def _publish_prepared_sentence(
-        self,
-        *,
-        sequence: int | None,
-        text: str,
-        chunks: list[bytes],
-        sample_rate: int,
-    ) -> None:
-        """Align and enqueue one prepared sentence in original text order."""
-
-        async def publish_and_enqueue() -> None:
-            playback_duration_ms = sum(
-                self._chunk_duration_ms(chunk, sample_rate) for chunk in chunks
-            )
-            await self.event_bus.publish(
-                TTSTextSynthesized(
-                    session_id=self.session_id,
-                    text=text,
-                    audio_duration=playback_duration_ms,
-                    audio_chunk=b"".join(chunks),
-                    sample_rate=sample_rate,
-                ),
-                wait_for_completion=True,
-            )
-            for chunk in chunks:
-                await self.tts_queue.put(
-                    TTSQueueItem(chunk, sample_rate, speed_processed=True)
-                )
-
-        if sequence is None:
-            await publish_and_enqueue()
-            return
-
-        async with self._sentence_release_condition:
-            await self._sentence_release_condition.wait_for(
-                lambda: sequence == self._next_sentence_to_release
-            )
-            await publish_and_enqueue()
-            self._next_sentence_to_release += 1
-            self._sentence_release_condition.notify_all()
-
-    async def _skip_sentence_sequence(self, sequence: int | None) -> None:
-        """Advance ordered release after one sentence fails to prepare."""
-
-        if sequence is None:
-            return
-        async with self._sentence_release_condition:
-            await self._sentence_release_condition.wait_for(
-                lambda: sequence == self._next_sentence_to_release
-            )
-            self._next_sentence_to_release += 1
-            self._sentence_release_condition.notify_all()
-
-    async def _prepare_sentence_audio(self, chunks: list[bytes]) -> list[bytes]:
-        """Return the exact PCM chunks that will be sent after alignment."""
-
-        if self.speed_controller is None or self.current_speed == 1.0:
-            return chunks
-        return [
-            await self.speed_controller.async_process(chunk, self.current_speed)
-            for chunk in chunks
-        ]
 
     async def _synthesize_stream_with_fallback(self, tts_model: Any, text: str):
         """Call streaming TTS API, falling back to sync methods on failure."""

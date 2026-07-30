@@ -93,18 +93,6 @@ Therefore:
 - It is enough to ensure that the output PCM audio is continuous and in the correct order.
 - Even if the model naturally emits very large chunks, it will not break the frontend playback protocol, because the service layer will split them again.
 
-## TTS Playback Text Tracking
-
-`TTSPlaybackManager` advances played-audio time from frontend `TTSChunkPlayed`
-confirmations and publishes `ResponseUpdate`. When a `force_aligner` model is
-configured, `TTSManager` buffers each complete synthesized sentence instead of
-sending it immediately. `TTSPlaybackManager` aligns that exact, speed-adjusted
-PCM before the sentence is released to the frontend, then uses the returned
-character or word timestamps to compute the spoken text prefix. This adds
-pre-playback latency but guarantees alignment is ready before playback
-confirmations arrive. If alignment fails, the manager uses the configured
-audio-ratio fallback behavior.
-
 ## `set_voice` and `set_emotion` (Experimental Interfaces)
 
 These two methods are optional control interfaces invoked by `TTSManager` through events:
@@ -233,3 +221,7 @@ If the upstream WebSocket TTS only supports another sample rate, such as Fish
 Audio PCM output at 44100 Hz but not 48000 Hz, the model implementation should
 resample internally to 48000 Hz before yielding from `audio_stream()`. This
 keeps the existing frontend binary audio protocol unchanged.
+
+# TTS Playback Progress Tracking
+
+`TTSPlaybackManager` advances played-audio time from frontend `TTSChunkPlayed` events and publishes `ResponseUpdate`. Configuring `forced_aligner` further calibrates the current played-text position. See [Forced Aligner Design](forced_aligner.md) for the interface and the "play first, calibrate later" design.

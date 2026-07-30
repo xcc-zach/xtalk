@@ -51,6 +51,22 @@ A high-performance speech recognition framework, and more. It can run many speec
 </details>
 
 <details markdown="1">
+<summary>MossTTSRealtime</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/tts/moss_tts_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/moss_tts_realtime.py)
+
+A full-duplex streaming TTS client that sends incremental text and receives
+PCM audio from a MOSS-TTS-Realtime service.
+
+[Quick Start](https://github.com/xcc-zach/xtalk-moss-tts-realtime)
+
+[Original Repository](https://github.com/OpenMOSS/MOSS-TTS)
+
+</details>
+
+<details markdown="1">
 <summary>CosyVoice</summary>
 
 **Dependency:** `pip install "xtalk[ali] @ git+https://github.com/xcc-zach/xtalk.git@main"`
@@ -63,36 +79,37 @@ A high-performance speech recognition framework, and more. It can run many speec
 
 ### Forced Alignment
 
-**Name in config**: `force_aligner`
-
-The force aligner maps confirmed TTS playback time back to character or word
+The forced aligner maps confirmed TTS playback time back to character or word
 positions in the assistant response, so the frontend can track which text has
-actually been spoken.
+actually been spoken. Its audio input is fixed to 48 kHz, mono, signed 16-bit
+PCM; callers do not pass a sample rate.
+
+**Name in config**: `forced_aligner`
 
 <details markdown="1">
-<summary>Qwen3ForceAligner</summary>
+<summary>Qwen3ForcedAligner</summary>
 
-**Dependency:** `pip install "xtalk[qwen3-force-aligner] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+**Dependency:** None
 
-**Path:** [`src/xtalk/models/force_aligner/qwen3_force_aligner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/force_aligner/qwen3_force_aligner.py)
+**Path:** [`src/xtalk/models/forced_aligner/qwen3_forced_aligner.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/qwen3_forced_aligner.py)
 
-**Config example:**
-
-```json
-{
-  "force_aligner": {
-    "type": "Qwen3ForceAligner",
-    "params": {
-      "model": "Qwen/Qwen3-ForcedAligner-0.6B",
-      "language": "Chinese",
-      "device_map": "auto",
-      "dtype": "bfloat16"
-    }
-  }
-}
+Quick Start:
+```bash
+python -m pip install -U "vllm[audio]"
+vllm serve \
+    Qwen/Qwen3-ForcedAligner-0.6B \
+    --runner pooling \
+    --dtype bfloat16 \
+    --gpu-memory-utilization 0.8 \
+    --enforce-eager \
+    --trust-request-chat-template \
+    --hf-overrides \
+    '{"architectures":["Qwen3ASRForcedAlignerForTokenClassification"]}' \
+    --host 0.0.0.0 \
+    --port 8001
 ```
 
-[Model Repository](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B)
+[Original Model Repository](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B)
 
 </details>
 

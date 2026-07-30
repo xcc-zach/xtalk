@@ -211,6 +211,38 @@ class ResponseFinish(Event):
 
 
 @dataclass
+class TTSTextSynthesisStarted(Event):
+    """Mark the start of one FIFO-ordered TTS text segment.
+
+    Attributes
+    ----------
+    text : str
+        Complete text of the segment about to be synthesized.
+    """
+
+    TYPE: ClassVar[str] = "tts.text_synthesis_started"
+    text: str = ""
+
+
+@dataclass
+class TTSStreamingTextAccepted(Event):
+    """Report text accepted by the active streaming TTS session.
+
+    Attributes
+    ----------
+    text : str
+        Incremental text successfully accepted by ``StreamingTextTTS``.
+    prepared_audio_ms : float
+        Duration of speed-processed PCM already prepared before the text was
+        forwarded. The value is a lower-bound timeline anchor for this text.
+    """
+
+    TYPE: ClassVar[str] = "tts.streaming_text_accepted"
+    text: str = ""
+    prepared_audio_ms: float = 0.0
+
+
+@dataclass
 class TTSTextSynthesized(Event):
     """Text marker emitted after one synthesized text segment is fully produced.
 
@@ -219,9 +251,9 @@ class TTSTextSynthesized(Event):
     text : str
         Text segment that was synthesized.
     audio_duration : float
-        Estimated playback duration of the synthesized audio in milliseconds.
+        Duration of the final emitted PCM audio in milliseconds.
     audio_chunk : bytes
-        Optional complete PCM 16-bit mono audio for pre-playback alignment.
+        Optional complete PCM 16-bit mono audio accepted for compatibility.
     sample_rate : int
         Sample rate of ``audio_chunk``. Zero when no audio is attached.
     """
@@ -231,6 +263,23 @@ class TTSTextSynthesized(Event):
     audio_duration: float = 0.0
     audio_chunk: bytes = b""
     sample_rate: int = 0
+
+
+@dataclass
+class TTSTextDeliveryFinished(Event):
+    """Mark completion of FIFO audio delivery for one TTS text segment.
+
+    Attributes
+    ----------
+    text : str
+        Text associated with the delivered audio segment.
+    succeeded : bool
+        Whether synthesis produced a complete deliverable segment.
+    """
+
+    TYPE: ClassVar[str] = "tts.text_delivery_finished"
+    text: str = ""
+    succeeded: bool = True
 
 
 @dataclass
@@ -402,10 +451,19 @@ class TurnTTSFlushRequested(Event):
 
 @dataclass
 class ConsumeLLMAgentGenerationRequested(Event):
-    """Request consumption of one LLM-agent output stream."""
+    """Request consumption of one LLM-agent output stream.
+
+    Attributes
+    ----------
+    stream : AsyncIterator[AgentOutput]
+        Agent output stream to consume.
+    persistent : bool
+        Whether turn-stop events must preserve the stream.
+    """
 
     TYPE: ClassVar[str] = "llm_agent.consume_generation_requested"
     stream: AsyncIterator[AgentOutput]
+    persistent: bool = False
 
 
 @dataclass
