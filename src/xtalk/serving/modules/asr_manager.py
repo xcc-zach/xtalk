@@ -216,6 +216,12 @@ class AudioConsumer:
                 is_final=is_final_chunk,
                 chat_history=self._turn_chat_history,
             )
+        if (
+            is_asr_end
+            and self._is_blank_text(recognized_text)
+            and not self._is_blank_text(self._recognized_text)
+        ):
+            recognized_text = self._recognized_text
         if self._is_blank_text(recognized_text):
             return
         if is_asr_end:
