@@ -88,7 +88,7 @@ class AudioFrameReceived(Event):
 
 @dataclass
 class EnhancedAudioFrameReceived(Event):
-    """Enhanced audio frame for downstream ASR/VAD."""
+    """Enhanced audio frame for downstream VAD, speaker, and turn detection."""
 
     TYPE: ClassVar[str] = "audio.enhanced_frame_received"
     audio_data: bytes

@@ -114,7 +114,7 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class EnhancedAudioFrameReceived(Event)
 ```
 
-Enhanced audio frame for downstream ASR/VAD.
+Enhanced audio frame for downstream VAD, speaker, and turn detection.
 
 ### Class Fields
 

@@ -7,7 +7,7 @@ from ..event_bus import EventBus
 from ..events import (
     ASRResultFinal,  # emit when turn about to move to next stage like text generation
     ASRResultPartial,
-    EnhancedAudioFrameReceived,
+    AudioFrameReceived,
     Event,
     TurnASREndRequested,
     TurnInputAbortRequested,
@@ -323,8 +323,8 @@ class ASRManager(Manager):
         self._text_turn_active = False
         self._input_lock = asyncio.Lock()
 
-    @Manager.event_handler(EnhancedAudioFrameReceived)
-    async def _handle_audio_frame(self, event: EnhancedAudioFrameReceived):
+    @Manager.event_handler(AudioFrameReceived)
+    async def _handle_audio_frame(self, event: AudioFrameReceived):
         async with self._input_lock:
             if self._text_turn_active:
                 return
