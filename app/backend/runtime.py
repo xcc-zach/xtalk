@@ -128,6 +128,7 @@ def build_application(
     xtalk_runtime = build_xtalk_runtime(
         effective_config,
         tools_root=startup.data_dir / "tools",
+        anonymous_user_id=startup.anonymous_user_id,
     )
     return create_application(
         startup=startup,

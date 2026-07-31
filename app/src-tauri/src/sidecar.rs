@@ -25,7 +25,10 @@ use tokio::{
     time::{sleep, timeout, Instant},
 };
 
+use crate::managed::{inspect_model_config, ManagedError, ManagedModelPlan, ManagedServices};
+
 const SIDECAR_NAME: &str = "app-backend";
+const DESKTOP_ANONYMOUS_USER_ID: &str = "xtalk-desktop-user";
 const PROTOCOL_VERSION: u16 = 1;
 const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
 const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
@@ -41,6 +44,14 @@ const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_READY_LINE_BYTES: usize = 4 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024;
+
+/// Validates and inspects a selected model configuration for managed services.
+pub(crate) fn inspect_managed_model_config(
+    config_path: &Path,
+) -> Result<ManagedModelPlan, BackendError> {
+    let config_path = validate_model_config_path(config_path)?;
+    Ok(inspect_model_config(&config_path)?)
+}
 
 /// Connection details returned to the trusted WebView.
 #[derive(Clone, Serialize)]
@@ -224,6 +235,7 @@ impl BackendSupervisor {
 pub(crate) struct BackendManager {
     endpoint: String,
     token: String,
+    managed_services: ManagedServices,
     child: Mutex<Option<CommandChild>>,
     exit: watch::Receiver<bool>,
     terminated: AtomicBool,
@@ -241,6 +253,8 @@ impl BackendManager {
         validate_sidecar_runtime(&sidecar_directory)?;
         let data_dir = app.path().app_data_dir()?;
         std::fs::create_dir_all(&data_dir)?;
+        let (managed_services, config_overlay) =
+            ManagedServices::start(app, &config_path, &data_dir).await?;
 
         let startup = StartupMessage {
             protocol_version: PROTOCOL_VERSION,
@@ -249,19 +263,30 @@ impl BackendManager {
             data_dir,
             origins: allowed_origins(),
             config_fallbacks: build_config_fallbacks(&vad_model_path),
-            config_overlay: Value::Object(Default::default()),
+            config_overlay,
+            anonymous_user_id: DESKTOP_ANONYMOUS_USER_ID,
         };
         let mut startup_line = serde_json::to_vec(&startup)?;
         startup_line.push(b'\n');
 
-        let command = app
-            .shell()
-            .sidecar(SIDECAR_NAME)?
-            .current_dir(sidecar_directory);
-        let (mut events, mut child) = command.spawn()?;
+        let command = match app.shell().sidecar(SIDECAR_NAME) {
+            Ok(command) => command.current_dir(sidecar_directory),
+            Err(error) => {
+                managed_services.shutdown().await;
+                return Err(error.into());
+            }
+        };
+        let (mut events, mut child) = match command.spawn() {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                managed_services.shutdown().await;
+                return Err(error.into());
+            }
+        };
 
         if let Err(error) = child.write(&startup_line) {
             let _ = child.kill();
+            managed_services.shutdown().await;
             return Err(error.into());
         }
 
@@ -269,6 +294,7 @@ impl BackendManager {
             Ok(ready) => ready,
             Err(error) => {
                 let _ = child.kill();
+                managed_services.shutdown().await;
                 return Err(error);
             }
         };
@@ -276,6 +302,7 @@ impl BackendManager {
         let endpoint = format!("http://127.0.0.1:{}", ready.port);
         if let Err(error) = wait_for_health(ready.port, &token).await {
             let _ = child.kill();
+            managed_services.shutdown().await;
             return Err(error);
         }
 
@@ -283,6 +310,7 @@ impl BackendManager {
         let manager = Arc::new(Self {
             endpoint,
             token,
+            managed_services,
             child: Mutex::new(Some(child)),
             exit,
             terminated: AtomicBool::new(false),
@@ -292,6 +320,10 @@ impl BackendManager {
 
         let weak_manager = Arc::downgrade(&manager);
         tauri::async_runtime::spawn(monitor_sidecar(events, exit_sender, weak_manager));
+        if let Some(failure) = manager.managed_services.failure_receiver() {
+            let weak_manager = Arc::downgrade(&manager);
+            tauri::async_runtime::spawn(monitor_managed_services(failure, weak_manager));
+        }
 
         Ok(manager)
     }
@@ -299,6 +331,9 @@ impl BackendManager {
     /// Returns the current loopback origin and launch token while the sidecar is usable.
     pub(crate) fn connection(&self) -> Result<NativeBackendConnection, BackendError> {
         if self.terminated.load(Ordering::Acquire) || self.shutting_down.load(Ordering::Acquire) {
+            return Err(BackendError::Unavailable);
+        }
+        if !self.managed_services.is_healthy() {
             return Err(BackendError::Unavailable);
         }
 
@@ -315,6 +350,7 @@ impl BackendManager {
 
         if self.terminated.load(Ordering::Acquire) {
             self.child.lock().await.take();
+            self.managed_services.shutdown().await;
             return Ok(());
         }
 
@@ -332,6 +368,7 @@ impl BackendManager {
             eprintln!("controlled app-backend shutdown request failed: {error}");
         } else if self.wait_for_exit(GRACEFUL_SHUTDOWN_TIMEOUT).await {
             self.child.lock().await.take();
+            self.managed_services.shutdown().await;
             return Ok(());
         }
 
@@ -341,9 +378,11 @@ impl BackendManager {
         }
 
         if !self.wait_for_exit(FORCED_SHUTDOWN_TIMEOUT).await {
+            self.managed_services.shutdown().await;
             return Err(BackendError::ForcedShutdownTimedOut);
         }
 
+        self.managed_services.shutdown().await;
         Ok(())
     }
 
@@ -375,6 +414,7 @@ struct StartupMessage<'a> {
     origins: Vec<String>,
     config_fallbacks: Value,
     config_overlay: Value,
+    anonymous_user_id: &'a str,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -416,6 +456,8 @@ pub(crate) enum BackendError {
     Json(#[from] serde_json::Error),
     #[error("failed to start or control app-backend: {0}")]
     Shell(#[from] tauri_plugin_shell::Error),
+    #[error("failed to prepare a managed local model: {0}")]
+    Managed(#[from] ManagedError),
     #[error("could not generate a secure launch token: {0}")]
     Token(String),
     #[error("a required sidecar file or directory is missing")]
@@ -552,6 +594,22 @@ async fn monitor_sidecar(
         manager.terminated.store(true, Ordering::Release);
     }
     let _ = exit_sender.send(true);
+}
+
+async fn monitor_managed_services(
+    mut failure: watch::Receiver<bool>,
+    manager: std::sync::Weak<BackendManager>,
+) {
+    while !*failure.borrow() {
+        if failure.changed().await.is_err() {
+            return;
+        }
+    }
+    if let Some(manager) = manager.upgrade() {
+        if let Err(error) = manager.shutdown().await {
+            eprintln!("failed to stop app-backend after managed service failure: {error}");
+        }
+    }
 }
 
 fn generate_launch_token() -> Result<String, BackendError> {
@@ -846,12 +904,12 @@ fn parse_http_response(response: &[u8]) -> Result<HttpResponse, BackendError> {
 mod tests {
     use std::{fs, path::PathBuf, process};
 
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     use super::{
         build_config_fallbacks, parse_http_response, validate_health_response,
         validate_model_config_path, validate_ready_line, BackendError, StartupMessage,
-        PROTOCOL_VERSION,
+        DESKTOP_ANONYMOUS_USER_ID, PROTOCOL_VERSION,
     };
 
     fn temporary_model_config(name: &str, contents: &[u8]) -> PathBuf {
@@ -932,7 +990,8 @@ mod tests {
             data_dir: PathBuf::from("app-data"),
             origins: vec!["tauri://localhost".to_owned()],
             config_fallbacks: build_config_fallbacks(&vad_model_path),
-            config_overlay: Value::Object(Default::default()),
+            config_overlay: json!({}),
+            anonymous_user_id: DESKTOP_ANONYMOUS_USER_ID,
         };
 
         let payload = serde_json::to_value(startup).expect("startup message must serialize");
@@ -947,6 +1006,10 @@ mod tests {
             })
         );
         assert_eq!(payload["config_overlay"], json!({}));
+        assert_eq!(
+            payload["anonymous_user_id"],
+            json!(DESKTOP_ANONYMOUS_USER_ID)
+        );
     }
 
     #[test]

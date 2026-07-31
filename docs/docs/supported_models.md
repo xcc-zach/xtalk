@@ -51,6 +51,32 @@ A high-performance speech recognition framework, and more. It can run many speec
 </details>
 
 <details markdown="1">
+<summary>MossTTSNano</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/tts/moss_tts_nano.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/moss_tts_nano.py)
+
+An HTTP client for the official Python/FastAPI service and XTalk's native Rust
+ONNX and Swift MLX services. All use multipart `POST /api/generate` with `text`
+and `prompt_audio`, return base64 PCM16 WAV, and keep client output fixed at
+48 kHz mono PCM16. `voices` uses the same `{name, path}` entries as IndexTTS.
+
+```json
+{
+  "type": "MossTTSNano",
+  "params": {
+    "base_url": "http://127.0.0.1:18083",
+    "voices": [{"name": "zh", "path": "/path/to/reference.wav"}]
+  }
+}
+```
+
+[Original Repository](https://github.com/OpenMOSS/MOSS-TTS-Nano)
+
+</details>
+
+<details markdown="1">
 <summary>MossTTSRealtime</summary>
 
 **Dependency:** None

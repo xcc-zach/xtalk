@@ -51,6 +51,32 @@
 </details>
 
 <details markdown="1">
+<summary>MossTTSNano</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/tts/moss_tts_nano.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/moss_tts_nano.py)
+
+同时兼容官方 Python/FastAPI 服务及 XTalk 本地 Rust ONNX、Swift MLX 服务的
+HTTP 客户端。各端统一使用 multipart `POST /api/generate`，字段为 `text` 和 `prompt_audio`，
+返回 base64 PCM16 WAV；客户端输出固定为 48 kHz 单声道 PCM16。`voices` 与
+IndexTTS 一样使用 `{name, path}` 配置。
+
+```json
+{
+  "type": "MossTTSNano",
+  "params": {
+    "base_url": "http://127.0.0.1:18083",
+    "voices": [{"name": "zh", "path": "/path/to/reference.wav"}]
+  }
+}
+```
+
+[原始仓库](https://github.com/OpenMOSS/MOSS-TTS-Nano)
+
+</details>
+
+<details markdown="1">
 <summary>MossTTSRealtime</summary>
 
 **依赖：** 无

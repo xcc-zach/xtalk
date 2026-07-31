@@ -2,12 +2,16 @@
 
 #![warn(missing_docs)]
 
+mod managed;
 mod sidecar;
 mod tools;
 
 use std::{path::PathBuf, sync::Arc};
 
-use sidecar::{BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection};
+use sidecar::{
+    inspect_managed_model_config, BackendSupervisor, NativeBackendConnection,
+    NativeModelConfigSelection,
+};
 use tauri::{Manager, State, WindowEvent};
 use tools::NativeToolDefinition;
 
@@ -21,6 +25,7 @@ pub fn run() {
             apply_model_config,
             get_backend_connection,
             get_installed_tools,
+            get_managed_model_plan,
             get_model_config_selection,
             install_tool_directory,
             remove_installed_tool,
@@ -46,6 +51,11 @@ async fn get_backend_connection(
         .connection()
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_managed_model_plan(config_path: PathBuf) -> Result<managed::ManagedModelPlan, String> {
+    inspect_managed_model_config(&config_path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

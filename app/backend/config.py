@@ -69,6 +69,8 @@ class StartupConfig:
         Exact WebView origins permitted to call the loopback service.
     config_overlay : dict[str, Any]
         Generic configuration overlay recursively merged over the base JSON.
+    anonymous_user_id : str | None, optional
+        Runtime-only stable identity for the built-in anonymous login.
     config_fallbacks : dict[str, Any], optional
         Top-level fallback values used only when a key is absent from the base
         configuration.
@@ -80,6 +82,7 @@ class StartupConfig:
     data_dir: Path
     origins: tuple[str, ...]
     config_overlay: dict[str, Any]
+    anonymous_user_id: str | None = None
     config_fallbacks: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -142,6 +145,15 @@ class StartupConfig:
         if not isinstance(overlay_value, dict):
             raise ValueError("config_overlay must be a JSON object")
 
+        anonymous_user_id = payload.get("anonymous_user_id")
+        if anonymous_user_id is not None:
+            if (
+                not isinstance(anonymous_user_id, str)
+                or not anonymous_user_id.strip()
+            ):
+                raise ValueError("anonymous_user_id must be a non-empty string")
+            anonymous_user_id = anonymous_user_id.strip()
+
         fallbacks_value = payload.get("config_fallbacks", {})
         if not isinstance(fallbacks_value, dict):
             raise ValueError("config_fallbacks must be a JSON object")
@@ -153,6 +165,7 @@ class StartupConfig:
             data_dir=Path(data_dir_value).expanduser().resolve(),
             origins=tuple(normalized_origins),
             config_overlay=copy.deepcopy(overlay_value),
+            anonymous_user_id=anonymous_user_id,
             config_fallbacks=copy.deepcopy(fallbacks_value),
         )
 

@@ -42,10 +42,19 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/app-backend"
+      "binaries/app-backend",
+      "binaries/local-model-runtime",
+      "binaries/mlx-model-runtime",
+      "binaries/sherpa-onnx-offline-websocket-server"
     ],
     "resources": {
       "../resources/licenses/silero-vad-LICENSE.txt": "licenses/silero-vad-LICENSE.txt",
+      "../resources/licenses/mlx-audio-swift-LICENSE.txt": "licenses/mlx-audio-swift-LICENSE.txt",
+      "../resources/licenses/mlx-swift-LICENSE.txt": "licenses/mlx-swift-LICENSE.txt",
+      "../resources/manifests/managed-models.lock.json": "manifests/managed-models.lock.json",
+      "../resources/managed-runtime/ort-tts/": "managed-runtime/ort-tts/",
+      "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",
+      "../resources/managed-runtime/sherpa/": "managed-runtime/sherpa/",
       "../resources/models/audio/silero_vad.onnx": "models/audio/silero_vad.onnx",
       "binaries/app-backend-runtime/": "app-backend-runtime/"
     },

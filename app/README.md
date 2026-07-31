@@ -104,6 +104,27 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
+For a build that supports managed SenseVoice and MOSS services, also stage
+their target-specific native runtimes:
+
+```bash
+python scripts/prepare_managed_runtime.py \
+  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-ort-library /path/to/sherpa/libonnxruntime \
+  --tts-ort-library /path/to/tts/libonnxruntime
+```
+
+On Apple Silicon this also builds and stages the pinned Swift/MLX sidecar and
+its Metal shader bundle; install the build-host component with
+`xcodebuild -downloadComponent MetalToolchain`. CUDA builds additionally pass
+`--sherpa-cuda-runtime-dir` and `--tts-cuda-runtime-dir`, each pointing to the
+matching ONNX Runtime GPU library directory.
+
+Optional weights are not bundled. Their immutable revisions, paths, sizes, and
+SHA-256 values are pinned in
+`resources/manifests/managed-models.lock.json` and downloaded into AppData only
+when a selected configuration references the service.
+
 The freezer collects the installed public `xtalk.models` namespace and package
 data so model discovery continues to be configuration-driven. Optional
 dependency groups are build inputs, not model-type branches in application
@@ -123,6 +144,14 @@ The selected file must contain a JSON object and be no larger than 1 MiB. It
 must remain available at the selected path for subsequent launches. The
 frozen sidecar can instantiate only providers whose dependency groups were
 included at build time.
+
+Use [`examples/local_models.json`](examples/local_models.json) for the fully
+managed local ASR/TTS configuration. Fill its empty LLM API key before use.
+Tauri resolves its `managed://` values without modifying the example file. Add
+`?backend=cpu`, `?backend=cuda`, or `?backend=mlx` to force a backend; without
+it, selection order is CUDA, MLX, then CPU. The
+[`examples/local_models_mlx.json`](examples/local_models_mlx.json) variant
+forces MLX.
 
 ## Developer tool directories
 
@@ -152,10 +181,22 @@ fallback; an installed enabled tool named `timer` replaces that fallback.
 ## Local interface
 
 The desktop UI follows the visual hierarchy of `examples/sample_app`: a
-centered brand bar, Orb/chat views, a bottom glass control dock, and a right
-settings-and-diagnostics drawer. It preserves the desktop adapter boundary and
-provides light, dark, and narrow-window layouts. The chat view accepts text
-with Enter to send and Shift+Enter for a newline. Text is sent with the public
+left conversation sidebar that starts collapsed, centered brand bar, Orb/chat
+views, a bottom glass control dock, and a right settings-and-diagnostics
+drawer. The sidebar uses the public session APIs to start a new chat or switch
+among all persisted sessions. Its Tools button opens a centered configuration
+dialog for installing, enabling, deleting, and applying tools. Conversation
+data remains in AppData-backed `chat_history.sqlite3`; the WebView does not
+maintain a duplicate history store. A desktop-only fixed anonymous identity
+is passed through the private sidecar startup protocol, outside the public
+model and service configuration, and keeps those sessions addressable after
+the sidecar restarts. The launch-token and Origin boundary prevents other
+clients from using that identity. It preserves the desktop adapter boundary
+and provides light, dark, and narrow-window layouts. The chat view accepts text
+with Enter to send and Shift+Enter for a newline. The interface automatically
+selects Simplified Chinese or English from the operating-system language. The
+language row in Settings & diagnostics can override that choice, and the
+preference persists locally. Text is sent with the public
 `Session.sendText()` API and appears only after XTalk confirms the user turn
 with a matching `finish_asr` action over the session WebSocket.
 

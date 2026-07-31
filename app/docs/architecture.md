@@ -33,15 +33,32 @@ public SDK cannot appear in URL logs.
 ## Local interface
 
 The WebView follows the layout and visual language of `examples/sample_app`
-without importing example implementation code. It provides a centered brand
-bar, Orb and conversation views, a bottom glass control dock, and a right-side
-settings-and-diagnostics drawer. The drawer shows the selected external model
-configuration and installed developer tools. It can replace the configuration,
-copy tool directories into AppData, update their enabled state, restart the
-sidecar, and rediscover the local service. Light, dark, and narrow-window
-layouts share the same desktop adapter and offline state model. The macOS
-bundle includes the microphone usage description and audio-input entitlement
-required when a user starts a voice conversation.
+without importing example implementation code. It provides a left-side
+conversation history that starts collapsed, a centered brand bar, Orb and
+conversation views, a bottom glass control dock, and a right-side
+settings-and-diagnostics drawer. The conversation sidebar creates new
+conversations and switches among all sessions returned by the public client
+API. A same-style Tools action below New chat opens a centered dialog that can
+copy tool directories into AppData, update their enabled state, delete copied
+tools, and restart the sidecar to apply changes. The settings drawer organizes
+language, external model configuration, runtime status, local-service
+diagnostics, and recovery into individually expandable rows. It can replace the
+model configuration and rediscover the local service. The language row defaults
+to automatic
+operating-system locale detection and allows a persisted Simplified Chinese or
+English override. Static content, dynamic status, accessibility labels, and
+native picker text all use the same resolved language. Light, dark, and
+narrow-window layouts share the same desktop adapter and offline state model.
+The macOS bundle includes the microphone usage description and audio-input
+entitlement required when a user starts a voice conversation.
+
+Conversation history is server-authoritative and stored in
+`chat_history.sqlite3` under the application data directory forced into the
+sidecar configuration. The private desktop startup protocol carries one fixed
+anonymous user identifier separately from public `service_config`; the
+launch-token and Origin boundary keeps that single-user identity private to the
+app. Sidebar session titles and messages therefore survive application and
+sidecar restarts without a second WebView-owned history store.
 
 ## Authentication contract
 
@@ -103,6 +120,65 @@ The model is pinned by upstream commit and SHA-256 in
 missing or changed file, and the installed application never downloads this
 base runtime asset.
 
+## Optional native model runtime
+
+Optional downloadable speech models run in a separate Rust HTTP sidecar under
+`app/local-model-runtime`. The first engine implements MOSS-TTS-Nano directly
+with SentencePiece and five ONNX sessions: reference-audio codec encode,
+prefill, autoregressive decode, sampled local frame, and codec decode. Its
+primary `POST /api/generate` contract matches the official Python/FastAPI
+service: multipart `text` plus `prompt_audio` in, base64 WAV JSON out.
+Reference audio is converted to 48 kHz before encoding, and generated output is
+fixed to 48 kHz mono PCM16.
+
+Apple Silicon packages also include the Swift sidecar in
+`app/local-model-runtime-mlx`. It uses pinned `mlx-audio-swift` APIs to load
+local SenseVoice and MOSS safetensor snapshots. It preserves the same offline
+ASR WebSocket packet and MOSS multipart HTTP contracts, so the Python model
+clients do not branch on the inference backend. Its MOSS response is likewise
+48 kHz mono PCM16.
+
+ONNX Runtime is an application resource, not a user-installed dependency. The
+sidecar loads the exact packaged dynamic library passed through `--ort-dylib`;
+model weights remain outside the application bundle. A selected
+`managed://sensevoice-small` or `managed://moss-tts-nano` URL makes Tauri read
+the immutable `managed-models.lock.json`, download only that service's pinned
+files into `AppData/models/managed/<id>/<version>/`, verify file sizes and
+SHA-256 values, and atomically write the completion marker. Every later launch
+revalidates the installed snapshot before using it.
+
+The managed URL accepts `?backend=cpu`, `?backend=cuda`, or `?backend=mlx`.
+Without a query, Tauri selects a packaged CUDA provider on an NVIDIA device,
+then Apple Silicon MLX, then CPU. An explicitly selected unavailable backend is
+an error instead of an implicit fallback. CUDA and CPU share the ONNX snapshot;
+MLX selects its separately pinned safetensor snapshot.
+
+After the user selects a configuration, Tauri inspects it before applying it.
+Configurations that request managed services open a blocking progress dialog.
+Native progress events report model verification, per-file downloaded bytes,
+service startup, and readiness. The rest of the interface remains inert until
+the Python backend passes its health check, at which point the dialog closes
+automatically. A startup failure leaves the dialog open with the error and a
+close action.
+
+For ONNX, Tauri starts SenseVoice through the packaged native
+`sherpa-onnx-offline-websocket-server` and starts MOSS through the Rust sidecar.
+For MLX, it starts one Swift sidecar per requested service.
+It waits for TCP/readiness health boundaries, then deep-merges actual ephemeral
+loopback URLs and the resolved AppData voice path into the Python startup
+overlay. The selected file remains portable and contains no generated ports.
+If installation, process startup, or Python startup fails, all newly started
+children are stopped and the previous configuration is restored. An unexpected
+managed-child exit also makes the backend connection unavailable.
+
+The complete local example is
+[`../examples/local_models.json`](../examples/local_models.json). Its LLM
+matches `server_configs/sample.json` while intentionally leaving `api_key`
+empty. SenseVoice consumes 16 kHz PCM through the existing offline WebSocket
+client; MOSS reference audio and generated output use 48 kHz. The companion
+[`../examples/local_models_mlx.json`](../examples/local_models_mlx.json)
+explicitly selects MLX.
+
 ## Configuration
 
 Release bundles contain no default XTalk model configuration. The native picker
@@ -157,8 +233,9 @@ omitted without preventing the remaining local service from starting.
 ## Shutdown
 
 The UI closes its XTalk session before requesting shutdown. Tauri asks the
-authenticated sidecar shutdown endpoint to stop, waits for a bounded interval,
-and terminates only the child it started if graceful shutdown does not finish.
+authenticated Python sidecar shutdown endpoint to stop, waits for a bounded
+interval, and terminates only the child it started if graceful shutdown does
+not finish. Managed model processes are then stopped in reverse startup order.
 
 ## Phase 0 limitations
 
@@ -168,6 +245,6 @@ and terminates only the child it started if graceful shutdown does not finish.
 - PyInstaller `onedir` support files remain beside the sidecar in development
   and ordinary bundles; macOS app bundles place them in `Contents/Frameworks`
   as required by the bootloader. Runtime validation rejects incomplete layouts.
-- Additional tool dependency management, local enhancement, provider settings,
-  and optional component supervision belong to later phases. Developer tool
-  directories can use Python packages already present in the frozen sidecar.
+- Additional tool dependency management, local enhancement, and provider
+  settings belong to later phases. Developer tool directories can use Python
+  packages already present in the frozen sidecar.
