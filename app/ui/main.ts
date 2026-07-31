@@ -5,19 +5,34 @@ import {
   applyNativeToolChanges,
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
+  getNativeManagedModelPlan,
   getNativeBackendConnection,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
   installNativeToolDirectory,
+  listenNativeManagedModelProgress,
   removeNativeInstalledTool,
   setNativeToolEnabled,
+  type NativeManagedModelProgress,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
   type DesktopSessionSnapshot,
+  type DesktopSessionSummary,
 } from "./adapters/xtalk-client-adapter";
+import {
+  getLanguagePreference,
+  getResolvedLanguage,
+  localizeKnownError,
+  refreshAutomaticLanguage,
+  setLanguagePreference,
+  t,
+  translateDocument,
+  type LanguagePreference,
+  type TranslationKey,
+} from "./i18n";
 
 const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
   connectionState: "disconnected",
@@ -30,16 +45,20 @@ const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
 
 type BackendState = "loading" | "ready" | "offline" | "unconfigured";
 
+const BACKEND_SUMMARY_KEYS: Record<BackendState, TranslationKey> = {
+  loading: "service.summary.loading",
+  ready: "service.summary.ready",
+  offline: "service.summary.offline",
+  unconfigured: "service.summary.unconfigured",
+};
+
 const elements = {
-  backendStatusButton: requireElement<HTMLButtonElement>(
-    "backend-status-button",
-  ),
+  app: requireElement<HTMLElement>("app"),
   backendStatusDot: requireElement<HTMLElement>("backend-status-dot"),
   backendStatusLabel: requireElement<HTMLElement>("backend-status-label"),
   backendSummary: requireElement<HTMLElement>("backend-summary"),
   backendDetail: requireElement<HTMLElement>("backend-detail"),
   websocketDetail: requireElement<HTMLElement>("websocket-detail"),
-  tokenDetail: requireElement<HTMLElement>("token-detail"),
   networkDetail: requireElement<HTMLElement>("network-detail"),
   sessionDetail: requireElement<HTMLElement>("session-detail"),
   userDetail: requireElement<HTMLElement>("user-detail"),
@@ -75,15 +94,60 @@ const elements = {
   showOrbButton: requireElement<HTMLButtonElement>("show-orb-button"),
   orbTitle: requireElement<HTMLElement>("orb-title"),
   orbCaption: requireElement<HTMLElement>("orb-caption"),
+  chatSidebar: requireElement<HTMLElement>("chat-sidebar"),
+  sidebarBackdrop: requireElement<HTMLButtonElement>("sidebar-backdrop"),
+  toggleSidebarButton: requireElement<HTMLButtonElement>(
+    "toggle-sidebar-button",
+  ),
+  newChatButton: requireElement<HTMLButtonElement>("new-chat-button"),
+  openToolsButton: requireElement<HTMLButtonElement>("open-tools-button"),
+  chatSessionList: requireElement<HTMLElement>("chat-session-list"),
+  chatSessionListStatus: requireElement<HTMLElement>(
+    "chat-session-list-status",
+  ),
   debugDrawer: requireElement<HTMLElement>("debug-drawer"),
   drawerBackdrop: requireElement<HTMLButtonElement>("drawer-backdrop"),
   toggleDebugButton: requireElement<HTMLButtonElement>(
     "toggle-debug-button",
   ),
   closeDebugButton: requireElement<HTMLButtonElement>("close-debug-button"),
+  toolsDialog: requireElement<HTMLElement>("tools-dialog"),
+  toolsDialogBackdrop: requireElement<HTMLButtonElement>(
+    "tools-dialog-backdrop",
+  ),
+  closeToolsButton: requireElement<HTMLButtonElement>("close-tools-button"),
+  managedProgressBackdrop: requireElement<HTMLElement>(
+    "managed-progress-backdrop",
+  ),
+  managedProgressDialog: requireElement<HTMLElement>(
+    "managed-progress-dialog",
+  ),
+  managedProgressMessage: requireElement<HTMLElement>(
+    "managed-progress-message",
+  ),
+  managedProgressBar: requireElement<HTMLProgressElement>(
+    "managed-progress-bar",
+  ),
+  managedProgressDetail: requireElement<HTMLElement>(
+    "managed-progress-detail",
+  ),
+  managedProgressPercent: requireElement<HTMLElement>(
+    "managed-progress-percent",
+  ),
+  managedProgressServices: requireElement<HTMLOListElement>(
+    "managed-progress-services",
+  ),
+  managedProgressError: requireElement<HTMLElement>(
+    "managed-progress-error",
+  ),
+  closeManagedProgressButton: requireElement<HTMLButtonElement>(
+    "close-managed-progress-button",
+  ),
   callButton: requireElement<HTMLButtonElement>("call-button"),
   muteButton: requireElement<HTMLButtonElement>("mute-button"),
   retryButton: requireElement<HTMLButtonElement>("retry-button"),
+  languageSelect: requireElement<HTMLSelectElement>("language-select"),
+  languageSummary: requireElement<HTMLElement>("language-summary"),
 };
 
 let adapter: XtalkClientAdapter | null = null;
@@ -95,10 +159,28 @@ let modelConfigOperation = false;
 let toolOperation = false;
 let toolChangesPending = false;
 let diagnosticsOpen = false;
+let toolsDialogOpen = false;
+let managedProgressState: "closed" | "running" | "failed" = "closed";
+let managedProgressServiceIds: string[] = [];
+let latestManagedProgress: NativeManagedModelProgress | null = null;
+let managedProgressFailure: unknown = null;
+let sidebarOpen = false;
+let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
+let persistedSessions: DesktopSessionSummary[] = [];
+let sessionListError: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
+let sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionActivityKey = "";
+let backendStatusKey: TranslationKey = "service.starting";
+let visibleError:
+  | {
+      key: TranslationKey;
+      parameters: Readonly<Record<string, unknown>>;
+    }
+  | null = null;
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -109,40 +191,341 @@ function requireElement<T extends HTMLElement>(id: string): T {
 }
 
 function formatError(error: unknown): string {
+  if (!("__TAURI_INTERNALS__" in globalThis)) {
+    return t("native.runtimeUnavailable");
+  }
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(
-    /([?&]app_token=)[^&\s]+/giu,
-    "$1[hidden]",
+  return localizeKnownError(
+    message.replace(
+      /([?&]app_token=)[^&\s]+/giu,
+      "$1[hidden]",
+    ),
   );
 }
 
-function showError(message: string | null): void {
-  elements.errorBanner.hidden = !message;
-  elements.errorBanner.textContent = message ?? "";
+function showError(
+  key: TranslationKey | null,
+  parameters: Readonly<Record<string, unknown>> = {},
+): void {
+  visibleError = key === null ? null : { key, parameters };
+  renderVisibleError();
+}
+
+function renderVisibleError(): void {
+  elements.errorBanner.hidden = visibleError === null;
+  if (visibleError === null) {
+    elements.errorBanner.textContent = "";
+    return;
+  }
+  const parameters = Object.fromEntries(
+    Object.entries(visibleError.parameters).map(([name, value]) => [
+      name,
+      name === "error" ? formatError(value) : String(value),
+    ]),
+  );
+  elements.errorBanner.textContent = t(visibleError.key, parameters);
 }
 
 function setBackendStatus(
   state: BackendState,
-  label: string,
+  labelKey: TranslationKey,
 ): void {
   backendState = state;
+  backendStatusKey = labelKey;
   elements.backendStatusDot.dataset.state = state;
-  elements.backendStatusLabel.textContent = label;
-  elements.backendSummary.textContent = state;
+  elements.backendStatusLabel.textContent = t(labelKey);
+  elements.backendSummary.textContent = t(BACKEND_SUMMARY_KEYS[state]);
   updateOrbPresentation(latestSnapshot);
 }
 
+function applyUiLanguage(): void {
+  translateDocument();
+  renderVisibleError();
+  const preference = getLanguagePreference();
+  elements.languageSelect.value = preference;
+  elements.languageSummary.textContent =
+    preference === "auto"
+      ? t("language.auto")
+      : t(getResolvedLanguage() === "zh-CN" ? "language.zhCN" : "language.en");
+
+  setBackendStatus(backendState, backendStatusKey);
+  if (backendState === "unconfigured") {
+    elements.backendDetail.textContent = t("service.notStarted");
+    elements.websocketDetail.textContent = t("service.notConfigured");
+  } else if (backendState === "loading") {
+    elements.backendDetail.textContent = t("service.waitingEndpoint");
+    elements.websocketDetail.textContent = t("service.notConfigured");
+  } else if (backendState === "offline") {
+    elements.backendDetail.textContent = t("service.offlineMode");
+  }
+
+  updateNetworkStatus();
+  renderModelConfigSelection({ configPath: modelConfigPath });
+  renderInstalledTools(installedTools);
+  updateDeveloperToolsStatus();
+  renderSnapshot(latestSnapshot);
+  renderManagedProgress();
+}
+
+function isCompactLayout(): boolean {
+  return window.matchMedia("(max-width: 760px)").matches;
+}
+
+function setSidebarOpen(open: boolean, moveFocus = true): void {
+  sidebarOpen = open;
+  elements.app.classList.toggle("sidebar-open", open);
+  elements.chatSidebar.setAttribute("aria-hidden", String(!open));
+  elements.toggleSidebarButton.setAttribute("aria-expanded", String(open));
+  elements.toggleSidebarButton.setAttribute(
+    "aria-label",
+    t(open ? "sidebar.collapse" : "sidebar.expand"),
+  );
+
+  if (open && isCompactLayout()) {
+    setDiagnosticsOpen(false);
+  }
+  if (moveFocus) {
+    elements.toggleSidebarButton.focus();
+  }
+}
+
 function setDiagnosticsOpen(open: boolean): void {
+  if (open) {
+    setToolsDialogOpen(false, false);
+  }
   diagnosticsOpen = open;
   elements.debugDrawer.classList.toggle("is-open", open);
   elements.drawerBackdrop.classList.toggle("is-visible", open);
   elements.debugDrawer.setAttribute("aria-hidden", String(!open));
-  elements.backendStatusButton.setAttribute("aria-expanded", String(open));
   elements.toggleDebugButton.setAttribute("aria-expanded", String(open));
 
+  if (open && isCompactLayout()) {
+    setSidebarOpen(false, false);
+  }
   if (open) {
     elements.closeDebugButton.focus();
   }
+}
+
+function setToolsDialogOpen(open: boolean, moveFocus = true): void {
+  toolsDialogOpen = open;
+  elements.toolsDialog.classList.toggle("is-open", open);
+  elements.toolsDialogBackdrop.classList.toggle("is-visible", open);
+  elements.toolsDialog.setAttribute("aria-hidden", String(!open));
+  elements.openToolsButton.setAttribute("aria-expanded", String(open));
+
+  if (open) {
+    setDiagnosticsOpen(false);
+    if (isCompactLayout()) {
+      setSidebarOpen(false, false);
+    }
+    elements.closeToolsButton.focus();
+  } else if (moveFocus) {
+    elements.openToolsButton.focus();
+  }
+}
+
+function managedServiceName(serviceId: string): string {
+  switch (serviceId) {
+    case "sensevoice-small":
+      return "SenseVoice Small";
+    case "sensevoice-small-mlx":
+      return "SenseVoice Small (MLX)";
+    case "moss-tts-nano":
+      return "MOSS-TTS-Nano";
+    case "moss-tts-nano-mlx":
+      return "MOSS-TTS-Nano (MLX)";
+    default:
+      return serviceId;
+  }
+}
+
+function setApplicationInert(inert: boolean): void {
+  for (const child of elements.app.children) {
+    if (
+      child === elements.managedProgressBackdrop ||
+      child === elements.managedProgressDialog
+    ) {
+      continue;
+    }
+    if (child instanceof HTMLElement) {
+      child.inert = inert;
+    }
+  }
+}
+
+function openManagedProgress(serviceIds: string[]): void {
+  setToolsDialogOpen(false, false);
+  managedProgressState = "running";
+  managedProgressServiceIds = serviceIds;
+  latestManagedProgress = null;
+  managedProgressFailure = null;
+  elements.managedProgressDialog.dataset.state = "running";
+  elements.managedProgressError.hidden = true;
+  elements.closeManagedProgressButton.hidden = true;
+  elements.managedProgressBar.removeAttribute("value");
+  elements.managedProgressDetail.textContent = "";
+  elements.managedProgressPercent.textContent = "";
+  elements.managedProgressBackdrop.classList.add("is-visible");
+  elements.managedProgressDialog.classList.add("is-open");
+  elements.managedProgressBackdrop.setAttribute("aria-hidden", "false");
+  elements.managedProgressDialog.setAttribute("aria-hidden", "false");
+  setApplicationInert(true);
+  renderManagedProgress();
+  elements.managedProgressDialog.focus();
+}
+
+function closeManagedProgress(): void {
+  managedProgressState = "closed";
+  managedProgressServiceIds = [];
+  latestManagedProgress = null;
+  managedProgressFailure = null;
+  elements.managedProgressBackdrop.classList.remove("is-visible");
+  elements.managedProgressDialog.classList.remove("is-open");
+  elements.managedProgressBackdrop.setAttribute("aria-hidden", "true");
+  elements.managedProgressDialog.setAttribute("aria-hidden", "true");
+  setApplicationInert(false);
+}
+
+function failManagedProgress(error: unknown): void {
+  managedProgressState = "failed";
+  managedProgressFailure = error;
+  elements.managedProgressDialog.dataset.state = "failed";
+  elements.managedProgressBar.removeAttribute("value");
+  elements.managedProgressDetail.textContent = "";
+  elements.managedProgressPercent.textContent = "";
+  elements.closeManagedProgressButton.hidden = false;
+  renderManagedProgress();
+  elements.closeManagedProgressButton.focus();
+}
+
+function updateManagedProgress(progress: NativeManagedModelProgress): void {
+  if (managedProgressState !== "running") {
+    return;
+  }
+  latestManagedProgress = progress;
+  renderManagedProgress();
+}
+
+function renderManagedProgress(): void {
+  if (managedProgressState === "closed") {
+    return;
+  }
+
+  const progress = latestManagedProgress;
+  let activeIndex = progress?.serviceIndex ?? 0;
+  if (progress?.phase === "complete") {
+    activeIndex = managedProgressServiceIds.length;
+  }
+  const rows = managedProgressServiceIds.map((serviceId, index) => {
+    const row = document.createElement("li");
+    row.className = "managed-progress-service";
+    row.textContent = managedServiceName(serviceId);
+    const oneBasedIndex = index + 1;
+    const isReady =
+      progress?.phase === "complete" ||
+      oneBasedIndex < activeIndex ||
+      (oneBasedIndex === activeIndex && progress?.phase === "ready");
+    row.dataset.state = isReady
+      ? "ready"
+      : oneBasedIndex === activeIndex
+        ? "active"
+        : "pending";
+    return row;
+  });
+  elements.managedProgressServices.replaceChildren(...rows);
+
+  if (managedProgressState === "failed") {
+    elements.managedProgressMessage.textContent = t("model.applyFailed");
+    elements.managedProgressError.textContent = t("managed.failed", {
+      error: formatError(managedProgressFailure),
+    });
+    elements.managedProgressError.hidden = false;
+    return;
+  }
+
+  elements.managedProgressError.hidden = true;
+  if (progress === null) {
+    elements.managedProgressMessage.textContent = t("managed.preparing");
+    return;
+  }
+
+  const service = progress.serviceId
+    ? managedServiceName(progress.serviceId)
+    : "";
+  switch (progress.phase) {
+    case "checking":
+      elements.managedProgressMessage.textContent = t("managed.checking", {
+        service,
+      });
+      break;
+    case "downloading":
+      elements.managedProgressMessage.textContent = t("managed.downloading", {
+        service,
+      });
+      break;
+    case "starting":
+      elements.managedProgressMessage.textContent = t("managed.starting", {
+        service,
+      });
+      break;
+    case "ready":
+      elements.managedProgressMessage.textContent = t("managed.ready", {
+        service,
+      });
+      break;
+    case "complete":
+      elements.managedProgressMessage.textContent = t("managed.finalizing");
+      break;
+  }
+
+  const serviceCount = Math.max(progress.serviceCount, 1);
+  let fraction = Math.max(progress.serviceIndex - 1, 0) / serviceCount;
+  if (progress.phase === "downloading" && progress.totalBytes > 0) {
+    fraction =
+      (progress.serviceIndex -
+        1 +
+        Math.min(progress.completedBytes / progress.totalBytes, 1) * 0.82) /
+      serviceCount;
+  } else if (progress.phase === "starting") {
+    fraction = (progress.serviceIndex - 0.12) / serviceCount;
+  } else if (progress.phase === "ready") {
+    fraction = progress.serviceIndex / serviceCount;
+  } else if (progress.phase === "complete") {
+    fraction = 1;
+  }
+  const percent = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+  elements.managedProgressBar.value = percent;
+  elements.managedProgressPercent.textContent = `${percent}%`;
+
+  if (progress.phase === "downloading") {
+    const filename = progress.filePath?.split("/").slice(-1)[0] ?? "";
+    elements.managedProgressDetail.textContent = [
+      filename,
+      `${formatBytes(progress.completedBytes)} / ${formatBytes(progress.totalBytes)}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  } else {
+    elements.managedProgressDetail.textContent =
+      progress.phase === "complete"
+        ? ""
+        : `${progress.serviceIndex} / ${progress.serviceCount}`;
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 function setMainView(view: "orb" | "chat"): void {
@@ -157,13 +540,171 @@ function setMainView(view: "orb" | "chat"): void {
   }
 }
 
+function renderChatSessions(): void {
+  const activeSessionId = latestSnapshot.sessionId;
+  const rows = persistedSessions.map((session) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-session-button";
+    button.dataset.sessionId = session.id;
+    button.classList.toggle("is-active", session.id === activeSessionId);
+    button.setAttribute(
+      "aria-current",
+      session.id === activeSessionId ? "page" : "false",
+    );
+
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const iconPath = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    iconPath.setAttribute("d", "M5 5h14v11H9l-4 3Z");
+    icon.append(iconPath);
+
+    const title = document.createElement("span");
+    title.textContent = session.title?.trim() || t("sidebar.newConversation");
+    title.title = title.textContent;
+
+    button.append(icon, title);
+    button.addEventListener("click", () => {
+      void switchChatSession(session.id);
+    });
+    return button;
+  });
+
+  elements.chatSessionList.replaceChildren(...rows);
+  elements.newChatButton.classList.toggle(
+    "is-active",
+    activeSessionId === null,
+  );
+  elements.newChatButton.setAttribute(
+    "aria-current",
+    activeSessionId === null ? "page" : "false",
+  );
+
+  if (!sessionListOperation) {
+    elements.chatSessionListStatus.textContent =
+      sessionListError ?? (rows.length === 0 ? t("sidebar.empty") : "");
+  }
+  updateSessionControls();
+}
+
+function updateSessionControls(): void {
+  const unavailable =
+    adapter === null ||
+    backendState !== "ready" ||
+    discoveringBackend ||
+    modelConfigOperation ||
+    toolOperation ||
+    sessionOperation ||
+    sendingText;
+  elements.newChatButton.disabled = unavailable;
+  for (const button of elements.chatSessionList.querySelectorAll<HTMLButtonElement>(
+    "button",
+  )) {
+    button.disabled = unavailable || sessionListOperation;
+  }
+}
+
+async function refreshChatSessions(): Promise<void> {
+  const activeAdapter = adapter;
+  if (!activeAdapter || sessionListOperation) {
+    if (!activeAdapter) {
+      elements.chatSessionListStatus.textContent =
+        backendState === "unconfigured"
+          ? t("sidebar.waitingForConfig")
+          : t("sidebar.waitingForService");
+      updateSessionControls();
+    }
+    return;
+  }
+
+  sessionListOperation = true;
+  sessionListError = null;
+  elements.chatSessionListStatus.textContent = t("sidebar.loading");
+  updateSessionControls();
+  try {
+    const sessions = await activeAdapter.getSessions();
+    if (adapter === activeAdapter) {
+      persistedSessions = sessions;
+      renderChatSessions();
+    }
+  } catch (error) {
+    if (adapter === activeAdapter) {
+      sessionListError = t("sidebar.readFailed", {
+        error: formatError(error),
+      });
+    }
+  } finally {
+    sessionListOperation = false;
+    if (adapter === activeAdapter) {
+      renderChatSessions();
+    }
+  }
+}
+
+function scheduleChatSessionsRefresh(): void {
+  if (sessionRefreshTimer !== null) {
+    clearTimeout(sessionRefreshTimer);
+  }
+  sessionRefreshTimer = setTimeout(() => {
+    sessionRefreshTimer = null;
+    void refreshChatSessions();
+  }, 350);
+}
+
+async function switchChatSession(sessionId: string | null): Promise<void> {
+  const activeAdapter = adapter;
+  if (
+    !activeAdapter ||
+    backendState !== "ready" ||
+    sessionOperation ||
+    sendingText
+  ) {
+    return;
+  }
+
+  if (sessionId === latestSnapshot.sessionId) {
+    setMainView(sessionId === null ? "orb" : "chat");
+    if (isCompactLayout()) {
+      setSidebarOpen(false);
+    }
+    return;
+  }
+
+  sessionOperation = true;
+  showError(null);
+  elements.chatSessionListStatus.textContent =
+    t(sessionId === null ? "sidebar.creating" : "sidebar.switching");
+  updateControls(activeAdapter.snapshot);
+  try {
+    await activeAdapter.switchSession(sessionId);
+    setMainView(sessionId === null ? "orb" : "chat");
+    await refreshChatSessions();
+    if (isCompactLayout()) {
+      setSidebarOpen(false);
+    }
+  } catch (error) {
+    showError(
+      sessionId === null ? "sidebar.createFailed" : "sidebar.switchFailed",
+      { error },
+    );
+  } finally {
+    sessionOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+    renderChatSessions();
+  }
+}
+
 function updateNetworkStatus(): void {
   const online = navigator.onLine;
   elements.networkDetail.textContent = online ? "online" : "offline";
   elements.networkDetail.dataset.state = online ? "ready" : "warning";
   elements.networkDetail.title = online
-    ? "远程 provider 可尝试连接"
-    : "远程网络不可用；本地界面仍可使用";
+    ? t("runtime.onlineTitle")
+    : t("runtime.offlineTitle");
 }
 
 function updateControls(snapshot: DesktopSessionSnapshot): void {
@@ -174,11 +715,11 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
   const callAction = live ? "stop" : "start";
   const callLabel = sessionOperation
     ? live
-      ? "正在结束对话"
-      : "正在开始对话"
+      ? t("voice.stopping")
+      : t("voice.starting")
     : live
-      ? "结束对话"
-      : "开始对话";
+      ? t("voice.stop")
+      : t("voice.start");
 
   elements.callButton.disabled =
     !hasBackend ||
@@ -204,9 +745,11 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
   elements.muteButton.setAttribute("aria-pressed", String(snapshot.muted));
   elements.muteButton.setAttribute(
     "aria-label",
-    snapshot.muted ? "打开麦克风" : "关闭麦克风",
+    t(snapshot.muted ? "voice.unmute" : "voice.mute"),
   );
-  elements.muteButton.title = snapshot.muted ? "打开麦克风" : "关闭麦克风";
+  elements.muteButton.title = t(
+    snapshot.muted ? "voice.unmute" : "voice.mute",
+  );
 
   elements.retryButton.disabled =
     discoveringBackend ||
@@ -221,6 +764,7 @@ function updateControls(snapshot: DesktopSessionSnapshot): void {
     sessionOperation ||
     sendingText;
   updateToolControls();
+  updateSessionControls();
   updateComposer(snapshot);
 }
 
@@ -247,9 +791,11 @@ function updateComposer(snapshot: DesktopSessionSnapshot): void {
   elements.sendTextButton.setAttribute("aria-busy", String(sendingText));
   elements.sendTextButton.setAttribute(
     "aria-label",
-    sendingText ? "正在发送消息" : "发送消息",
+    t(sendingText ? "composer.sending" : "composer.send"),
   );
-  elements.sendTextButton.title = sendingText ? "正在发送消息" : "发送消息";
+  elements.sendTextButton.title = t(
+    sendingText ? "composer.sending" : "composer.send",
+  );
   elements.textComposer.dataset.state = available ? "ready" : "unavailable";
   elements.textComposer.setAttribute("aria-busy", String(sendingText));
   if (elements.composerStatus.textContent !== placeholder) {
@@ -259,32 +805,32 @@ function updateComposer(snapshot: DesktopSessionSnapshot): void {
 
 function composerPlaceholder(snapshot: DesktopSessionSnapshot): string {
   if (sendingText) {
-    return "正在发送消息";
+    return t("composer.sending");
   }
   if (discoveringBackend || backendState === "loading") {
-    return "本地服务启动中";
+    return t("orb.startingTitle");
   }
   if (backendState === "unconfigured") {
-    return "请先选择模型配置";
+    return t("composer.chooseConfig");
   }
   if (backendState === "offline" || adapter === null) {
-    return "本地服务不可用";
+    return t("composer.serviceUnavailable");
   }
   if (sessionOperation) {
     return snapshot.connectionState === "disconnected"
-      ? "正在连接对话"
-      : "正在更新连接";
+      ? t("composer.connecting")
+      : t("composer.updating");
   }
   if (snapshot.connectionState === "reconnecting") {
-    return "正在恢复连接";
+    return t("composer.reconnecting");
   }
   if (snapshot.connectionState === "disconnected") {
-    return "连接对话后可发送文字";
+    return t("composer.connectFirstShort");
   }
   if (snapshot.sessionId === null) {
-    return "正在初始化会话";
+    return t("composer.initializing");
   }
-  return "输入消息";
+  return t("composer.input");
 }
 
 function resizeMessageInput(): void {
@@ -303,63 +849,76 @@ function updateOrbPresentation(snapshot: DesktopSessionSnapshot): void {
   }
 
   if (backendState === "loading") {
-    elements.orbTitle.textContent = "本地服务启动中";
-    elements.orbCaption.textContent = "界面可离线使用";
+    elements.orbTitle.textContent = t("orb.startingTitle");
+    elements.orbCaption.textContent = t("orb.offlineAvailable");
     return;
   }
 
   if (backendState === "unconfigured") {
-    elements.orbTitle.textContent = "需要模型配置";
-    elements.orbCaption.textContent = "请在设置与诊断中选择 JSON 配置";
+    elements.orbTitle.textContent = t("orb.needsConfig");
+    elements.orbCaption.textContent = t("orb.chooseConfig");
     return;
   }
 
   if (backendState === "offline") {
-    elements.orbTitle.textContent = "本地服务不可用";
-    elements.orbCaption.textContent = "打开设置与诊断后可重新配置";
+    elements.orbTitle.textContent = t("orb.unavailable");
+    elements.orbCaption.textContent = t("orb.reconfigure");
     return;
   }
 
   if (snapshot.connectionState === "disconnected") {
-    elements.orbTitle.textContent = "准备开始对话";
-    elements.orbCaption.textContent = "点击下方波形按钮连接";
+    elements.orbTitle.textContent = "";
+    elements.orbCaption.textContent = "";
     return;
   }
 
   if (snapshot.connectionState === "reconnecting") {
-    elements.orbTitle.textContent = "正在恢复连接";
-    elements.orbCaption.textContent = "对话将在连接恢复后继续";
+    elements.orbTitle.textContent = t("orb.reconnecting");
+    elements.orbCaption.textContent = t("orb.resumeAfterConnect");
     return;
   }
 
   if (snapshot.muted) {
-    elements.orbTitle.textContent = "麦克风已静音";
-    elements.orbCaption.textContent = "点击底部麦克风按钮恢复";
+    elements.orbTitle.textContent = t("orb.muted");
+    elements.orbCaption.textContent = t("orb.unmuteHint");
     return;
   }
 
   switch (snapshot.streamState) {
     case "listening":
-      elements.orbTitle.textContent = "正在聆听";
+      elements.orbTitle.textContent = t("orb.listening");
       break;
     case "processing":
-      elements.orbTitle.textContent = "正在思考";
+      elements.orbTitle.textContent = t("orb.processing");
       break;
     case "speaking":
-      elements.orbTitle.textContent = "正在播放";
+      elements.orbTitle.textContent = t("orb.speaking");
       break;
     case "idle":
-      elements.orbTitle.textContent = "对话已连接";
+      elements.orbTitle.textContent = t("orb.connected");
       break;
   }
-  elements.orbCaption.textContent = "点击圆球查看对话";
+  elements.orbCaption.textContent = t("orb.openChatHint");
 }
 
 function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
+  const nextSessionActivityKey = `${snapshot.sessionId ?? ""}:${
+    snapshot.messages.filter((message) => message.final).length
+  }`;
+  const shouldRefreshSessions =
+    snapshot.sessionId !== null &&
+    nextSessionActivityKey !== sessionActivityKey;
+  sessionActivityKey = nextSessionActivityKey;
   latestSnapshot = snapshot;
-  elements.connectionStateDetail.textContent = snapshot.connectionState;
-  elements.streamStateDetail.textContent = snapshot.streamState;
-  elements.mutedStateDetail.textContent = String(snapshot.muted);
+  elements.connectionStateDetail.textContent = t(
+    `runtime.${snapshot.connectionState}` as TranslationKey,
+  );
+  elements.streamStateDetail.textContent = t(
+    `runtime.${snapshot.streamState}` as TranslationKey,
+  );
+  elements.mutedStateDetail.textContent = t(
+    snapshot.muted ? "runtime.true" : "runtime.false",
+  );
   elements.sessionDetail.textContent = snapshot.sessionId ?? "--";
   elements.userDetail.textContent = snapshot.userId ?? "--";
 
@@ -388,6 +947,10 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
 
   updateOrbPresentation(snapshot);
   updateControls(snapshot);
+  renderChatSessions();
+  if (shouldRefreshSessions) {
+    scheduleChatSessionsRefresh();
+  }
 }
 
 function messageRoleLabel(
@@ -395,11 +958,11 @@ function messageRoleLabel(
 ): string {
   switch (role) {
     case "user":
-      return "你";
+      return t("message.user");
     case "assistant":
       return "XTalk";
     case "info":
-      return "系统";
+      return t("message.system");
   }
 }
 
@@ -408,11 +971,10 @@ function renderModelConfigSelection(
 ): void {
   modelConfigPath = selection.configPath;
   elements.modelConfigDetail.textContent =
-    selection.configPath ?? "未选择";
+    selection.configPath ?? t("model.none");
   elements.modelConfigDetail.title = selection.configPath ?? "";
-  elements.modelConfigStatus.textContent = selection.configPath
-    ? "已选择；更换文件会重启本地服务"
-    : "尚未选择模型配置";
+  elements.modelConfigStatus.textContent =
+    selection.configPath === null ? t("model.notSelected") : "";
   updateControls(latestSnapshot);
 }
 
@@ -421,7 +983,7 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
   if (tools.length === 0) {
     const empty = document.createElement("p");
     empty.className = "developer-tools-empty";
-    empty.textContent = "尚未安装开发者工具";
+    empty.textContent = t("tools.none");
     elements.developerToolsList.replaceChildren(empty);
     updateToolControls();
     return;
@@ -453,22 +1015,27 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     toggle.checked = tool.enabled;
     toggle.setAttribute(
       "aria-label",
-      `${tool.enabled ? "禁用" : "启用"}${tool.displayName}`,
+      t(tool.enabled ? "tools.disableName" : "tools.enableName", {
+        name: tool.displayName,
+      }),
     );
     toggle.addEventListener("change", () => {
       void updateInstalledToolEnabled(tool.id, toggle.checked);
     });
 
     const toggleText = document.createElement("span");
-    toggleText.textContent = "启用";
+    toggleText.textContent = t("tools.enabled");
     toggleLabel.append(toggle, toggleText);
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "developer-tool-remove";
     remove.textContent = "×";
-    remove.setAttribute("aria-label", `删除${tool.displayName}`);
-    remove.title = "删除已复制的工具";
+    remove.setAttribute(
+      "aria-label",
+      t("tools.removeName", { name: tool.displayName }),
+    );
+    remove.title = t("tools.removeTitle");
     remove.addEventListener("click", () => {
       void removeInstalledTool(tool.id);
     });
@@ -505,14 +1072,13 @@ function updateDeveloperToolsStatus(message?: string): void {
     return;
   }
   if (toolChangesPending) {
-    elements.developerToolsStatus.textContent =
-      "工具配置已修改；应用并重启本地服务后生效";
+    elements.developerToolsStatus.textContent = t("tools.pending");
     return;
   }
   elements.developerToolsStatus.textContent =
     installedTools.length === 0
-      ? "尚未安装开发者工具"
-      : `已安装 ${installedTools.length} 个开发者工具`;
+      ? t("tools.none")
+      : t("tools.count", { count: installedTools.length });
 }
 
 async function refreshModelConfigSelection(): Promise<NativeModelConfigSelection> {
@@ -544,20 +1110,18 @@ async function discoverBackend(): Promise<void> {
     return;
   }
   if (modelConfigPath === null) {
-    setBackendStatus("unconfigured", "请选择模型配置");
-    elements.backendDetail.textContent = "尚未启动";
-    elements.websocketDetail.textContent = "未配置";
-    elements.tokenDetail.textContent = "未获取";
+    setBackendStatus("unconfigured", "service.chooseConfig");
+    elements.backendDetail.textContent = t("service.notStarted");
+    elements.websocketDetail.textContent = t("service.notConfigured");
     updateControls(latestSnapshot);
     return;
   }
 
   discoveringBackend = true;
   showError(null);
-  setBackendStatus("loading", "正在查找本地服务");
-  elements.backendDetail.textContent = "等待 Tauri 提供 endpoint";
-  elements.websocketDetail.textContent = "未配置";
-  elements.tokenDetail.textContent = "未获取";
+  setBackendStatus("loading", "service.searching");
+  elements.backendDetail.textContent = t("service.waitingEndpoint");
+  elements.websocketDetail.textContent = t("service.notConfigured");
   updateControls(latestSnapshot);
 
   await detachCurrentAdapter();
@@ -570,16 +1134,13 @@ async function discoverBackend(): Promise<void> {
 
     elements.backendDetail.textContent = nextAdapter.diagnostics.origin;
     elements.websocketDetail.textContent = nextAdapter.diagnostics.websocketURL;
-    elements.tokenDetail.textContent =
-      nextAdapter.diagnostics.httpEndpointsAuthenticated
-        ? "已配置（值已隐藏）"
-        : "缺失";
-    setBackendStatus("ready", "本地服务已就绪");
+    setBackendStatus("ready", "service.ready");
+    await refreshChatSessions();
   } catch (error) {
     adapter = null;
-    setBackendStatus("offline", "本地服务不可用");
-    elements.backendDetail.textContent = "离线模式";
-    showError(`无法连接本地服务：${formatError(error)}`);
+    setBackendStatus("offline", "service.unavailable");
+    elements.backendDetail.textContent = t("service.offlineMode");
+    showError("service.connectFailed", { error });
     setDiagnosticsOpen(true);
   } finally {
     discoveringBackend = false;
@@ -594,47 +1155,64 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
 
   modelConfigOperation = true;
   showError(null);
-  elements.modelConfigStatus.textContent = "等待选择 JSON 配置";
+  elements.modelConfigStatus.textContent = t("model.choosePrompt");
   updateControls(latestSnapshot);
+  let stopManagedProgress: (() => void) | null = null;
+  let managedProgressOpened = false;
 
   try {
     const selectedPath = await chooseNativeModelConfigFile();
     if (selectedPath === null) {
       if (required && modelConfigPath === null) {
-        setBackendStatus("unconfigured", "请选择模型配置");
+        setBackendStatus("unconfigured", "service.chooseConfig");
         elements.modelConfigStatus.textContent =
-          "首次启动需要选择模型配置文件";
+          t("model.firstLaunch");
       } else {
         elements.modelConfigStatus.textContent = modelConfigPath
-          ? "已取消；继续使用当前配置"
-          : "已取消；尚未选择模型配置";
+          ? t("model.cancelCurrent")
+          : t("model.cancelNone");
       }
       return;
     }
 
-    elements.modelConfigStatus.textContent = "正在重启本地服务";
-    setBackendStatus("loading", "正在应用模型配置");
+    const managedPlan = await getNativeManagedModelPlan(selectedPath);
+    if (managedPlan.services.length > 0) {
+      managedProgressOpened = true;
+      openManagedProgress(managedPlan.services);
+      stopManagedProgress = await listenNativeManagedModelProgress(
+        updateManagedProgress,
+      );
+    }
+
+    elements.modelConfigStatus.textContent = t("model.restarting");
+    setBackendStatus("loading", "service.applyingConfig");
     await detachCurrentAdapter();
     await applyNativeModelConfig(selectedPath);
     toolChangesPending = false;
     const selection = await refreshModelConfigSelection();
     updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
-      ? "配置已应用，本地服务已重启"
-      : "配置已应用";
+      ? t("model.appliedRestarted")
+      : t("model.applied");
     await discoverBackend();
+    if (managedProgressOpened) {
+      closeManagedProgress();
+    }
   } catch (error) {
-    const message = `模型配置应用失败：${formatError(error)}`;
     await refreshModelConfigSelection().catch(() => undefined);
     if (modelConfigPath === null) {
-      setBackendStatus("unconfigured", "请选择模型配置");
+      setBackendStatus("unconfigured", "service.chooseConfig");
     } else {
       await discoverBackend();
     }
-    elements.modelConfigStatus.textContent = "配置应用失败";
-    showError(message);
+    elements.modelConfigStatus.textContent = t("model.applyFailed");
+    showError("model.applyFailedDetail", { error });
     setDiagnosticsOpen(true);
+    if (managedProgressOpened) {
+      failManagedProgress(error);
+    }
   } finally {
+    stopManagedProgress?.();
     modelConfigOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
   }
@@ -647,27 +1225,27 @@ async function chooseAndInstallToolDirectory(): Promise<void> {
 
   toolOperation = true;
   showError(null);
-  updateDeveloperToolsStatus("等待选择工具目录");
+  updateDeveloperToolsStatus(t("tools.choosePrompt"));
   updateControls(latestSnapshot);
 
   try {
     const selectedPath = await chooseNativeToolDirectory();
     if (selectedPath === null) {
-      updateDeveloperToolsStatus("已取消安装工具");
+      updateDeveloperToolsStatus(t("tools.cancelled"));
       return;
     }
 
-    updateDeveloperToolsStatus("正在复制工具目录到 AppData");
+    updateDeveloperToolsStatus(t("tools.copying"));
     const installed = await installNativeToolDirectory(selectedPath);
     toolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
-      `${installed.displayName} 已安装；重启本地服务后生效`,
+      t("tools.installed", { name: installed.displayName }),
     );
   } catch (error) {
     await refreshInstalledTools().catch(() => undefined);
-    updateDeveloperToolsStatus("工具目录安装失败");
-    showError(`工具目录安装失败：${formatError(error)}`);
+    updateDeveloperToolsStatus(t("tools.installFailed"));
+    showError("tools.installFailedDetail", { error });
   } finally {
     toolOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
@@ -684,7 +1262,7 @@ async function updateInstalledToolEnabled(
 
   toolOperation = true;
   showError(null);
-  updateDeveloperToolsStatus("正在更新工具状态");
+  updateDeveloperToolsStatus(t("tools.updating"));
   updateControls(latestSnapshot);
 
   try {
@@ -692,12 +1270,17 @@ async function updateInstalledToolEnabled(
     toolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
-      `${updated.displayName} 已${updated.enabled ? "启用" : "禁用"}；重启本地服务后生效`,
+      t("tools.updated", {
+        name: updated.displayName,
+        state: t(
+          updated.enabled ? "tools.stateEnabled" : "tools.stateDisabled",
+        ),
+      }),
     );
   } catch (error) {
     await refreshInstalledTools().catch(() => undefined);
-    updateDeveloperToolsStatus("工具状态更新失败");
-    showError(`工具状态更新失败：${formatError(error)}`);
+    updateDeveloperToolsStatus(t("tools.updateFailed"));
+    showError("tools.updateFailedDetail", { error });
   } finally {
     toolOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
@@ -712,7 +1295,7 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   const tool = installedTools.find((candidate) => candidate.id === toolId);
   toolOperation = true;
   showError(null);
-  updateDeveloperToolsStatus("正在删除已复制的工具");
+  updateDeveloperToolsStatus(t("tools.removing"));
   updateControls(latestSnapshot);
 
   try {
@@ -720,12 +1303,14 @@ async function removeInstalledTool(toolId: string): Promise<void> {
     toolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
-      `${tool?.displayName ?? "工具"}已删除；重启本地服务后生效`,
+      t("tools.removed", {
+        name: tool?.displayName ?? t("tools.generic"),
+      }),
     );
   } catch (error) {
     await refreshInstalledTools().catch(() => undefined);
-    updateDeveloperToolsStatus("工具删除失败");
-    showError(`工具删除失败：${formatError(error)}`);
+    updateDeveloperToolsStatus(t("tools.removeFailed"));
+    showError("tools.removeFailedDetail", { error });
   } finally {
     toolOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
@@ -737,27 +1322,26 @@ async function applyInstalledToolChanges(): Promise<void> {
     return;
   }
   if (modelConfigPath === null) {
-    updateDeveloperToolsStatus("请先选择模型配置");
+    updateDeveloperToolsStatus(t("composer.chooseConfig"));
     return;
   }
 
   toolOperation = true;
   showError(null);
-  updateDeveloperToolsStatus("正在重启本地服务并加载工具");
-  setBackendStatus("loading", "正在应用开发者工具");
+  updateDeveloperToolsStatus(t("tools.restarting"));
+  setBackendStatus("loading", "tools.applying");
   updateControls(latestSnapshot);
 
   try {
     await detachCurrentAdapter();
     await applyNativeToolChanges();
     toolChangesPending = false;
-    updateDeveloperToolsStatus("工具配置已应用，本地服务已重启");
+    updateDeveloperToolsStatus(t("tools.applied"));
     await discoverBackend();
   } catch (error) {
-    const message = `工具配置应用失败：${formatError(error)}`;
-    updateDeveloperToolsStatus("工具配置应用失败");
+    updateDeveloperToolsStatus(t("tools.applyFailed"));
     await discoverBackend();
-    showError(message);
+    showError("tools.applyFailedDetail", { error });
     setDiagnosticsOpen(true);
   } finally {
     toolOperation = false;
@@ -770,16 +1354,16 @@ async function initializeApplication(): Promise<void> {
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
-      setBackendStatus("unconfigured", "请选择模型配置");
+      setBackendStatus("unconfigured", "service.chooseConfig");
       setDiagnosticsOpen(true);
       await chooseAndApplyModelConfig(true);
       return;
     }
     await discoverBackend();
   } catch (error) {
-    setBackendStatus("offline", "桌面运行时不可用");
-    elements.modelConfigStatus.textContent = "无法读取模型配置状态";
-    showError(`无法初始化应用：${formatError(error)}`);
+    setBackendStatus("offline", "service.runtimeUnavailable");
+    elements.modelConfigStatus.textContent = t("model.readFailed");
+    showError("app.initializeFailed", { error });
     setDiagnosticsOpen(true);
   }
 }
@@ -795,8 +1379,9 @@ async function connectSession(): Promise<void> {
   updateControls(activeAdapter.snapshot);
   try {
     await activeAdapter.connect();
+    scheduleChatSessionsRefresh();
   } catch (error) {
-    showError(`会话连接失败：${formatError(error)}`);
+    showError("voice.connectFailed", { error });
   } finally {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
@@ -815,7 +1400,7 @@ async function disconnectSession(): Promise<void> {
   try {
     await activeAdapter.disconnect();
   } catch (error) {
-    showError(`会话关闭失败：${formatError(error)}`);
+    showError("voice.closeFailed", { error });
   } finally {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
@@ -845,8 +1430,9 @@ async function sendTextMessage(): Promise<void> {
     await activeAdapter.sendText(text);
     elements.messageInput.value = "";
     resizeMessageInput();
+    scheduleChatSessionsRefresh();
   } catch (error) {
-    showError(`消息发送失败：${formatError(error)}`);
+    showError("composer.sendFailed", { error });
   } finally {
     sendingText = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
@@ -859,8 +1445,17 @@ async function sendTextMessage(): Promise<void> {
   }
 }
 
-elements.backendStatusButton.addEventListener("click", () => {
-  setDiagnosticsOpen(!diagnosticsOpen);
+elements.toggleSidebarButton.addEventListener("click", () => {
+  setSidebarOpen(!sidebarOpen);
+});
+elements.sidebarBackdrop.addEventListener("click", () => {
+  setSidebarOpen(false);
+});
+elements.newChatButton.addEventListener("click", () => {
+  void switchChatSession(null);
+});
+elements.openToolsButton.addEventListener("click", () => {
+  setToolsDialogOpen(true);
 });
 elements.toggleDebugButton.addEventListener("click", () => {
   setDiagnosticsOpen(!diagnosticsOpen);
@@ -870,6 +1465,17 @@ elements.closeDebugButton.addEventListener("click", () => {
 });
 elements.drawerBackdrop.addEventListener("click", () => {
   setDiagnosticsOpen(false);
+});
+elements.closeToolsButton.addEventListener("click", () => {
+  setToolsDialogOpen(false);
+});
+elements.closeManagedProgressButton.addEventListener("click", () => {
+  if (managedProgressState === "failed") {
+    closeManagedProgress();
+  }
+});
+elements.toolsDialogBackdrop.addEventListener("click", () => {
+  setToolsDialogOpen(false);
 });
 elements.showChatButton.addEventListener("click", () => {
   setMainView("chat");
@@ -924,15 +1530,38 @@ elements.retryButton.addEventListener("click", () => {
     void discoverBackend();
   }
 });
+elements.languageSelect.addEventListener("change", () => {
+  const preference = elements.languageSelect.value as LanguagePreference;
+  setLanguagePreference(preference);
+  applyUiLanguage();
+});
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && diagnosticsOpen) {
+  if (managedProgressState === "running") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (event.key === "Escape" && managedProgressState === "failed") {
+    closeManagedProgress();
+  } else if (event.key === "Escape" && toolsDialogOpen) {
+    setToolsDialogOpen(false);
+  } else if (event.key === "Escape" && diagnosticsOpen) {
     setDiagnosticsOpen(false);
+  } else if (event.key === "Escape" && sidebarOpen && isCompactLayout()) {
+    setSidebarOpen(false);
   }
 });
 window.addEventListener("online", updateNetworkStatus);
 window.addEventListener("offline", updateNetworkStatus);
+window.addEventListener("languagechange", () => {
+  if (refreshAutomaticLanguage()) {
+    applyUiLanguage();
+  }
+});
 
+applyUiLanguage();
 updateNetworkStatus();
+setSidebarOpen(false, false);
 renderSnapshot(EMPTY_SNAPSHOT);
 resizeMessageInput();
 void initializeApplication();

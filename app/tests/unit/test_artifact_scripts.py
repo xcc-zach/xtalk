@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -68,6 +69,14 @@ def test_checked_in_audio_model_manifest_matches_packaged_model() -> None:
     module.verify_audio_model_manifest()
 
 
+def test_managed_model_manifest_pins_optional_downloads() -> None:
+    """Validate managed model URLs, sizes, and SHA-256 records."""
+
+    module = load_script("verify_resources")
+
+    module.verify_managed_model_manifest()
+
+
 def test_release_has_no_bundled_default_model_config() -> None:
     """Keep provider configuration external to the release bundle."""
 
@@ -103,3 +112,84 @@ def test_backend_build_requires_silero_vad_dependencies() -> None:
     with pytest.raises(ValueError, match="silero-vad"):
         module.validate_required_extras(["ali"])
     module.validate_required_extras(["silero-vad", "ali"])
+
+
+def test_managed_runtime_uses_target_specific_binary_names() -> None:
+    """Name managed sidecars according to Tauri external-bin conventions."""
+
+    module = load_script("prepare_managed_runtime")
+
+    assert module.executable_name("runtime", "aarch64-apple-darwin") == "runtime"
+    assert (
+        module.executable_name("runtime", "x86_64-pc-windows-msvc")
+        == "runtime.exe"
+    )
+    assert module.target_supports_mlx("aarch64-apple-darwin")
+    assert not module.target_supports_mlx("x86_64-unknown-linux-gnu")
+
+
+def test_managed_runtime_stages_only_onnx_cuda_provider_files(
+    tmp_path: Path,
+) -> None:
+    """Stage the CUDA and shared providers without copying unrelated files."""
+
+    module = load_script("prepare_managed_runtime")
+    source = tmp_path / "gpu"
+    destination = tmp_path / "staged"
+    source.mkdir()
+    (source / "libonnxruntime_providers_cuda.so").write_bytes(b"cuda")
+    (source / "libonnxruntime_providers_shared.so").write_bytes(b"shared")
+    (source / "unrelated.txt").write_text("skip", encoding="utf-8")
+
+    module.copy_cuda_runtime(source, destination)
+
+    assert (destination / "libonnxruntime_providers_cuda.so").is_file()
+    assert (destination / "libonnxruntime_providers_shared.so").is_file()
+    assert not (destination / "unrelated.txt").exists()
+
+
+def test_local_models_example_uses_managed_speech_and_sample_llm() -> None:
+    """Keep the managed example aligned with the public server sample."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    sample = json.loads(
+        (APP_ROOT.parent / "server_configs" / "sample.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        example["asr"]["params"]["base_url"]
+        == "managed://sensevoice-small"
+    )
+    assert (
+        example["tts"]["params"]["base_url"]
+        == "managed://moss-tts-nano"
+    )
+    expected_llm = sample["llm_agent"]
+    expected_llm["params"]["model"]["api_key"] = ""
+    assert example["llm_agent"] == expected_llm
+
+
+def test_mlx_local_models_example_selects_native_managed_engine() -> None:
+    """Keep the Apple Silicon MLX example on the same client protocols."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_mlx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        example["asr"]["params"]["base_url"]
+        == "managed://sensevoice-small?backend=mlx"
+    )
+    assert (
+        example["tts"]["params"]["base_url"]
+        == "managed://moss-tts-nano?backend=mlx"
+    )
+    assert example["tts"]["params"]["voices"][0]["path"].startswith(
+        "managed://moss-tts-nano/"
+    )

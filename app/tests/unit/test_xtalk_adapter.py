@@ -23,6 +23,7 @@ class _FakeRuntime:
         self.config = config
         self.tools = tools or []
         self.mounted_app: Any = None
+        self._anonymous_user_id: str | None = None
 
     def mount_routes(self, app: Any) -> None:
         """Record the application passed to the public mount method."""
@@ -107,6 +108,26 @@ def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
     assert _FakeXtalk.latest_builder.built
     assert runtime.config is config
     assert runtime.tools == []
+
+
+def test_adapter_binds_desktop_identity_outside_service_config(
+    monkeypatch,
+) -> None:
+    """Bind the private desktop identity without modifying service config."""
+
+    config = {"service_config": {"enable_persistence": True}}
+    original_config = copy.deepcopy(config)
+    _FakeXtalk.latest_builder = None
+    monkeypatch.setattr(xtalk_adapter, "Xtalk", _FakeXtalk)
+
+    runtime = xtalk_adapter.build_xtalk_runtime(
+        config,
+        anonymous_user_id="desktop-user",
+    )
+
+    assert config == original_config
+    assert "anonymous_user_id" not in config["service_config"]
+    assert runtime._anonymous_user_id == "desktop-user"
 
 
 def test_adapter_allows_installed_timer_to_replace_the_builtin(

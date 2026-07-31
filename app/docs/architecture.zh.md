@@ -29,11 +29,22 @@ sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出
 ## 本地界面
 
 WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
-界面包含居中品牌栏、Orb/对话双视图、底部玻璃控制坞和右侧“设置与诊断”抽屉。
-抽屉显示当前外部模型配置与已安装开发者工具，可重新选择配置、将工具目录复制到
-AppData、修改启用状态、重启 sidecar 并重新探测本地服务。浅色、深色与窄窗口布局
-共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话时所需的
-麦克风用途说明和 audio-input entitlement。
+界面包含默认收起的左侧聊天记录栏、居中品牌栏、Orb/对话双视图、底部玻璃控制坞
+和右侧“设置与诊断”抽屉。左侧栏可创建新聊天，并通过公开客户端 API 切换全部持久
+化会话。“新聊天”下方的同款“工具”按钮会打开居中浮窗，用于将工具目录复制到
+AppData、修改启用状态、删除已复制工具，并通过重启 sidecar 应用变更。“设置与诊
+断”顶部显示本地服务状态，并将语言、外部模型配置、运行状态、本地服务诊断和恢复
+组织为可独立展开的选项卡。用户可更换模型配置并重新探测本地服务。“语言”选项默
+认按操作系统首选语言自动选择界面语言，也可持久化指定简体中文或英文。静态内容、
+动态状态、无障碍标签和原生文件选择器统一使用解析后的语言。浅色、深色和窄窗口
+布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话时所需
+的麦克风用途说明和 audio-input entitlement。
+
+会话历史以服务端数据为准，存储在强制配置给 sidecar 的应用数据目录下的
+`chat_history.sqlite3` 中。桌面端私有启动协议会传递固定的匿名用户标识，该标识不
+进入公开的 `service_config`，并由启动 token 与 Origin 边界确保此单用户身份仅供
+本应用使用。因此左侧栏中的会话标题和消息可跨应用及 sidecar 重启保留，无需再维护
+一份 WebView 自有的历史记录。
 
 ## 认证契约
 
@@ -82,6 +93,52 @@ WebView 通过公开 `xtalk-client` WebSocket 发送 16 kHz 单声道 PCM，前�
 `resources/manifests/audio-models.lock.json`。资源校验会拒绝缺失或被修改的文件；
 安装后的应用不会为这项基础运行资源执行在线下载。
 
+## 可选原生模型运行时
+
+按需下载的可选语音模型运行在独立的 Rust HTTP sidecar
+`app/local-model-runtime` 中。首个引擎使用 SentencePiece 和五个 ONNX Session
+直接实现 MOSS-TTS-Nano：参考音频 codec encode、prefill、自回归 decode、本地帧
+采样和 codec decode。主接口 `POST /api/generate` 与官方 Python/FastAPI 服务一致：
+输入 multipart `text` 和 `prompt_audio`，输出包含 base64 WAV 的 JSON。参考音频会在
+编码前转换为 48 kHz，生成结果固定为 48 kHz 单声道 PCM16。
+
+Apple Silicon 安装包还包含 `app/local-model-runtime-mlx` 中的 Swift sidecar。
+它通过固定版本的 `mlx-audio-swift` 从本地加载 SenseVoice 与 MOSS safetensors
+快照，并保持同一套离线 ASR WebSocket 数据包与 MOSS multipart HTTP 协议，因此
+Python 模型客户端不需要按推理后端分支。MLX 的 MOSS 输出同样固定为 48 kHz
+单声道 PCM16。
+
+ONNX Runtime 是 App 自带资源，不要求用户另行安装。sidecar 通过
+`--ort-dylib` 加载 App 解析后传入的精确动态库；模型权重不放进安装包。用户配置
+`managed://sensevoice-small` 或 `managed://moss-tts-nano` 后，Tauri 会读取不可变
+的 `managed-models.lock.json`，仅下载对应服务的固定版本文件到
+`AppData/models/managed/<id>/<version>/`，校验文件大小和 SHA-256，再原子写入完成
+标记。此后每次启动仍会重新校验已安装快照。
+
+managed URL 支持 `?backend=cpu`、`?backend=cuda` 和 `?backend=mlx`。不带查询参数
+时，Tauri 依次选择 NVIDIA 设备上随包可用的 CUDA provider、Apple Silicon MLX，
+最后回退 CPU。显式选择不可用后端会报错，不会静默降级。CUDA 与 CPU 共用 ONNX
+快照，MLX 则选择单独固定的 safetensors 快照。
+
+用户选择配置后，Tauri 会在应用配置前先做预检。包含 managed 服务的配置会打开阻塞
+式进度窗口；原生进度事件会报告模型校验、逐文件下载字节数、服务启动和就绪状态。
+Python 后端通过健康检查前，界面其余区域保持不可交互；成功后进度窗口自动关闭。
+启动失败时，窗口会保留错误信息和关闭操作。
+
+ONNX 模式下，Tauri 通过随包的原生 `sherpa-onnx-offline-websocket-server` 启动
+SenseVoice，并通过 Rust sidecar 启动 MOSS；MLX 模式下，每项服务分别启动一个
+Swift sidecar。它等待 TCP/readiness 就绪边界，再把真实临时 loopback
+地址和解析后的 AppData 音色路径深度合并进 Python 启动 overlay；外部配置因此不含
+运行时端口。安装、模型进程或 Python 启动任一步骤失败时，刚启动的全部子进程都会
+被停止，并恢复此前配置。managed 子进程意外退出后，后端连接也会立即变为不可用。
+
+完整本地示例见
+[`../examples/local_models.json`](../examples/local_models.json)。其中 LLM 与
+`server_configs/sample.json` 一致，但 `api_key` 特意留空。SenseVoice 继续通过现有
+离线 WebSocket 客户端接收 16 kHz PCM；MOSS 参考音频和生成结果均使用 48 kHz。
+[`../examples/local_models_mlx.json`](../examples/local_models_mlx.json) 则显式选择
+MLX。
+
 ## 配置
 
 release 包不包含默认 XTalk 模型配置。原生文件选择器接收一个外部 JSON 文件；
@@ -125,8 +182,9 @@ Tauri 生成内部标识，将目录递归复制到 `AppData/tools/<id>/`，并�
 
 ## 关闭
 
-UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 sidecar shutdown endpoint，
-在有限时间内等待；若优雅关闭失败，只终止它自己启动的子进程。
+UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 Python sidecar shutdown
+endpoint，在有限时间内等待；若优雅关闭失败，只终止它自己启动的子进程。随后按
+启动顺序的逆序停止 managed 模型进程。
 
 ## Phase 0 限制
 
@@ -135,5 +193,5 @@ UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 sidecar 
 - 开发环境和常规 bundle 中，PyInstaller `onedir` 支持文件与 sidecar 相邻；macOS
   app bundle 按 bootloader 要求将其放入 `Contents/Frameworks`。运行时验证会拒绝
   不完整布局。
-- 工具额外依赖管理、本地增强器、provider 设置和可选组件 supervisor 属于后续阶段；
-  开发者工具目录当前可使用冻结 sidecar 中已经存在的 Python 包。
+- 工具额外依赖管理、本地增强器和 provider 设置属于后续阶段；开发者工具目录当前
+  可使用冻结 sidecar 中已经存在的 Python 包。

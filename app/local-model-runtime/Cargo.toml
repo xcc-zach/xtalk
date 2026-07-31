@@ -1,0 +1,38 @@
+[package]
+name = "xtalk-local-model-runtime"
+version = "0.1.0"
+description = "Native ONNX model service for XTalk Desktop"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+
+[[bin]]
+name = "xtalk-local-model-runtime"
+path = "src/main.rs"
+
+[[bin]]
+name = "xtalk-mlx-model-runtime-unavailable"
+path = "src/mlx_unavailable.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+  "api-27",
+  "cuda",
+  "load-dynamic",
+  "ndarray",
+  "std",
+  "tracing",
+] }
+rand = "0.9"
+sentencepiece = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+symphonia = { version = "0.5", features = ["aac", "flac", "isomp4", "mp3", "ogg", "vorbis", "wav"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

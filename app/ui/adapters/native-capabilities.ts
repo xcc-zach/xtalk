@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+
+import { t } from "../i18n";
 
 /**
  * Connection bootstrap data returned by the trusted Tauri layer.
@@ -17,6 +20,34 @@ export interface NativeBackendConnection {
 export interface NativeModelConfigSelection {
   /** Canonical JSON configuration path, or `null` before first selection. */
   configPath: string | null;
+}
+
+/**
+ * Managed services referenced by one selected model configuration.
+ */
+export interface NativeManagedModelPlan {
+  /** Stable managed service identifiers in startup order. */
+  services: string[];
+}
+
+/**
+ * Progress emitted while managed model files and services are prepared.
+ */
+export interface NativeManagedModelProgress {
+  /** Current native preparation phase. */
+  phase: "checking" | "downloading" | "starting" | "ready" | "complete";
+  /** Stable service identifier, or `null` while finalizing the backend. */
+  serviceId: string | null;
+  /** One-based index of the active service. */
+  serviceIndex: number;
+  /** Number of managed services requested by the configuration. */
+  serviceCount: number;
+  /** Verified download bytes for the active service. */
+  completedBytes: number;
+  /** Total download bytes for the active service. */
+  totalBytes: number;
+  /** Current manifest-relative file path, when downloading. */
+  filePath: string | null;
 }
 
 /**
@@ -38,6 +69,8 @@ const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
+const MANAGED_MODEL_PLAN_COMMAND = "get_managed_model_plan";
+const MANAGED_MODEL_PROGRESS_EVENT = "managed-model-progress";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
 const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
 const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
@@ -51,7 +84,7 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
  */
 export async function getNativeBackendConnection(): Promise<NativeBackendConnection> {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
-    throw new Error("桌面运行时不可用；当前界面已进入离线模式。");
+    throw new Error(t("native.runtimeUnavailable"));
   }
 
   const payload = await invoke<unknown>(BACKEND_CONNECTION_COMMAND);
@@ -90,10 +123,10 @@ export async function chooseNativeModelConfigFile(): Promise<string | null> {
   const selection = await open({
     directory: false,
     multiple: false,
-    title: "选择 XTalk 模型配置",
+    title: t("model.dialogTitle"),
     filters: [
       {
-        name: "JSON 配置",
+        name: t("model.dialogFilter"),
         extensions: ["json"],
       },
     ],
@@ -127,6 +160,44 @@ export async function applyNativeModelConfig(
 }
 
 /**
+ * Inspects a selected configuration for managed model services.
+ *
+ * @param configPath Absolute JSON configuration path selected by the user.
+ * @returns Managed services in native startup order.
+ */
+export async function getNativeManagedModelPlan(
+  configPath: string,
+): Promise<NativeManagedModelPlan> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(MANAGED_MODEL_PLAN_COMMAND, {
+    configPath,
+  });
+  if (!isRecord(payload) || !Array.isArray(payload.services)) {
+    throw new Error("Tauri returned an invalid managed model plan.");
+  }
+  const services = payload.services;
+  if (!services.every((service) => typeof service === "string" && service)) {
+    throw new Error("Managed model plan contains an invalid service identifier.");
+  }
+  return { services };
+}
+
+/**
+ * Subscribes to native managed-model preparation progress.
+ *
+ * @param listener Callback invoked for each validated progress update.
+ * @returns Function that removes the native event subscription.
+ */
+export async function listenNativeManagedModelProgress(
+  listener: (progress: NativeManagedModelProgress) => void,
+): Promise<UnlistenFn> {
+  requireTauriRuntime();
+  return listen<unknown>(MANAGED_MODEL_PROGRESS_EVENT, (event) => {
+    listener(parseManagedModelProgress(event.payload));
+  });
+}
+
+/**
  * Opens the native directory picker for a developer tool.
  *
  * @returns Selected directory path, or `null` when the user cancels.
@@ -136,7 +207,7 @@ export async function chooseNativeToolDirectory(): Promise<string | null> {
   const selection = await open({
     directory: true,
     multiple: false,
-    title: "选择 XTalk 工具目录",
+    title: t("tools.dialogTitle"),
   });
   if (selection === null) {
     return null;
@@ -222,7 +293,7 @@ export async function applyNativeToolChanges(): Promise<NativeBackendConnection>
 
 function requireTauriRuntime(): void {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
-    throw new Error("桌面运行时不可用；当前界面已进入离线模式。");
+    throw new Error(t("native.runtimeUnavailable"));
   }
 }
 
@@ -245,6 +316,44 @@ function parseNativeBackendConnection(
   }
 
   return { origin, launchToken: normalizedToken };
+}
+
+function parseManagedModelProgress(
+  payload: unknown,
+): NativeManagedModelProgress {
+  if (!isRecord(payload)) {
+    throw new Error("Tauri returned invalid managed model progress.");
+  }
+  const phase = payload.phase;
+  const serviceId = payload.serviceId;
+  const filePath = payload.filePath;
+  const numericFields = [
+    payload.serviceIndex,
+    payload.serviceCount,
+    payload.completedBytes,
+    payload.totalBytes,
+  ];
+  if (
+    !["checking", "downloading", "starting", "ready", "complete"].includes(
+      String(phase),
+    ) ||
+    (serviceId !== null && typeof serviceId !== "string") ||
+    (filePath !== null && typeof filePath !== "string") ||
+    !numericFields.every(
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+    )
+  ) {
+    throw new Error("Tauri returned malformed managed model progress.");
+  }
+  return {
+    phase: phase as NativeManagedModelProgress["phase"],
+    serviceId,
+    serviceIndex: payload.serviceIndex as number,
+    serviceCount: payload.serviceCount as number,
+    completedBytes: payload.completedBytes as number,
+    totalBytes: payload.totalBytes as number,
+    filePath,
+  };
 }
 
 function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {

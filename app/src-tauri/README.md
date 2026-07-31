@@ -6,6 +6,8 @@ The Tauri shell requires prepared, target-specific sidecar artifacts before
 ```text
 app/src-tauri/binaries/
 ├── app-backend-<target-triple>[.exe]
+├── local-model-runtime-<target-triple>[.exe]
+├── sherpa-onnx-offline-websocket-server-<target-triple>[.exe]
 └── app-backend-runtime/
     └── PyInstaller onedir runtime files
 ```
@@ -24,6 +26,24 @@ python ../scripts/build_backend.py \
   --xtalk-extra ali \
   --xtalk-extra silero-vad
 ```
+
+Prepare the optional managed native runtimes from explicit platform files:
+
+```sh
+python ../scripts/prepare_managed_runtime.py \
+  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-ort-library /path/to/sherpa/libonnxruntime \
+  --tts-ort-library /path/to/tts/libonnxruntime
+```
+
+The script builds the Rust MOSS service, gives the executables Tauri's
+target-specific names, and stages the two ABI-specific ONNX Runtime libraries
+as ignored resources. Apple Silicon builds also compile the pinned Swift MLX
+service through Xcode and stage its Metal resource bundle. CUDA packages pass
+the two optional `--*-cuda-runtime-dir` arguments so the matching execution
+provider libraries are staged. A release build must run it for every target.
+The Apple Silicon build host must have Xcode's Metal Toolchain component
+installed (`xcodebuild -downloadComponent MetalToolchain`).
 
 `tauri.conf.json` bundles the runtime directory as
 `$RESOURCE/app-backend-runtime` and launches the external binary with
@@ -70,6 +90,14 @@ stdin JSON line. They are never added to process arguments or diagnostic
 messages. Configuration contents, including provider credentials, remain in
 the user-selected file and are not copied into the application bundle or the
 selection record.
+
+The example
+[`../examples/local_models.json`](../examples/local_models.json) selects both
+optional managed services. `managed://` is a desktop-only locator: Tauri
+downloads and verifies the pinned snapshot under AppData, starts the native
+service, and replaces the locator with an ephemeral loopback URL in the Python
+startup overlay. `?backend=cpu|cuda|mlx` forces a backend; otherwise Tauri
+chooses CUDA, then MLX, then CPU. The external JSON is never rewritten.
 
 `Info.plist` and `Entitlements.plist` provide the macOS microphone usage
 description and hardened-runtime audio-input entitlement. The WebView requests
