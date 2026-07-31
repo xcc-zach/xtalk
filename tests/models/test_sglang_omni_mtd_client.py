@@ -12,6 +12,7 @@ from xtalk.model_loader import init_registered_model
 from xtalk.models.speaker_diarization import SglangOmniMtdClient
 from xtalk.models.speaker_diarization.sglang_omni_mtd_client import (
     SglangOmniRequestCancelled,
+    _join_decoder_prefix_and_suffix,
     _parse_timestamped_text,
 )
 
@@ -196,6 +197,29 @@ def test_timestamp_parser_accepts_nested_speaker_bracket() -> None:
     ) == [
         _parse_timestamped_text("[0.00][S01]甲[1.00]")[0],
         _parse_timestamped_text("[1.50][S02]乙[2.50]")[0],
+    ]
+
+
+def test_suffix_without_start_timestamp_reuses_prefix_boundary() -> None:
+    """A speaker-only continuation keeps both sides of the shared boundary."""
+
+    assert _join_decoder_prefix_and_suffix(
+        "[0.00][S01]你好，我叫张三。[2.10]",
+        "[S02]你好，我叫李四。[5.64]",
+    ) == (
+        "[0.00][S01]你好，我叫张三。[2.10] "
+        "[2.10][S02]你好，我叫李四。[5.64]"
+    )
+    parsed = _parse_timestamped_text(
+        _join_decoder_prefix_and_suffix(
+            "[0.00][S01]你好，我叫张三。[2.10]",
+            "[S02]你好，我叫李四。[5.64]",
+        )
+    )
+    assert [item.speaker_id for item in parsed] == ["S01", "S02"]
+    assert [(item.start_s, item.end_s) for item in parsed] == [
+        (0.0, 2.1),
+        (2.1, 5.64),
     ]
 
 

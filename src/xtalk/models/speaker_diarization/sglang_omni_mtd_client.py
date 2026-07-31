@@ -24,6 +24,10 @@ _TIMESTAMP_SEGMENT_RE = re.compile(
     r"(?=\s*(?:\[\d+(?:\.\d+)?\]\s*\[*\[S\d+\]|$))",
     re.IGNORECASE | re.DOTALL,
 )
+_LEADING_SPEAKER_RE = re.compile(r"^\s*\[*\[S\d+\]", re.IGNORECASE)
+_TRAILING_TIMESTAMP_RE = re.compile(r"\[(\d+(?:\.\d+)?)\]\s*$")
+
+
 @dataclass(frozen=True)
 class _TimedSpeakerSegment:
     """One request-global segment parsed from an MTD response."""
@@ -196,8 +200,7 @@ class SglangOmniMtdClient(SpeakerDiarization):
                 self._requests.pop(request_id, None)
 
         generated_suffix = str(payload.get("text") or "").strip()
-        prefix = decoder_prefix.strip()
-        raw_text = " ".join(part for part in (prefix, generated_suffix) if part)
+        raw_text = _join_decoder_prefix_and_suffix(decoder_prefix, generated_suffix)
         # ``verbose_json.segments`` covers only newly generated tokens. Parse
         # the reconstructed full text so prefix and output share one timeline.
         raw_segments = _parse_timestamped_text(raw_text)
@@ -341,6 +344,29 @@ def _parse_timestamped_text(text: str) -> list[_TimedSpeakerSegment]:
             )
         )
     return result
+
+
+def _join_decoder_prefix_and_suffix(decoder_prefix: str, suffix: str) -> str:
+    """Reconstruct a parseable full timeline at a continuation boundary.
+
+    SGLang can generate ``[S02]text[end]`` immediately after a fixed prefix
+    ending in ``[start]``. In token space that terminal prefix timestamp is
+    also the new segment's start timestamp. Duplicate it in the reconstructed
+    diagnostic text so the non-overlapping segment parser can retain both the
+    preceding exemplar and the generated continuation.
+    """
+
+    prefix = decoder_prefix.strip()
+    suffix = suffix.strip()
+    if not prefix:
+        return suffix
+    if not suffix:
+        return prefix
+    if _LEADING_SPEAKER_RE.match(suffix):
+        boundary = _TRAILING_TIMESTAMP_RE.search(prefix)
+        if boundary is not None:
+            suffix = f"[{boundary.group(1)}]{suffix}"
+    return f"{prefix} {suffix}"
 
 
 def _crop_current_segments(
