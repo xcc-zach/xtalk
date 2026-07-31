@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,54 @@ def test_backend_build_requires_silero_vad_dependencies() -> None:
     with pytest.raises(ValueError, match="silero-vad"):
         module.validate_required_extras(["ali"])
     module.validate_required_extras(["silero-vad", "ali"])
+
+
+def test_backend_build_requires_managed_model_client_modules(
+    tmp_path: Path,
+) -> None:
+    """Reject a stale wheel that omits a managed-model client adapter."""
+
+    module = load_script("build_backend")
+    wheel = tmp_path / "xtalk.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("xtalk/models/asr/sherpa_onnx_asr.py", "")
+
+    with pytest.raises(ValueError, match="moss_tts_nano"):
+        module.validate_required_wheel_modules(wheel)
+
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("xtalk/models/tts/moss_tts_nano.py", "")
+    module.validate_required_wheel_modules(wheel)
+
+
+def test_macos_packager_links_framework_metadata_to_resources(
+    tmp_path: Path,
+) -> None:
+    """Keep Python package metadata available without nested signing bundles."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    frameworks = app / "Contents" / "Frameworks"
+    resources = app / "Contents" / "Resources" / "app-backend-runtime"
+    metadata_name = "example-1.0.dist-info"
+    (frameworks / metadata_name).mkdir(parents=True)
+    (resources / metadata_name).mkdir(parents=True)
+    (frameworks / metadata_name / "METADATA").write_text(
+        "duplicate",
+        encoding="utf-8",
+    )
+    (resources / metadata_name / "METADATA").write_text(
+        "canonical",
+        encoding="utf-8",
+    )
+
+    linked = module.link_python_metadata_to_resources(app)
+
+    assert linked == [frameworks / metadata_name]
+    assert (frameworks / metadata_name).is_symlink()
+    assert (frameworks / metadata_name / "METADATA").read_text(
+        encoding="utf-8"
+    ) == "canonical"
 
 
 def test_managed_runtime_uses_target_specific_binary_names() -> None:

@@ -35,6 +35,5 @@ struct XTalkMLXRuntime {
         ])
         FileHandle.standardOutput.write(payload)
         FileHandle.standardOutput.write(Data([0x0A]))
-        try FileHandle.standardOutput.synchronize()
     }
 }

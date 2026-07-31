@@ -6,7 +6,6 @@ import copy
 from typing import Any
 
 from backend import xtalk_adapter
-from backend.timer_tool import TimerTool
 
 
 class _FakeRuntime:
@@ -70,7 +69,7 @@ class _FakeXtalk:
 def test_adapter_builds_runtime_and_tools_through_public_apis(
     monkeypatch,
 ) -> None:
-    """Build the desktop runtime through the public builder and timer API."""
+    """Build the desktop runtime through the public builder API."""
 
     config = {
         "llm_agent": {
@@ -88,10 +87,10 @@ def test_adapter_builds_runtime_and_tools_through_public_apis(
     assert config == original_config
     assert _FakeXtalk.latest_builder is not None
     assert _FakeXtalk.latest_builder.config is config
-    assert _FakeXtalk.latest_builder.tools == [TimerTool]
+    assert _FakeXtalk.latest_builder.tools == []
     assert _FakeXtalk.latest_builder.built
     assert runtime.config is config
-    assert runtime.tools == [TimerTool]
+    assert runtime.tools == []
 
 
 def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
@@ -130,11 +129,11 @@ def test_adapter_binds_desktop_identity_outside_service_config(
     assert runtime._anonymous_user_id == "desktop-user"
 
 
-def test_adapter_allows_installed_timer_to_replace_the_builtin(
+def test_adapter_loads_unified_user_and_builtin_tool_roots(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Prefer an enabled developer timer over the bundled fallback."""
+    """Pass both App-managed roots through the unified tool loader."""
 
     class DeveloperTimer:
         """Stand in for a developer-provided timer tool."""
@@ -144,20 +143,41 @@ def test_adapter_allows_installed_timer_to_replace_the_builtin(
     config = {"llm_agent": {"type": "DefaultAgent", "params": {}}}
     _FakeXtalk.latest_builder = None
     monkeypatch.setattr(xtalk_adapter, "Xtalk", _FakeXtalk)
+    observed: dict[str, Any] = {}
+
+    def _load_tools(
+        tools_root,
+        *,
+        builtin_tools_root,
+        tool_ui_broker,
+    ):
+        observed["tools_root"] = tools_root
+        observed["builtin_tools_root"] = builtin_tools_root
+        observed["tool_ui_broker"] = tool_ui_broker
+        return [DeveloperTimer]
+
     monkeypatch.setattr(
         xtalk_adapter,
         "load_enabled_tools",
-        lambda tools_root: [DeveloperTimer],
+        _load_tools,
     )
 
+    tools_root = tmp_path / "data" / "tools"
+    builtin_tools_root = tmp_path / "resources" / "tools"
     runtime = xtalk_adapter.build_xtalk_runtime(
         config,
-        tools_root=tmp_path / "tools",
+        tools_root=tools_root,
+        builtin_tools_root=builtin_tools_root,
     )
 
     assert _FakeXtalk.latest_builder is not None
     assert _FakeXtalk.latest_builder.tools == [DeveloperTimer]
     assert runtime.tools == [DeveloperTimer]
+    assert observed == {
+        "tools_root": tools_root,
+        "builtin_tools_root": builtin_tools_root,
+        "tool_ui_broker": None,
+    }
 
 
 def test_adapter_mounts_routes_through_the_runtime_public_method() -> None:

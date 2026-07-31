@@ -34,6 +34,7 @@ const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
 const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
 const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
 const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
+const BUILTIN_TOOLS_RESOURCE: &str = "tools";
 const SIDECAR_RUNTIME_RESOURCE: &str = "app-backend-runtime";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -84,7 +85,10 @@ pub(crate) struct BackendSupervisor {
 }
 
 impl BackendSupervisor {
-    /// Loads the persisted selection and starts its sidecar when possible.
+    /// Loads the persisted selection without starting user-selected services.
+    ///
+    /// Startup is deferred until the WebView subscribes to managed-model
+    /// progress events and explicitly ensures the selected backend is running.
     pub(crate) async fn initialize(app: &AppHandle) -> Arc<Self> {
         let config_path = match resolve_initial_model_config(app) {
             Ok(config_path) => config_path,
@@ -93,22 +97,10 @@ impl BackendSupervisor {
                 None
             }
         };
-        let manager = if let Some(path) = config_path.as_ref() {
-            match BackendManager::start(app, path.clone()).await {
-                Ok(manager) => Some(manager),
-                Err(_) => {
-                    eprintln!("app-backend could not start with the selected configuration");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         Arc::new(Self {
             state: Mutex::new(BackendSupervisorState {
                 config_path,
-                manager,
+                manager: None,
             }),
             operation_gate: Mutex::new(()),
             app_close_started: AtomicBool::new(false),
@@ -132,6 +124,32 @@ impl BackendSupervisor {
             .clone()
             .ok_or(BackendError::Unavailable)?;
         manager.connection()
+    }
+
+    /// Starts the selected backend when no healthy instance is running.
+    pub(crate) async fn ensure_started(
+        &self,
+        app: &AppHandle,
+    ) -> Result<NativeBackendConnection, BackendError> {
+        let _operation_guard = self.operation_gate.lock().await;
+        let (config_path, previous_manager) = {
+            let mut state = self.state.lock().await;
+            if let Some(manager) = state.manager.as_ref() {
+                if let Ok(connection) = manager.connection() {
+                    return Ok(connection);
+                }
+            }
+            (state.config_path.clone(), state.manager.take())
+        };
+
+        if let Some(manager) = previous_manager {
+            manager.shutdown().await?;
+        }
+        let config_path = config_path.ok_or(BackendError::Unavailable)?;
+        let manager = BackendManager::start(app, config_path).await?;
+        let connection = manager.connection()?;
+        self.state.lock().await.manager = Some(manager);
+        Ok(connection)
     }
 
     /// Restarts the sidecar with a validated user-selected configuration.
@@ -248,6 +266,7 @@ impl BackendManager {
     async fn start(app: &AppHandle, config_path: PathBuf) -> Result<Arc<Self>, BackendError> {
         let token = generate_launch_token()?;
         let vad_model_path = resolve_required_resource(app, VAD_MODEL_RESOURCE, false)?;
+        let builtin_tools_root = resolve_required_resource(app, BUILTIN_TOOLS_RESOURCE, true)?;
         resolve_required_resource(app, SIDECAR_RUNTIME_RESOURCE, true)?;
         let sidecar_directory = sidecar_working_directory()?;
         validate_sidecar_runtime(&sidecar_directory)?;
@@ -261,6 +280,7 @@ impl BackendManager {
             token: &token,
             config_path,
             data_dir,
+            builtin_tools_root,
             origins: allowed_origins(),
             config_fallbacks: build_config_fallbacks(&vad_model_path),
             config_overlay,
@@ -411,6 +431,7 @@ struct StartupMessage<'a> {
     token: &'a str,
     config_path: PathBuf,
     data_dir: PathBuf,
+    builtin_tools_root: PathBuf,
     origins: Vec<String>,
     config_fallbacks: Value,
     config_overlay: Value,
@@ -988,6 +1009,7 @@ mod tests {
             token: "test-token",
             config_path: PathBuf::from("sample.json"),
             data_dir: PathBuf::from("app-data"),
+            builtin_tools_root: PathBuf::from("resources/tools"),
             origins: vec!["tauri://localhost".to_owned()],
             config_fallbacks: build_config_fallbacks(&vad_model_path),
             config_overlay: json!({}),

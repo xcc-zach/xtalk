@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -18,6 +19,10 @@ BUILD_ROOT = APP_ROOT / ".build" / "backend"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 EXTRA_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REQUIRED_XTALK_EXTRAS = frozenset({"silero-vad"})
+REQUIRED_XTALK_MODULES = (
+    "xtalk/models/asr/sherpa_onnx_asr.py",
+    "xtalk/models/tts/moss_tts_nano.py",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,6 +194,35 @@ def validate_required_extras(extras: list[str]) -> None:
         raise ValueError(f"missing required XTalk extras: {missing_text}")
 
 
+def validate_required_wheel_modules(wheel: Path) -> None:
+    """Require client adapters needed by managed local-model services.
+
+    Parameters
+    ----------
+    wheel : pathlib.Path
+        Immutable XTalk wheel used to build the packaged backend.
+
+    Raises
+    ------
+    ValueError
+        Raised when the wheel omits a managed ASR or TTS client module.
+    """
+
+    with zipfile.ZipFile(wheel) as archive:
+        members = set(archive.namelist())
+    missing = [
+        module_path
+        for module_path in REQUIRED_XTALK_MODULES
+        if module_path not in members
+    ]
+    if missing:
+        missing_text = ", ".join(missing)
+        raise ValueError(
+            "XTalk wheel is missing required managed-model modules: "
+            f"{missing_text}"
+        )
+
+
 def prepare_environment(
     python: Path,
     wheel: Path,
@@ -286,6 +320,10 @@ def build_onedir(interpreter: Path, target: str) -> tuple[Path, Path]:
         "xtalk.models",
         "--collect-data",
         "xtalk",
+        "--collect-all",
+        "openai_codex",
+        "--collect-all",
+        "codex_cli_bin",
         "--exclude-module",
         "torch",
         "--exclude-module",
@@ -363,6 +401,7 @@ def main() -> int:
         raise RuntimeError("sidecar builds require Python 3.10 through 3.13")
     target = resolve_target_triple(args.target_triple)
     validate_required_extras(args.xtalk_extra)
+    validate_required_wheel_modules(wheel)
     interpreter = prepare_environment(python, wheel, args.xtalk_extra)
     executable, support = build_onedir(interpreter, target)
     destination = install_tauri_layout(executable, support, target)

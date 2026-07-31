@@ -1,4 +1,4 @@
-//! Application-data installation and state for developer tool directories.
+//! Unified discovery and state for built-in and user-installed tool directories.
 
 use std::{
     collections::BTreeMap,
@@ -7,26 +7,40 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 use thiserror::Error;
 
 const TOOL_MANIFEST_FILE: &str = "xtalk_tool.json";
 const TOOL_REGISTRY_FILE: &str = "registry.json";
+const BUILTIN_TOOL_CATALOG_FILE: &str = "builtin_tools.json";
+const TOOL_PREFERENCES_FILE: &str = "tool_preferences.json";
+const BUILTIN_TOOLS_RESOURCE: &str = "tools";
 const TOOLS_DIRECTORY: &str = "tools";
+const BUILTIN_ID_PREFIX: &str = "builtin:";
 const MAX_UI_ENTRYPOINT_BYTES: u64 = 1024 * 1024;
 const DEFAULT_UI_UPDATE_EVERY_SECONDS: f64 = 1.0;
 const MIN_UI_UPDATE_EVERY_SECONDS: f64 = 0.1;
 const MAX_UI_UPDATE_EVERY_SECONDS: f64 = 3600.0;
 
-/// Developer tool metadata exposed to the trusted WebView.
+/// Unified built-in or user tool metadata exposed to the trusted WebView.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NativeToolDefinition {
     id: String,
+    origin: ToolOrigin,
+    can_delete: bool,
     display_name: ToolDisplayName,
     entrypoint: String,
     ui: Option<ToolUiConfig>,
     enabled: bool,
+}
+
+/// App-owned source of one tool definition.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ToolOrigin {
+    Builtin,
+    User,
 }
 
 /// Self-contained HTML source for one installed tool UI.
@@ -73,6 +87,34 @@ struct PersistedToolEntry {
     enabled: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinToolCatalog {
+    version: u16,
+    tools: Vec<BuiltinToolEntry>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinToolEntry {
+    id: String,
+    path: String,
+    enabled_by_default: bool,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedToolPreferences {
+    version: u16,
+    builtin: BTreeMap<String, PersistedBuiltinPreference>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedBuiltinPreference {
+    enabled: bool,
+}
+
 #[derive(Debug, Error)]
 enum ToolDirectoryError {
     #[error("failed to access an application path: {0}")]
@@ -101,17 +143,30 @@ enum ToolDirectoryError {
     InvalidUiEncoding,
     #[error("the selected tool is not installed")]
     ToolNotFound,
+    #[error("built-in tools cannot be deleted")]
+    BuiltinToolImmutable,
+    #[error("built-in tool catalog version is not supported")]
+    UnsupportedBuiltinCatalog,
+    #[error("tool preferences version is not supported")]
+    UnsupportedToolPreferences,
+    #[error("built-in tool identifiers and paths must be safe unique names")]
+    InvalidBuiltinCatalog,
+    #[error("installed tool registry contains an unsafe or duplicate identifier")]
+    InvalidToolRegistry,
     #[error("could not generate an installed tool identifier: {0}")]
     Identifier(String),
 }
 
-/// Lists developer tools currently copied into application data.
+/// Lists built-in and user-installed tools available to the App.
 pub(crate) fn list_installed_tools(app: &AppHandle) -> Result<Vec<NativeToolDefinition>, String> {
     let tools_root = tools_root(app).map_err(|error| error.to_string())?;
-    list_installed_tools_at(&tools_root).map_err(|error| error.to_string())
+    let builtin_tools_root = builtin_tools_root(app).map_err(|error| error.to_string())?;
+    let preferences_path = tool_preferences_path(app).map_err(|error| error.to_string())?;
+    list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+        .map_err(|error| error.to_string())
 }
 
-/// Copies one selected developer tool directory into application data.
+/// Copies one selected user tool directory into application data.
 pub(crate) fn install_tool_directory(
     app: &AppHandle,
     source_path: &Path,
@@ -120,44 +175,73 @@ pub(crate) fn install_tool_directory(
     install_tool_directory_at(&tools_root, source_path).map_err(|error| error.to_string())
 }
 
-/// Updates whether one installed developer tool is loaded at sidecar startup.
+/// Updates whether one built-in or user tool is loaded at sidecar startup.
 pub(crate) fn set_tool_enabled(
     app: &AppHandle,
     tool_id: &str,
     enabled: bool,
 ) -> Result<NativeToolDefinition, String> {
     let tools_root = tools_root(app).map_err(|error| error.to_string())?;
-    set_tool_enabled_at(&tools_root, tool_id, enabled).map_err(|error| error.to_string())
+    let builtin_tools_root = builtin_tools_root(app).map_err(|error| error.to_string())?;
+    let preferences_path = tool_preferences_path(app).map_err(|error| error.to_string())?;
+    set_tool_enabled_at(
+        &tools_root,
+        &builtin_tools_root,
+        &preferences_path,
+        tool_id,
+        enabled,
+    )
+    .map_err(|error| error.to_string())
 }
 
-/// Removes one copied developer tool directory from application data.
+/// Removes one copied user tool directory from application data.
 pub(crate) fn remove_installed_tool(app: &AppHandle, tool_id: &str) -> Result<(), String> {
+    if tool_id.starts_with(BUILTIN_ID_PREFIX) {
+        return Err(ToolDirectoryError::BuiltinToolImmutable.to_string());
+    }
     let tools_root = tools_root(app).map_err(|error| error.to_string())?;
     remove_installed_tool_at(&tools_root, tool_id).map_err(|error| error.to_string())
 }
 
-/// Reads one installed self-contained tool UI entrypoint.
+/// Reads one built-in or user tool's self-contained UI entrypoint.
 pub(crate) fn read_tool_ui_source(
     app: &AppHandle,
     tool_id: &str,
 ) -> Result<NativeToolUiSource, String> {
     let tools_root = tools_root(app).map_err(|error| error.to_string())?;
-    read_tool_ui_source_at(&tools_root, tool_id).map_err(|error| error.to_string())
+    let builtin_tools_root = builtin_tools_root(app).map_err(|error| error.to_string())?;
+    read_tool_ui_source_at(&tools_root, &builtin_tools_root, tool_id)
+        .map_err(|error| error.to_string())
 }
 
 fn tools_root(app: &AppHandle) -> Result<PathBuf, ToolDirectoryError> {
     Ok(app.path().app_data_dir()?.join(TOOLS_DIRECTORY))
 }
 
+fn builtin_tools_root(app: &AppHandle) -> Result<PathBuf, ToolDirectoryError> {
+    Ok(app
+        .path()
+        .resolve(BUILTIN_TOOLS_RESOURCE, BaseDirectory::Resource)?)
+}
+
+fn tool_preferences_path(app: &AppHandle) -> Result<PathBuf, ToolDirectoryError> {
+    Ok(app.path().app_data_dir()?.join(TOOL_PREFERENCES_FILE))
+}
+
 fn list_installed_tools_at(
     tools_root: &Path,
+    builtin_tools_root: &Path,
+    preferences_path: &Path,
 ) -> Result<Vec<NativeToolDefinition>, ToolDirectoryError> {
     let registry = load_registry(tools_root)?;
-    let mut tools = registry
-        .tools
-        .iter()
-        .map(|entry| definition_for_entry(tools_root, entry))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut tools = list_builtin_tools_at(builtin_tools_root, preferences_path)?;
+    tools.extend(
+        registry
+            .tools
+            .iter()
+            .map(|entry| definition_for_entry(tools_root, entry))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
     tools.sort_by(|left, right| {
         display_name_sort_key(&left.display_name)
             .cmp(&display_name_sort_key(&right.display_name))
@@ -198,6 +282,8 @@ fn install_tool_directory_at(
 
     Ok(NativeToolDefinition {
         id,
+        origin: ToolOrigin::User,
+        can_delete: true,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
         ui: manifest.ui,
@@ -207,9 +293,27 @@ fn install_tool_directory_at(
 
 fn set_tool_enabled_at(
     tools_root: &Path,
+    builtin_tools_root: &Path,
+    preferences_path: &Path,
     tool_id: &str,
     enabled: bool,
 ) -> Result<NativeToolDefinition, ToolDirectoryError> {
+    if let Some(identifier) = tool_id.strip_prefix(BUILTIN_ID_PREFIX) {
+        let catalog = load_builtin_catalog(builtin_tools_root)?;
+        let entry = catalog
+            .tools
+            .iter()
+            .find(|entry| entry.id == identifier)
+            .ok_or(ToolDirectoryError::ToolNotFound)?;
+        let mut preferences = load_tool_preferences(preferences_path)?;
+        preferences.builtin.insert(
+            identifier.to_owned(),
+            PersistedBuiltinPreference { enabled },
+        );
+        persist_tool_preferences(preferences_path, &preferences)?;
+        return definition_for_builtin_entry(builtin_tools_root, entry, enabled);
+    }
+
     let mut registry = load_registry(tools_root)?;
     let entry = registry
         .tools
@@ -228,6 +332,9 @@ fn set_tool_enabled_at(
 }
 
 fn remove_installed_tool_at(tools_root: &Path, tool_id: &str) -> Result<(), ToolDirectoryError> {
+    if tool_id.starts_with(BUILTIN_ID_PREFIX) {
+        return Err(ToolDirectoryError::BuiltinToolImmutable);
+    }
     let mut registry = load_registry(tools_root)?;
     let previous_length = registry.tools.len();
     registry.tools.retain(|entry| entry.id != tool_id);
@@ -249,6 +356,8 @@ fn definition_for_entry(
     let manifest = read_manifest(&tools_root.join(&entry.id))?;
     Ok(NativeToolDefinition {
         id: entry.id.clone(),
+        origin: ToolOrigin::User,
+        can_delete: true,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
         ui: manifest.ui,
@@ -256,12 +365,107 @@ fn definition_for_entry(
     })
 }
 
+fn list_builtin_tools_at(
+    builtin_tools_root: &Path,
+    preferences_path: &Path,
+) -> Result<Vec<NativeToolDefinition>, ToolDirectoryError> {
+    let catalog = load_builtin_catalog(builtin_tools_root)?;
+    let preferences = load_tool_preferences(preferences_path)?;
+    catalog
+        .tools
+        .iter()
+        .map(|entry| {
+            let enabled = preferences
+                .builtin
+                .get(&entry.id)
+                .map(|preference| preference.enabled)
+                .unwrap_or(entry.enabled_by_default);
+            definition_for_builtin_entry(builtin_tools_root, entry, enabled)
+        })
+        .collect()
+}
+
+fn definition_for_builtin_entry(
+    builtin_tools_root: &Path,
+    entry: &BuiltinToolEntry,
+    enabled: bool,
+) -> Result<NativeToolDefinition, ToolDirectoryError> {
+    let manifest = read_manifest(&builtin_tools_root.join(&entry.path))?;
+    Ok(NativeToolDefinition {
+        id: format!("{BUILTIN_ID_PREFIX}{}", entry.id),
+        origin: ToolOrigin::Builtin,
+        can_delete: false,
+        display_name: manifest.display_name,
+        entrypoint: manifest.entrypoint,
+        ui: manifest.ui,
+        enabled,
+    })
+}
+
+fn load_builtin_catalog(
+    builtin_tools_root: &Path,
+) -> Result<BuiltinToolCatalog, ToolDirectoryError> {
+    let catalog: BuiltinToolCatalog = serde_json::from_slice(&fs::read(
+        builtin_tools_root.join(BUILTIN_TOOL_CATALOG_FILE),
+    )?)?;
+    if catalog.version != 1 {
+        return Err(ToolDirectoryError::UnsupportedBuiltinCatalog);
+    }
+    let mut identifiers = BTreeMap::new();
+    let mut paths = BTreeMap::new();
+    for entry in &catalog.tools {
+        if !is_safe_name(&entry.id)
+            || !is_safe_name(&entry.path)
+            || identifiers.insert(entry.id.as_str(), ()).is_some()
+            || paths.insert(entry.path.as_str(), ()).is_some()
+        {
+            return Err(ToolDirectoryError::InvalidBuiltinCatalog);
+        }
+    }
+    Ok(catalog)
+}
+
 fn load_registry(tools_root: &Path) -> Result<PersistedToolRegistry, ToolDirectoryError> {
     let path = tools_root.join(TOOL_REGISTRY_FILE);
     if !path.is_file() {
         return Ok(PersistedToolRegistry::default());
     }
-    Ok(serde_json::from_slice(&fs::read(path)?)?)
+    let registry: PersistedToolRegistry = serde_json::from_slice(&fs::read(path)?)?;
+    let mut identifiers = BTreeMap::new();
+    if registry.tools.iter().any(|entry| {
+        !is_safe_name(&entry.id) || identifiers.insert(entry.id.as_str(), ()).is_some()
+    }) {
+        return Err(ToolDirectoryError::InvalidToolRegistry);
+    }
+    Ok(registry)
+}
+
+fn load_tool_preferences(
+    preferences_path: &Path,
+) -> Result<PersistedToolPreferences, ToolDirectoryError> {
+    if !preferences_path.is_file() {
+        return Ok(PersistedToolPreferences {
+            version: tool_preferences_version(),
+            ..PersistedToolPreferences::default()
+        });
+    }
+    let preferences: PersistedToolPreferences =
+        serde_json::from_slice(&fs::read(preferences_path)?)?;
+    if preferences.version != tool_preferences_version() {
+        return Err(ToolDirectoryError::UnsupportedToolPreferences);
+    }
+    Ok(preferences)
+}
+
+fn persist_tool_preferences(
+    preferences_path: &Path,
+    preferences: &PersistedToolPreferences,
+) -> Result<(), ToolDirectoryError> {
+    if let Some(parent) = preferences_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(preferences_path, serde_json::to_vec_pretty(preferences)?)?;
+    Ok(())
 }
 
 fn persist_registry(
@@ -359,13 +563,31 @@ fn validate_ui_config(
 
 fn read_tool_ui_source_at(
     tools_root: &Path,
+    builtin_tools_root: &Path,
     tool_id: &str,
 ) -> Result<NativeToolUiSource, ToolDirectoryError> {
+    if let Some(identifier) = tool_id.strip_prefix(BUILTIN_ID_PREFIX) {
+        let catalog = load_builtin_catalog(builtin_tools_root)?;
+        let entry = catalog
+            .tools
+            .iter()
+            .find(|entry| entry.id == identifier)
+            .ok_or(ToolDirectoryError::ToolNotFound)?;
+        return read_tool_ui_source_from_directory(&builtin_tools_root.join(&entry.path), tool_id);
+    }
+
     let registry = load_registry(tools_root)?;
     if !registry.tools.iter().any(|entry| entry.id == tool_id) {
         return Err(ToolDirectoryError::ToolNotFound);
     }
     let tool_directory = tools_root.join(tool_id);
+    read_tool_ui_source_from_directory(&tool_directory, tool_id)
+}
+
+fn read_tool_ui_source_from_directory(
+    tool_directory: &Path,
+    tool_id: &str,
+) -> Result<NativeToolUiSource, ToolDirectoryError> {
     let manifest = read_manifest(&tool_directory)?;
     let ui = manifest.ui.ok_or(ToolDirectoryError::InvalidUiEntrypoint)?;
     let bytes = fs::read(tool_directory.join(ui.entrypoint))?;
@@ -389,6 +611,18 @@ fn display_name_sort_key(display_name: &ToolDisplayName) -> &str {
             .map(String::as_str)
             .unwrap_or_default(),
     }
+}
+
+fn is_safe_name(value: &str) -> bool {
+    !value.is_empty()
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && !value.contains(['/', '\\', ':'])
+}
+
+const fn tool_preferences_version() -> u16 {
+    1
 }
 
 const fn default_ui_update_every_seconds() -> f64 {
@@ -481,12 +715,31 @@ mod tests {
         .expect("tool source must be writable");
     }
 
+    fn write_builtin_catalog(root: &Path) {
+        let timer = root.join("timer");
+        fs::create_dir_all(&timer).expect("built-in tool directory must be created");
+        write_tool_ui_source(&timer, None);
+        fs::write(
+            root.join(BUILTIN_TOOL_CATALOG_FILE),
+            r#"{"version":1,"tools":[{"id":"timer","path":"timer","enabled_by_default":true}]}"#,
+        )
+        .expect("built-in tool catalog must be writable");
+    }
+
     #[test]
     fn installs_lists_toggles_and_removes_a_tool_directory() {
         let root = temporary_directory("tool-registry");
         let source = root.join("source");
         let tools_root = root.join("app-data-tools");
+        let builtin_tools_root = root.join("builtin-tools");
+        let preferences_path = root.join(TOOL_PREFERENCES_FILE);
         fs::create_dir_all(&source).expect("tool source must be created");
+        fs::create_dir_all(&builtin_tools_root).expect("built-in root must be created");
+        fs::write(
+            builtin_tools_root.join(BUILTIN_TOOL_CATALOG_FILE),
+            r#"{"version":1,"tools":[]}"#,
+        )
+        .expect("empty built-in catalog must be writable");
         write_tool_source(&source);
 
         let installed =
@@ -501,19 +754,30 @@ mod tests {
             .join("timer_tool.py")
             .is_file());
 
-        let listed = list_installed_tools_at(&tools_root).expect("installed tools must list");
+        let listed = list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+            .expect("installed tools must list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].entrypoint, "timer_tool:create_tools");
+        assert_eq!(listed[0].origin, ToolOrigin::User);
+        assert!(listed[0].can_delete);
 
-        let disabled =
-            set_tool_enabled_at(&tools_root, &installed.id, false).expect("tool state must update");
+        let disabled = set_tool_enabled_at(
+            &tools_root,
+            &builtin_tools_root,
+            &preferences_path,
+            &installed.id,
+            false,
+        )
+        .expect("tool state must update");
         assert!(!disabled.enabled);
 
         remove_installed_tool_at(&tools_root, &installed.id)
             .expect("installed tool must be removed");
-        assert!(list_installed_tools_at(&tools_root)
-            .expect("empty registry must list")
-            .is_empty());
+        assert!(
+            list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+                .expect("empty registry must list")
+                .is_empty()
+        );
         fs::remove_dir_all(root).expect("temporary directory must be removable");
     }
 
@@ -558,10 +822,57 @@ mod tests {
                 update_every_s: DEFAULT_UI_UPDATE_EVERY_SECONDS,
             })
         );
-        let ui = read_tool_ui_source_at(&tools_root, &installed.id)
+        let builtin_tools_root = root.join("builtin-tools");
+        fs::create_dir_all(&builtin_tools_root).expect("built-in root must be created");
+        fs::write(
+            builtin_tools_root.join(BUILTIN_TOOL_CATALOG_FILE),
+            r#"{"version":1,"tools":[]}"#,
+        )
+        .expect("empty built-in catalog must be writable");
+        let ui = read_tool_ui_source_at(&tools_root, &builtin_tools_root, &installed.id)
             .expect("installed UI source must be readable");
         assert_eq!(ui.tool_id, installed.id);
         assert_eq!(ui.source, "<!doctype html><title>Timer</title>");
+
+        fs::remove_dir_all(root).expect("temporary directory must be removable");
+    }
+
+    #[test]
+    fn lists_toggles_and_protects_a_builtin_tool() {
+        let root = temporary_directory("builtin-tool");
+        let tools_root = root.join("app-data-tools");
+        let builtin_tools_root = root.join("builtin-tools");
+        let preferences_path = root.join(TOOL_PREFERENCES_FILE);
+        write_builtin_catalog(&builtin_tools_root);
+
+        let listed = list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+            .expect("built-in tools must list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "builtin:timer");
+        assert_eq!(listed[0].origin, ToolOrigin::Builtin);
+        assert!(!listed[0].can_delete);
+        assert!(listed[0].enabled);
+
+        let disabled = set_tool_enabled_at(
+            &tools_root,
+            &builtin_tools_root,
+            &preferences_path,
+            "builtin:timer",
+            false,
+        )
+        .expect("built-in preference must update");
+        assert!(!disabled.enabled);
+        assert!(matches!(
+            remove_installed_tool_at(&tools_root, "builtin:timer"),
+            Err(ToolDirectoryError::BuiltinToolImmutable)
+        ));
+
+        let relisted = list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+            .expect("built-in preferences must reload");
+        assert!(!relisted[0].enabled);
+        let ui = read_tool_ui_source_at(&tools_root, &builtin_tools_root, "builtin:timer")
+            .expect("built-in UI source must be readable");
+        assert_eq!(ui.tool_id, "builtin:timer");
 
         fs::remove_dir_all(root).expect("temporary directory must be removable");
     }

@@ -1527,8 +1527,22 @@ summary,
 
 .developer-tools-list {
   display: grid;
-  gap: 8px;
+  gap: 14px;
   margin-bottom: 12px;
+}
+
+.developer-tool-section {
+  display: grid;
+  gap: 8px;
+}
+
+.developer-tool-section h3 {
+  margin: 0 2px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .developer-tools-empty {
@@ -1562,8 +1576,20 @@ summary,
 }
 
 .developer-tool-copy strong {
+  display: flex;
+  gap: 7px;
+  align-items: center;
   margin-bottom: 4px;
   font-size: 12px;
+}
+
+.developer-tool-origin {
+  padding: 2px 5px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .developer-tool-copy code {

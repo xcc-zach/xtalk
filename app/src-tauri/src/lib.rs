@@ -23,6 +23,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apply_tool_changes,
             apply_model_config,
+            ensure_backend_started,
             get_backend_connection,
             get_installed_tools,
             get_managed_model_plan,
@@ -50,6 +51,17 @@ async fn get_backend_connection(
 ) -> Result<NativeBackendConnection, String> {
     supervisor
         .connection()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ensure_backend_started(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .ensure_started(&app)
         .await
         .map_err(|error| error.to_string())
 }

@@ -51,11 +51,15 @@ export interface NativeManagedModelProgress {
 }
 
 /**
- * One developer tool directory installed into application data.
+ * One built-in or user-installed tool exposed by the native shell.
  */
 export interface NativeToolDefinition {
-  /** App-generated stable identifier for this installed copy. */
+  /** Stable identifier assigned by the App. */
   id: string;
+  /** App-owned source classification, never supplied by the tool manifest. */
+  origin: "builtin" | "user";
+  /** Whether the native layer permits deleting this tool directory. */
+  canDelete: boolean;
   /** Human-readable name declared by the developer tool. */
   displayName: string | Record<string, string>;
   /** Python `module:factory` entrypoint declared by the tool. */
@@ -84,6 +88,7 @@ export interface NativeToolUiSource {
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
 const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
+const ENSURE_BACKEND_STARTED_COMMAND = "ensure_backend_started";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
 const MANAGED_MODEL_PLAN_COMMAND = "get_managed_model_plan";
@@ -106,6 +111,17 @@ export async function getNativeBackendConnection(): Promise<NativeBackendConnect
   }
 
   const payload = await invoke<unknown>(BACKEND_CONNECTION_COMMAND);
+  return parseNativeBackendConnection(payload);
+}
+
+/**
+ * Starts the selected backend and managed services unless they are healthy.
+ *
+ * @returns Validated bootstrap data for the running local backend.
+ */
+export async function ensureNativeBackendStarted(): Promise<NativeBackendConnection> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(ENSURE_BACKEND_STARTED_COMMAND);
   return parseNativeBackendConnection(payload);
 }
 
@@ -240,9 +256,9 @@ export async function chooseNativeToolDirectory(): Promise<string | null> {
 }
 
 /**
- * Lists developer tools copied into application data.
+ * Lists built-in and user-installed tools known to the native shell.
  *
- * @returns Installed tool definitions sorted by display name.
+ * @returns Unified tool definitions sorted by display name.
  */
 export async function getNativeInstalledTools(): Promise<NativeToolDefinition[]> {
   requireTauriRuntime();
@@ -270,9 +286,9 @@ export async function installNativeToolDirectory(
 }
 
 /**
- * Persists whether one installed tool should load at sidecar startup.
+ * Persists whether one built-in or user tool should load at sidecar startup.
  *
- * @param toolId App-generated installed tool identifier.
+ * @param toolId Stable identifier returned by the native shell.
  * @param enabled Desired enabled state.
  * @returns Updated tool definition.
  */
@@ -289,9 +305,9 @@ export async function setNativeToolEnabled(
 }
 
 /**
- * Deletes one copied developer tool directory from application data.
+ * Deletes one copied user tool directory from application data.
  *
- * @param toolId App-generated installed tool identifier.
+ * @param toolId User-tool identifier returned by the native shell.
  */
 export async function removeNativeInstalledTool(toolId: string): Promise<void> {
   requireTauriRuntime();
@@ -310,9 +326,9 @@ export async function applyNativeToolChanges(): Promise<NativeBackendConnection>
 }
 
 /**
- * Reads one installed tool's self-contained UI entrypoint.
+ * Reads one built-in or user tool's self-contained UI entrypoint.
  *
- * @param toolId Installed tool identifier returned by Tauri.
+ * @param toolId Tool identifier returned by Tauri.
  * @returns Untrusted HTML source for sandboxed rendering.
  */
 export async function getNativeToolUiSource(
@@ -407,11 +423,16 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   const entrypoint = payload.entrypoint;
   const ui = payload.ui;
   const enabled = payload.enabled;
+  const origin = payload.origin;
+  const canDelete = payload.canDelete;
   if (
     typeof id !== "string" ||
     !isDisplayName(displayName) ||
     typeof entrypoint !== "string" ||
     typeof enabled !== "boolean" ||
+    (origin !== "builtin" && origin !== "user") ||
+    typeof canDelete !== "boolean" ||
+    canDelete !== (origin === "user") ||
     !id.trim() ||
     !entrypoint.trim() ||
     !isToolUiConfig(ui)
@@ -427,6 +448,8 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
         });
   return {
     id,
+    origin,
+    canDelete,
     displayName,
     entrypoint,
     ui:

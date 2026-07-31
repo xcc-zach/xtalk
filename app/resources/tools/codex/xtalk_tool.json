@@ -1,0 +1,11 @@
+{
+  "display_name": {
+    "zh": "Codex",
+    "en": "Codex"
+  },
+  "entrypoint": "codex_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 1
+  }
+}

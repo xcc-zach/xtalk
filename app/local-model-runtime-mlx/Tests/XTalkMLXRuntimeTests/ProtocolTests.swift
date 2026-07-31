@@ -52,6 +52,43 @@ struct ProtocolTests {
     }
 
     @Test
+    func boundsMossGenerationFramesToSentenceLength() {
+        #expect(mossTTSFrameLimit(for: "嘿，") == 72)
+        #expect(mossTTSFrameLimit(for: "最近过得怎么样？") == 144)
+        #expect(mossTTSFrameLimit(for: "嘿，你好呀。今天过得怎么样？") == 216)
+        #expect(
+            mossTTSFrameLimit(for: "那就好。有什么想聊的，或者需要我帮忙的吗？") == 300
+        )
+        #expect(mossTTSFrameLimit(for: String(repeating: "长", count: 100)) == 375)
+        #expect(
+            mossTTSFrameLimit(for: [
+                "这是较短的一句。",
+                "这是按官方文本预算切出的最长一块。",
+            ]) == 252
+        )
+    }
+
+    @Test
+    func trimsCodecTrailingSilenceWithNaturalPadding() {
+        let samples = [Float](repeating: 0, count: 10)
+            + [0.02]
+            + [Float](repeating: 0, count: 1_000)
+        let trimmed = trimTrailingSilence(samples, sampleRate: 1_000)
+        #expect(trimmed.count == 131)
+        #expect(trimTrailingSilence([0, 0.001], sampleRate: 48_000).isEmpty)
+    }
+
+    @Test
+    func downmixesInterleavedStereoBeforeMonoWaveEncoding() {
+        let mono = downmixInterleavedAudio(
+            [1, -1, 0.5, 0.25],
+            channelCount: 2
+        )
+        #expect(mono == [0, 0.375])
+        #expect(downmixInterleavedAudio([0.25], channelCount: 1) == [0.25])
+    }
+
+    @Test
     func parsesBinaryMultipartAudioWithoutTextConversion() throws {
         let boundary = "xtalk-test-boundary"
         let binary = Data([0x00, 0x80, 0xFF, 0x0A])
