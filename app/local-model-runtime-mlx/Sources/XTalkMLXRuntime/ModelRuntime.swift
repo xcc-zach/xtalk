@@ -72,18 +72,60 @@ actor ModelRuntime {
             from: temporaryURL,
             sampleRate: ManagedModelService.mossTTSNano.sampleRate
         )
+        let generationChunks: [String]
+        if let tokenizer = mossTTS.tokenizer {
+            generationChunks = try mossSplitTextIntoBestSentences(
+                tokenizer: tokenizer,
+                text: mossLightweightNormalizeText(normalizedText),
+                maxTokens: 75
+            )
+        } else {
+            generationChunks = [normalizedText]
+        }
+        var generationParameters = mossTTS.defaultGenerationParameters
+        generationParameters.maxTokens = mossTTSFrameLimit(for: generationChunks)
         let output = try await mossTTS.generate(
             text: normalizedText,
             voice: nil,
             refAudio: referenceAudio,
             refText: nil,
-            language: nil
+            language: nil,
+            generationParameters: generationParameters
+        )
+        let channelCount = output.ndim > 1 ? output.dim(output.ndim - 1) : 1
+        let monoSamples = downmixInterleavedAudio(
+            output.asArray(Float.self),
+            channelCount: channelCount
+        )
+        let samples = trimTrailingSilence(
+            monoSamples,
+            sampleRate: ManagedModelService.mossTTSNano.sampleRate
         )
         return encodePCM16Wave(
-            samples: output.asArray(Float.self),
+            samples: samples,
             sampleRate: ManagedModelService.mossTTSNano.sampleRate
         )
     }
+}
+
+/// Estimate a bounded MOSS generation budget for one already-split TTS chunk.
+func mossTTSFrameLimit(for text: String) -> Int {
+    let meaningfulCharacters = text.unicodeScalars.reduce(into: 0) { count, scalar in
+        if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            count += 1
+        }
+    }
+    // The official service allows 375 frames per <=75-token chunk. The MLX
+    // model does not always emit EOS, so retain that ceiling while bounding
+    // short requests by character count. Twelve frames per character plus a
+    // 48-frame margin covers the slower observed Chinese samples without
+    // forcing every missing-EOS request to generate the full 30 seconds.
+    return min(375, max(64, meaningfulCharacters * 12 + 48))
+}
+
+/// Return the per-chunk frame limit required by the longest official text chunk.
+func mossTTSFrameLimit(for chunks: [String]) -> Int {
+    chunks.map(mossTTSFrameLimit(for:)).max() ?? 64
 }
 
 enum ModelRuntimeError: Error, LocalizedError {

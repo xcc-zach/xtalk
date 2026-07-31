@@ -84,6 +84,42 @@ func encodePCM16Wave(samples: [Float], sampleRate: Int) -> Data {
     return wave
 }
 
+/// Downmix frame-interleaved audio channels to mono samples.
+func downmixInterleavedAudio(
+    _ samples: [Float],
+    channelCount: Int
+) -> [Float] {
+    guard channelCount > 1 else {
+        return samples
+    }
+    let frameCount = samples.count / channelCount
+    return (0 ..< frameCount).map { frameIndex in
+        let offset = frameIndex * channelCount
+        let sum = samples[offset ..< offset + channelCount].reduce(0, +)
+        return sum / Float(channelCount)
+    }
+}
+
+/// Remove codec-generated trailing silence while retaining a short natural tail.
+func trimTrailingSilence(
+    _ samples: [Float],
+    sampleRate: Int,
+    amplitudeThreshold: Float = 0.009,
+    tailMilliseconds: Int = 120
+) -> [Float] {
+    guard !samples.isEmpty, sampleRate > 0 else {
+        return []
+    }
+    guard let lastAudibleIndex = samples.lastIndex(where: {
+        abs($0) >= amplitudeThreshold
+    }) else {
+        return []
+    }
+    let tailSamples = sampleRate * max(0, tailMilliseconds) / 1_000
+    let endIndex = min(samples.count, lastAudibleIndex + 1 + tailSamples)
+    return Array(samples[..<endIndex])
+}
+
 extension Data {
     mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
         var littleEndian = value.littleEndian

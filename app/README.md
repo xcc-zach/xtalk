@@ -19,7 +19,7 @@ The installed application does not require Python, Node.js, or Rust. They are
 build-time dependencies only.
 
 The locked npm dependency resolves the client from
-`resources/artifacts/xtalk-client-0.2.6.tgz`. Prepare that ignored artifact from
+`resources/artifacts/xtalk-client-0.2.7.tgz`. Prepare that ignored artifact from
 a client build that exposes `Session.sendText()` before running `npm ci`.
 
 ## Local checks
@@ -56,9 +56,9 @@ that bundle.
 
 The model smoke suite also submits a `submit_text` turn through the authenticated
 XTalk WebSocket and checks the timer contract from
-`examples/sample_app/custom_async_tool.py`. The app ships an equivalent
-app-owned `TimerTool` because importing the example module would execute its CLI
-and asset-download side effects.
+`examples/sample_app/custom_async_tool.py`. The app ships an equivalent timer
+under `resources/tools/timer`; it is discovered through the same manifest
+protocol as a user-installed tool.
 
 ## Private model snapshots
 
@@ -126,10 +126,132 @@ SHA-256 values are pinned in
 when a selected configuration references the service.
 
 The freezer collects the installed public `xtalk.models` namespace and package
-data so model discovery continues to be configuration-driven. Optional
-dependency groups are build inputs, not model-type branches in application
+data so model discovery continues to be configuration-driven. It also collects
+the official `openai-codex` package and its pinned `openai-codex-cli-bin`
+runtime for the optional Codex built-in. Optional dependency groups are build
+inputs, not model-type branches in application
 code. `silero-vad` is mandatory because every desktop launch provides it as a
 top-level fallback when the selected configuration has no explicit `vad`.
+
+## Building the desktop app
+
+The following sequence produces a self-contained desktop bundle. Run the
+commands from `app/` unless a command explicitly changes directory. Build
+inputs must match the target architecture; for example, an Apple Silicon build
+needs arm64 executables and libraries.
+
+First build a fresh XTalk wheel from the repository root. Do not reuse an older
+wheel: `build_backend.py` rejects wheels that do not contain the managed
+SenseVoice and MOSS client modules.
+
+```bash
+cd ..
+python3 -m build --wheel --outdir /tmp/xtalk-dist
+cd app
+```
+
+If `python3 -m build` is unavailable, install the Python `build` package in the
+build environment. Prepare the immutable core artifacts once per wheel or
+client-package update. Replace the paths and version strings with the exact
+files being packaged:
+
+```bash
+python scripts/prepare_artifacts.py \
+  --xtalk-wheel /tmp/xtalk-dist/xtalk-VERSION-py3-none-any.whl \
+  --xtalk-version VERSION \
+  --client-package /path/to/xtalk-client-VERSION.tgz \
+  --client-version VERSION
+```
+
+Freeze the Python application backend with every provider dependency required
+by the configurations that the release must support. The current sample and
+managed-local-model configurations require `ali` and the mandatory
+`silero-vad` extra:
+
+```bash
+python scripts/build_backend.py \
+  --python /path/to/python3.12 \
+  --xtalk-wheel /tmp/xtalk-dist/xtalk-VERSION-py3-none-any.whl \
+  --xtalk-extra ali \
+  --xtalk-extra silero-vad
+```
+
+Stage the managed-model runtimes. The sherpa server, sherpa ONNX Runtime
+library, and TTS ONNX Runtime library must all target the same platform as the
+App. The script builds the Rust MOSS runtime itself. On Apple Silicon it also
+builds the Swift/MLX runtime and copies its Metal resources:
+
+```bash
+python scripts/prepare_managed_runtime.py \
+  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-ort-library /path/to/sherpa/libonnxruntime.dylib \
+  --tts-ort-library /path/to/tts/libonnxruntime.dylib
+```
+
+Before the first Apple Silicon build, install the Xcode Metal toolchain
+component:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+CUDA release artifacts additionally pass
+`--sherpa-cuda-runtime-dir /path/to/sherpa/onnxruntime-gpu/lib` and
+`--tts-cuda-runtime-dir /path/to/tts/onnxruntime-gpu/lib`. Those directories
+must contain the matching CUDA and shared ONNX Runtime provider libraries.
+
+Install the pinned frontend dependencies, verify all staged resources, and run
+the release checks:
+
+```bash
+npm ci
+python scripts/verify_resources.py
+python -m pytest tests/unit/test_artifact_scripts.py
+npm run check
+cargo test --manifest-path src-tauri/Cargo.toml managed::tests --lib
+```
+
+Build the macOS application with Tauri, then use the repository packager to
+normalize the PyInstaller framework layout, sign it, smoke-test the frozen
+backend, and create the disk image:
+
+```bash
+npm run tauri build -- --bundles app
+python scripts/package_macos_dmg.py
+```
+
+The Apple Silicon output is
+`src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg`. The generated
+`.app` is under `src-tauri/target/release/bundle/macos/`. A locally built image
+uses an ad-hoc signature. Set `APPLE_SIGNING_IDENTITY` to an Apple Developer
+identity before running `package_macos_dmg.py` when producing a distributable
+release. Notarization remains a separate release step.
+
+Do not replace all of `Contents/Frameworks` with links to the resource runtime.
+The PyInstaller bootloader loads `libpython` from `Frameworks`, and a hardened
+sidecar cannot map a differently signed copy through such a link. The packager
+links only top-level Python `*.dist-info` metadata directories, applies the
+sidecar's library-validation entitlement, and verifies that the signed backend
+can load before creating the DMG.
+
+Verify the final bundle and disk image rather than only the intermediate
+sidecars:
+
+```bash
+codesign --verify --deep --strict --verbose=2 \
+  src-tauri/target/release/bundle/macos/XTalk.app
+hdiutil verify \
+  src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg
+shasum -a 256 \
+  src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg
+```
+
+The release contains ONNX Runtime, the native service executables, the frozen
+Python backend, and the Silero VAD model. SenseVoice Small and MOSS-TTS-Nano
+weights are deliberately excluded; they are downloaded and verified in
+AppData only after a selected configuration references their `managed://`
+URLs. Model configuration files and provider credentials are also external and
+must never be copied into the bundle.
 
 ## Model configuration
 
@@ -153,13 +275,13 @@ it, selection order is CUDA, MLX, then CPU. The
 [`examples/local_models_mlx.json`](examples/local_models_mlx.json) variant
 forces MLX.
 
-## Developer tool directories
+## Built-in and user tool directories
 
-The **Settings and diagnostics** drawer can install a developer tool by
-selecting a directory. Tauri copies that directory into the application's data
-directory and stores enablement state separately. Each selected directory must
-contain an `xtalk_tool.json` file. `display_name` accepts either one string or a
-language dictionary. The optional `ui` object points to self-contained HTML:
+Built-in tools under `resources/tools/` and user tools installed from
+**Settings and diagnostics** use the same `xtalk_tool.json` schema. Tauri copies
+only user-selected directories into AppData. `display_name` accepts either one
+string or a language dictionary. The optional `ui` object points to
+self-contained HTML:
 
 ```json
 {
@@ -209,10 +331,33 @@ reported height to 120–420 px for live cards and 80–600 px for history cards
 additionally capped at 60% of the window height. See
 [`examples/tools/timer`](examples/tools/timer) for a complete example.
 
-Installing, enabling, disabling, or deleting a tool updates the AppData
-registry. Select **Apply and restart local service** to rebuild the configured
-Agent with the enabled tools. The bundled sample-compatible timer remains a
-fallback; an installed enabled tool named `timer` replaces that fallback.
+User-tool install, enable, disable, and delete operations update
+`AppData/tools/registry.json`. Built-ins are indexed by
+`resources/tools/builtin_tools.json`; they cannot be deleted, but their enabled
+overrides are persisted in `AppData/tool_preferences.json`. Select **Apply and
+restart local service** to rebuild the configured Agent with enabled tools.
+When a user tool exports the same name as a built-in, the user implementation
+takes precedence.
+
+The optional **Codex** built-in is one atomic bundle and is disabled by
+default. Its single toggle enables or disables
+`codex_session_search`, `codex_session_create`,
+`codex_session_continue`, `codex_session_set_model`, and
+`codex_session_delete` together. The first real task creates a persistent
+official Codex SDK thread; later turns always reapply the session's saved
+model, reasoning effort, working directory, and `Sandbox.full_access`. It also
+uses the SDK's no-prompt approval mode, so arbitrary existing local directories
+are accepted as `cwd` values without an App approval step. Enable this bundle
+only when unrestricted local Codex access is intended.
+
+The App keeps only its thread index and compact routing metadata in
+`AppData/tool-data/codex/codex_sessions.sqlite3`; the Codex SDK remains the
+owner of thread history. Natural-language session lookup sends at most 30
+App-indexed candidates to a temporary ephemeral Codex thread and validates
+that its structured result contains only candidate IDs. Deletion first calls
+the SDK archive operation and then removes the thread from the active App pool.
+Its custom HTML is display-only, contains no controls, and deliberately does
+not show the full-access label in live UI.
 
 ## Local interface
 
@@ -223,7 +368,8 @@ settings-and-diagnostics drawer. The top bar is empty by default; while tools
 with live UI are running it shows a collapsed status summary that expands to
 the current live cards. The sidebar uses the public session APIs to start a new
 chat or switch among all persisted sessions. Its Tools button opens a centered
-configuration dialog for installing, enabling, deleting, and applying tools.
+configuration dialog that groups built-in and user tools. Both groups can be
+enabled or disabled; only user tools can be deleted.
 Conversation
 data remains in AppData-backed `chat_history.sqlite3`; the WebView does not
 maintain a duplicate message store. Immutable custom tool UI snapshots are

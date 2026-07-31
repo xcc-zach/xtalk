@@ -8,6 +8,7 @@
   "permissions": [
     "allow-apply-tool-changes",
     "allow-apply-model-config",
+    "allow-ensure-backend-started",
     "allow-get-backend-connection",
     "allow-get-installed-tools",
     "allow-get-managed-model-plan",

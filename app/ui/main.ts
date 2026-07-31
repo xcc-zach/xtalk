@@ -5,6 +5,7 @@ import {
   applyNativeToolChanges,
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
+  ensureNativeBackendStarted,
   getNativeManagedModelPlan,
   getNativeBackendConnection,
   getNativeInstalledTools,
@@ -729,8 +730,8 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
     return;
   }
 
-  if (sessionId === latestSnapshot.sessionId) {
-    setMainView(sessionId === null ? "orb" : "chat");
+  if (sessionId !== null && sessionId === latestSnapshot.sessionId) {
+    setMainView("chat");
     if (isCompactLayout()) {
       setSidebarOpen(false);
     }
@@ -1411,15 +1412,24 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     return;
   }
 
-  const rows = tools.map((tool) => {
+  const createRow = (tool: NativeToolDefinition): HTMLElement => {
     const row = document.createElement("article");
     row.className = "developer-tool-row";
+    row.dataset.origin = tool.origin;
 
     const copy = document.createElement("div");
     copy.className = "developer-tool-copy";
 
     const name = document.createElement("strong");
-    name.textContent = resolveToolDisplayName(tool.displayName);
+    const nameText = document.createElement("span");
+    nameText.textContent = resolveToolDisplayName(tool.displayName);
+    name.append(nameText);
+    if (tool.origin === "builtin") {
+      const badge = document.createElement("small");
+      badge.className = "developer-tool-origin";
+      badge.textContent = t("tools.builtinBadge");
+      name.append(badge);
+    }
 
     const entrypoint = document.createElement("code");
     entrypoint.textContent = tool.entrypoint;
@@ -1449,27 +1459,47 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     toggleText.textContent = t("tools.enabled");
     toggleLabel.append(toggle, toggleText);
 
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "developer-tool-remove";
-    remove.textContent = "×";
-    remove.setAttribute(
-      "aria-label",
-      t("tools.removeName", {
-        name: resolveToolDisplayName(tool.displayName),
-      }),
-    );
-    remove.title = t("tools.removeTitle");
-    remove.addEventListener("click", () => {
-      void removeInstalledTool(tool.id);
-    });
+    actions.append(toggleLabel);
+    if (tool.canDelete) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "developer-tool-remove";
+      remove.textContent = "×";
+      remove.setAttribute(
+        "aria-label",
+        t("tools.removeName", {
+          name: resolveToolDisplayName(tool.displayName),
+        }),
+      );
+      remove.title = t("tools.removeTitle");
+      remove.addEventListener("click", () => {
+        void removeInstalledTool(tool.id);
+      });
+      actions.append(remove);
+    }
 
-    actions.append(toggleLabel, remove);
     row.append(copy, actions);
     return row;
-  });
+  };
 
-  elements.developerToolsList.replaceChildren(...rows);
+  const sections = (["builtin", "user"] as const)
+    .map((origin) => {
+      const matching = tools.filter((tool) => tool.origin === origin);
+      if (matching.length === 0) {
+        return null;
+      }
+      const section = document.createElement("section");
+      section.className = "developer-tool-section";
+      const heading = document.createElement("h3");
+      heading.textContent = t(
+        origin === "builtin" ? "tools.builtinGroup" : "tools.userGroup",
+      );
+      section.append(heading, ...matching.map(createRow));
+      return section;
+    })
+    .filter((section): section is HTMLElement => section !== null);
+
+  elements.developerToolsList.replaceChildren(...sections);
   updateToolControls();
 }
 
@@ -1580,33 +1610,11 @@ async function discoverBackend(): Promise<void> {
   }
 }
 
-async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
-  if (modelConfigOperation) {
-    return;
-  }
-
-  modelConfigOperation = true;
-  showError(null);
-  elements.modelConfigStatus.textContent = t("model.choosePrompt");
-  updateControls(latestSnapshot);
+async function applyModelConfigPath(selectedPath: string): Promise<void> {
   let stopManagedProgress: (() => void) | null = null;
   let managedProgressOpened = false;
 
   try {
-    const selectedPath = await chooseNativeModelConfigFile();
-    if (selectedPath === null) {
-      if (required && modelConfigPath === null) {
-        setBackendStatus("unconfigured", "service.chooseConfig");
-        elements.modelConfigStatus.textContent =
-          t("model.firstLaunch");
-      } else {
-        elements.modelConfigStatus.textContent = modelConfigPath
-          ? t("model.cancelCurrent")
-          : t("model.cancelNone");
-      }
-      return;
-    }
-
     const managedPlan = await getNativeManagedModelPlan(selectedPath);
     if (managedPlan.services.length > 0) {
       managedProgressOpened = true;
@@ -1645,6 +1653,52 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
     }
   } finally {
     stopManagedProgress?.();
+  }
+}
+
+async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
+  if (modelConfigOperation) {
+    return;
+  }
+
+  modelConfigOperation = true;
+  showError(null);
+  elements.modelConfigStatus.textContent = t("model.choosePrompt");
+  updateControls(latestSnapshot);
+
+  try {
+    const selectedPath = await chooseNativeModelConfigFile();
+    if (selectedPath === null) {
+      if (required && modelConfigPath === null) {
+        setBackendStatus("unconfigured", "service.chooseConfig");
+        elements.modelConfigStatus.textContent =
+          t("model.firstLaunch");
+      } else {
+        elements.modelConfigStatus.textContent = modelConfigPath
+          ? t("model.cancelCurrent")
+          : t("model.cancelNone");
+      }
+      return;
+    }
+    await applyModelConfigPath(selectedPath);
+  } finally {
+    modelConfigOperation = false;
+    updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+async function restartCurrentModelConfig(): Promise<void> {
+  if (modelConfigOperation || modelConfigPath === null) {
+    return;
+  }
+
+  modelConfigOperation = true;
+  showError(null);
+  elements.modelConfigStatus.textContent = t("model.restarting");
+  updateControls(latestSnapshot);
+  try {
+    await applyModelConfigPath(modelConfigPath);
+  } finally {
     modelConfigOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
   }
@@ -1727,6 +1781,10 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   }
 
   const tool = installedTools.find((candidate) => candidate.id === toolId);
+  if (tool?.canDelete === false) {
+    showError("tools.builtinImmutable");
+    return;
+  }
   toolOperation = true;
   showError(null);
   updateDeveloperToolsStatus(t("tools.removing"));
@@ -1795,6 +1853,27 @@ async function initializeApplication(): Promise<void> {
       setDiagnosticsOpen(true);
       await chooseAndApplyModelConfig(true);
       return;
+    }
+    const managedPlan = await getNativeManagedModelPlan(selection.configPath);
+    let stopManagedProgress: (() => void) | null = null;
+    if (managedPlan.services.length > 0) {
+      openManagedProgress(managedPlan.services);
+      stopManagedProgress = await listenNativeManagedModelProgress(
+        updateManagedProgress,
+      );
+    }
+    try {
+      await ensureNativeBackendStarted();
+      if (managedPlan.services.length > 0) {
+        closeManagedProgress();
+      }
+    } catch (error) {
+      if (managedPlan.services.length > 0) {
+        failManagedProgress(error);
+      }
+      throw error;
+    } finally {
+      stopManagedProgress?.();
     }
     await discoverBackend();
   } catch (error) {
@@ -1968,7 +2047,7 @@ elements.retryButton.addEventListener("click", () => {
   if (modelConfigPath === null) {
     void chooseAndApplyModelConfig(true);
   } else {
-    void discoverBackend();
+    void restartCurrentModelConfig();
   }
 });
 elements.languageSelect.addEventListener("change", () => {

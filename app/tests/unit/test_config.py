@@ -54,6 +54,7 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
         "token": TOKEN,
         "config_path": str(tmp_path / "base.json"),
         "data_dir": str(tmp_path / "data"),
+        "builtin_tools_root": str(tmp_path / "resources" / "tools"),
         "origins": [
             "TAURI://LOCALHOST/",
             "tauri://localhost",
@@ -73,6 +74,9 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
         "http://localhost:1420",
     )
     assert startup.config_overlay == payload["config_overlay"]
+    assert startup.builtin_tools_root == (
+        tmp_path / "resources" / "tools"
+    ).resolve()
     assert startup.anonymous_user_id == "desktop-user"
     assert startup.config_fallbacks == {}
     assert stream.readline() == "ignored second line\n"

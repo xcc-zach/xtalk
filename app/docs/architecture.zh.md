@@ -9,11 +9,15 @@ runtime builder 与工具 API，包括原生工具所需、文档已公开的
 
 ## 启动协议
 
-1. Tauri 读取用户此前选择的外部模型配置路径。
+1. Tauri 读取用户此前选择的外部模型配置路径，但不在原生 setup 阶段启动用户选择的
+   进程。
 2. 没有有效路径时，窗口会在不启动 sidecar 的情况下打开，WebView 随即弹出原生
    JSON 文件选择器。
-3. Tauri 生成本次启动随机 token，并创建应用数据目录。
-4. Tauri 启动已打包的 Python sidecar，秘密不进入 argv。
+3. WebView 订阅 managed 模型进度后，请求 Tauri 确保所选后端正在运行；若已有受管且
+   健康的实例则直接复用，否则先启动配置引用的全部 managed 服务，再启动 Python
+   sidecar。
+4. Tauri 生成本次启动随机 token、创建应用数据目录并启动已打包的 Python sidecar，
+   秘密不进入 argv。
 5. Tauri 通过 sidecar stdin 写入一条有大小上限的 JSON 启动消息。
 6. sidecar 加载指定的 XTalk 配置，绑定由操作系统分配的 loopback 端口，启动
    FastAPI，然后输出一行 readiness JSON。
@@ -32,7 +36,8 @@ WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导�
 界面包含默认收起的左侧聊天记录栏、上下文状态栏、Orb/对话双视图、底部玻璃控制坞
 和右侧“设置与诊断”抽屉。左侧栏可创建新聊天，并通过公开客户端 API 切换全部持久
 化会话。“新聊天”下方的同款“工具”按钮会打开居中浮窗，用于将工具目录复制到
-AppData、修改启用状态、删除已复制工具，并通过重启 sidecar 应用变更。“设置与诊
+AppData、修改内置或用户工具的启用状态、删除用户工具，并通过重启 sidecar 应用
+变更。内置工具单独分组显示，且不提供删除入口。“设置与诊
 断”顶部显示本地服务状态，并将语言、外部模型配置、运行状态、本地服务诊断和恢复
 组织为可独立展开的选项卡。用户可更换模型配置并重新探测本地服务。“语言”选项默
 认按操作系统首选语言自动选择界面语言，也可持久化指定简体中文或英文。静态内容、
@@ -71,9 +76,10 @@ UTF-8 编码不超过 8 KiB，再通过普通 VAD、ASR、Agent、Tool、TTS 与
 每个客户端 Session 同一时间只能有一条文本等待确认。断线、关闭、重新打开或切换
 Session 都会取消待确认请求；客户端不会排队或自动重试可能执行有副作用工具的回合。
 
-app 通过公共 runtime builder 注册已启用的开发者工具。若没有已启用工具声明
-`timer` 名称，则继续注册契约与 `examples/sample_app/custom_async_tool.py` 相同的
-随包异步计时器作为回退。单元测试覆盖 `Running`、进度、`Finished`、stop、开发者
+app 通过公共 runtime builder 注册已启用的内置与用户工具。随包异步计时器与
+`examples/sample_app/custom_async_tool.py` 契约一致，并作为普通内置 manifest 工具
+加载；若用户工具导出相同名称，则优先使用用户实现。单元测试覆盖 `Running`、进度、
+`Finished`、stop、工具
 入口加载，并通过公共 `ToolEngine` 验证最终更新；模型 smoke 则独立从文本入口发起
 请求，观察 `tool_called: timer`，确认真实的助手回复与 TTS 音频播放。测试不强制要求
 第二次 LLM 主动报告，因为模型驱动的报告可能与首轮响应重叠；app 不为这一时序增加
@@ -161,9 +167,9 @@ XTalk 原始配置错误返回。
 及其包数据。所需可选依赖组通过 `--xtalk-extra` 显式传入构建过程，不在应用行为中
 引入模型类型分支。
 
-## 开发者工具
+## 内置与用户工具
 
-用户选择的目录包含 Python 文件和 `xtalk_tool.json`。`display_name` 可以是单个
+两种来源的目录都包含 Python 文件和 `xtalk_tool.json`。`display_name` 可以是单个
 字符串，也可以是语言字典；`ui` 为可选配置：
 
 ```json
@@ -180,13 +186,35 @@ XTalk 原始配置错误返回。
 }
 ```
 
-Tauri 生成内部标识，将目录递归复制到 `AppData/tools/<id>/`，并仅在
-`AppData/tools/registry.json` 中保存该标识和启用状态。Python sidecar 为每个已启用
-目录解析 `module:factory` 入口；工厂必须返回一个列表，其中元素可直接交给
-`XtalkBuilder.add_agent_tools()`。
+对于用户工具，Tauri 生成内部标识，将目录递归复制到
+`AppData/tools/<id>/`，并在 `AppData/tools/registry.json` 中保存该标识和启用状态。
+内置工具保留在只读的 `resources/tools/` 包资源中，由
+`resources/tools/builtin_tools.json` 建立索引；来源、删除权限和默认启用状态属于
+App 元数据，不进入 manifest。内置工具 ID 使用 `builtin:<id>` 命名空间，其启用
+覆盖保存到 `AppData/tool_preferences.json`。
+
+原生删除命令会自行解析工具来源并拒绝内置 ID，删除保护不依赖 WebView。两种工具
+都可以禁用。Python sidecar 使用同一套 `module:factory` 入口加载每个已启用目录；
+用户工具与内置工具导出同名时优先使用用户实现。工厂必须返回一个列表，其中元素
+可直接交给 `XtalkBuilder.add_agent_tools()`。
 
 配置中的 Agent 会在读取该注册表后构建，因此工具变更通过受控重启 sidecar 生效。
 单个开发者工厂加载失败时会被忽略，不会阻止其余本地服务启动。
+
+Codex 内置工具由一个 catalog 条目和一个 manifest 表示，其工厂一次返回查询、新建、
+继续、切换模型和删除五个原生异步工具。因此它只能整体启用或禁用，不存在按导出
+工具保存的偏好；默认状态为禁用。所有业务线程与 turn 都通过官方 Python SDK 使用
+`Sandbox.full_access` 与 SDK 的无提示审批模式，`cwd` 可以是任意真实存在的本地
+目录，并在每次 turn 显式重用该 session 保存的模型与推理强度。条件式路由规则直接
+写入工具描述，不向 Agent 的 developer instructions 注入 Codex 专用指令。
+
+App 侧 session 索引是
+`AppData/tool-data/codex/codex_sessions.sqlite3`。其中只保存 SDK thread ID、精简标题与
+摘要、工作目录、模型、推理强度、状态和时间戳；真实 thread 对话记录仍由 SDK 负责。
+自然语言查询先把活动索引机械限制到最多 30 个候选，再仅把该 JSON 快照交给使用严格
+输出 schema 的临时 ephemeral 查询线程；返回 ID 必须是候选 ID 的子集。删除操作先
+归档 SDK thread，再在 App 索引中将其移出活动池；每个 session 的异步锁会串行化
+继续、改配置和归档操作。
 
 可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
 `window.xtalkToolUI.status(callback)` 和/或

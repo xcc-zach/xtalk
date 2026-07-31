@@ -11,11 +11,16 @@ code.
 
 ## Startup protocol
 
-1. Tauri loads the persisted path of the user's external model configuration.
+1. Tauri loads the persisted path of the user's external model configuration
+   without starting user-selected processes during native setup.
 2. When no valid path is selected, the window opens without a sidecar and the
    WebView immediately opens the native JSON file picker.
-3. Tauri creates an ephemeral launch token and application data directories.
-4. Tauri starts the packaged Python sidecar without placing secrets in argv.
+3. After the WebView subscribes to managed-model progress, it asks Tauri to
+   ensure the selected backend is running. Tauri reuses a healthy owned
+   instance; otherwise it starts every referenced managed service before the
+   packaged Python sidecar.
+4. Tauri creates an ephemeral launch token and application data directories
+   and starts the Python sidecar without placing secrets in argv.
 5. Tauri writes one bounded JSON launch message to the sidecar's stdin.
 6. The sidecar loads the selected XTalk configuration, binds an OS-assigned
    loopback port, starts FastAPI, and emits one readiness JSON line.
@@ -39,8 +44,9 @@ and conversation views, a bottom glass control dock, and a right-side
 settings-and-diagnostics drawer. The conversation sidebar creates new
 conversations and switches among all sessions returned by the public client
 API. A same-style Tools action below New chat opens a centered dialog that can
-copy tool directories into AppData, update their enabled state, delete copied
-tools, and restart the sidecar to apply changes. The settings drawer organizes
+copy user tool directories into AppData, update built-in or user enablement,
+delete user tools, and restart the sidecar to apply changes. Built-ins are
+visibly grouped and never expose a delete action. The settings drawer organizes
 language, external model configuration, runtime status, local-service
 diagnostics, and recovery into individually expandable rows. It can replace the
 model configuration and rediscover the local service. The language row defaults
@@ -92,10 +98,11 @@ close, reopen, and session switching cancel that pending submission; the client
 does not queue or automatically retry a turn that may execute side-effecting
 tools.
 
-The app registers enabled developer tools through the public runtime builder.
-The bundled asynchronous `timer`, matching
-`examples/sample_app/custom_async_tool.py`, remains a fallback when no enabled
-developer tool declares the `timer` name. Unit tests cover `Running`, progress,
+The app registers enabled built-in and user tools through the public runtime
+builder. The bundled asynchronous `timer`, matching
+`examples/sample_app/custom_async_tool.py`, is a normal built-in manifest tool.
+An enabled user tool with the same exported name takes precedence. Unit tests
+cover `Running`, progress,
 `Finished`, stop behavior, developer entrypoint loading, and the public
 `ToolEngine` final update. The model smoke independently sends a text request,
 observes `tool_called` for `timer`, and acknowledges a real assistant/TTS turn.
@@ -208,9 +215,9 @@ data because core model discovery is dynamic. Required optional dependency
 groups are explicit `--xtalk-extra` build inputs; they do not introduce
 model-type branches into application behavior.
 
-## Developer tools
+## Built-in and user tools
 
-A selected directory contains Python files and an `xtalk_tool.json` manifest.
+Both sources contain Python files and an `xtalk_tool.json` manifest.
 `display_name` may be a string or a language dictionary. `ui` is optional:
 
 ```json
@@ -227,15 +234,46 @@ A selected directory contains Python files and an `xtalk_tool.json` manifest.
 }
 ```
 
-Tauri assigns an internal identifier, recursively copies the directory under
-`AppData/tools/<id>/`, and persists only that identifier plus its enabled state
-in `AppData/tools/registry.json`. The Python sidecar resolves the
-`module:factory` entrypoint for each enabled directory. A factory must return a
-list of tool values accepted by `XtalkBuilder.add_agent_tools()`.
+For user tools, Tauri assigns an internal identifier, recursively copies the
+directory under `AppData/tools/<id>/`, and persists that identifier plus its
+enabled state in `AppData/tools/registry.json`. Built-ins remain in the
+read-only `resources/tools/` bundle and are indexed by
+`resources/tools/builtin_tools.json`; origin, deletion permission, and default
+enablement are App metadata rather than manifest fields. Built-in IDs use the
+`builtin:<id>` namespace. Their enablement overrides are stored in
+`AppData/tool_preferences.json`.
+
+The native delete command resolves the tool source itself and rejects built-in
+IDs, so deletion protection does not depend on the WebView. Both sources can
+be disabled. The Python sidecar resolves the same `module:factory` entrypoint
+for each enabled directory, and user exports take precedence over same-named
+built-ins. A factory must return a list accepted by
+`XtalkBuilder.add_agent_tools()`.
 
 The configured Agent is built after this registry is loaded, so tool changes
 take effect through a controlled sidecar restart. A failed developer factory is
 omitted without preventing the remaining local service from starting.
+
+The Codex built-in is represented by one catalog entry and one manifest whose
+factory returns five native async tools: search, create, continue, set-model,
+and delete. Consequently its enabled state is atomic; the App has no per-export
+preference. The bundle is disabled by default. Every business thread and turn
+uses the official Python SDK with `Sandbox.full_access`, accepts any existing
+local directory as `cwd`, uses the SDK's no-prompt approval mode, and explicitly
+reapplies the model and reasoning effort stored for that session. Tool
+descriptions contain the conditional routing rules, so no Codex-specific
+instruction is injected into the Agent's
+developer instructions.
+
+The App-side session index is SQLite at
+`AppData/tool-data/codex/codex_sessions.sqlite3`. It stores the SDK thread ID,
+compact title/summary, working directory, model, effort, status, and timestamps;
+the SDK remains responsible for the actual thread transcript. Natural-language
+lookup first bounds the active index to 30 candidates, then gives only that JSON
+snapshot to an ephemeral resolver thread with a strict output schema. Returned
+IDs must be a subset of the snapshot. Delete archives the SDK thread before
+marking it inactive in the App index, and per-session async locks serialize
+continue, reconfigure, and archive operations.
 
 The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
 separate from the Python entrypoint and declares capabilities by registering

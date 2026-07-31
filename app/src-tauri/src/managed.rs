@@ -873,16 +873,20 @@ async fn start_mlx(
     service_id: &str,
     model_root: &Path,
 ) -> Result<StartedService, ManagedError> {
-    let command = app.shell().sidecar(MLX_SIDECAR_NAME)?.args([
-        "--service".to_owned(),
-        service_id.to_owned(),
-        "--model-root".to_owned(),
-        model_root.to_string_lossy().into_owned(),
-        "--host".to_owned(),
-        "127.0.0.1".to_owned(),
-        "--port".to_owned(),
-        "0".to_owned(),
-    ]);
+    let command = app
+        .shell()
+        .sidecar(MLX_SIDECAR_NAME)?
+        .env("LLVM_PROFILE_FILE", "/dev/null")
+        .args([
+            "--service".to_owned(),
+            service_id.to_owned(),
+            "--model-root".to_owned(),
+            model_root.to_string_lossy().into_owned(),
+            "--host".to_owned(),
+            "127.0.0.1".to_owned(),
+            "--port".to_owned(),
+            "0".to_owned(),
+        ]);
     let (mut events, child) = command.spawn()?;
     let port = match receive_model_ready(&mut events).await {
         Ok(port) => port,

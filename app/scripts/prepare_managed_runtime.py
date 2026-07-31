@@ -238,6 +238,7 @@ def build_mlx_runtime(debug: bool) -> tuple[Path, Path]:
             "-disableAutomaticPackageResolution",
             "-onlyUsePackageVersionsFromResolvedFile",
             "CODE_SIGNING_ALLOWED=NO",
+            "CLANG_ENABLE_CODE_COVERAGE=NO",
         ],
         cwd=MLX_RUNTIME_PACKAGE,
         check=True,
