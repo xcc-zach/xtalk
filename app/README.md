@@ -158,12 +158,20 @@ forces MLX.
 The **Settings and diagnostics** drawer can install a developer tool by
 selecting a directory. Tauri copies that directory into the application's data
 directory and stores enablement state separately. Each selected directory must
-contain an `xtalk_tool.json` file with exactly two fields:
+contain an `xtalk_tool.json` file. `display_name` accepts either one string or a
+language dictionary. The optional `ui` object points to self-contained HTML:
 
 ```json
 {
-  "display_name": "Timer",
-  "entrypoint": "timer_tool:create_tools"
+  "display_name": {
+    "zh": "计时器",
+    "en": "Timer"
+  },
+  "entrypoint": "timer_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 0.5
+  }
 }
 ```
 
@@ -173,6 +181,34 @@ classes, or zero-argument tool factories accepted by
 `XtalkBuilder.add_agent_tools()`. The copied Python files may import packages
 already included in the frozen sidecar.
 
+Tool logic remains UI-independent. The optional HTML registers one or both
+read-only display hooks:
+
+```html
+<script>
+  window.xtalkToolUI.status((event) => {
+    document.body.textContent = event.status;
+  });
+  window.xtalkToolUI.emit((event) => {
+    document.body.textContent = `${event.message}\n${event.status}`;
+  });
+</script>
+```
+
+Calling `status()` declares a live UI; calling `emit()` declares an immutable
+chat-history UI. If the entrypoint never registers one hook, the App does not
+render that mode. `update_every_s` defaults to one second, accepts `-1` to
+disable periodic live refresh, and is otherwise bounded from 0.1 to 3600
+seconds. Each original tool emit captures its message and current status for a
+history card. The HTML runs in a script-only opaque-origin sandbox; its CSP
+blocks external resources and network APIs, link and form actions are
+suppressed, and it has no App command capability. It cannot operate the tool.
+Prepared documents use high-entropy, short-lived, one-time loopback URLs so the
+App launch token never enters the frame. The App owns card width and clamps
+reported height to 120–420 px for live cards and 80–600 px for history cards,
+additionally capped at 60% of the window height. See
+[`examples/tools/timer`](examples/tools/timer) for a complete example.
+
 Installing, enabling, disabling, or deleting a tool updates the AppData
 registry. Select **Apply and restart local service** to rebuild the configured
 Agent with the enabled tools. The bundled sample-compatible timer remains a
@@ -181,13 +217,18 @@ fallback; an installed enabled tool named `timer` replaces that fallback.
 ## Local interface
 
 The desktop UI follows the visual hierarchy of `examples/sample_app`: a
-left conversation sidebar that starts collapsed, centered brand bar, Orb/chat
-views, a bottom glass control dock, and a right settings-and-diagnostics
-drawer. The sidebar uses the public session APIs to start a new chat or switch
-among all persisted sessions. Its Tools button opens a centered configuration
-dialog for installing, enabling, deleting, and applying tools. Conversation
+left conversation sidebar that starts collapsed, a context-sensitive top bar,
+Orb/chat views, a bottom glass control dock, and a right
+settings-and-diagnostics drawer. The top bar is empty by default; while tools
+with live UI are running it shows a collapsed status summary that expands to
+the current live cards. The sidebar uses the public session APIs to start a new
+chat or switch among all persisted sessions. Its Tools button opens a centered
+configuration dialog for installing, enabling, deleting, and applying tools.
+Conversation
 data remains in AppData-backed `chat_history.sqlite3`; the WebView does not
-maintain a duplicate history store. A desktop-only fixed anonymous identity
+maintain a duplicate message store. Immutable custom tool UI snapshots are
+stored separately in WebView AppData and keyed by the persisted session ID.
+A desktop-only fixed anonymous identity
 is passed through the private sidecar startup protocol, outside the public
 model and service configuration, and keeps those sessions addressable after
 the sidecar restarts. The launch-token and Origin boundary prevents other

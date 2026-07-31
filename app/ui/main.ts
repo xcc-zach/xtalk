@@ -9,6 +9,7 @@ import {
   getNativeBackendConnection,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
+  getNativeToolUiSource,
   installNativeToolDirectory,
   listenNativeManagedModelProgress,
   removeNativeInstalledTool,
@@ -23,6 +24,12 @@ import {
   type DesktopSessionSummary,
 } from "./adapters/xtalk-client-adapter";
 import {
+  ToolUIAdapter,
+  type ToolUIEmitEvent,
+  type ToolUIEvent,
+  type ToolUIStatusEvent,
+} from "./adapters/tool-ui-adapter";
+import {
   getLanguagePreference,
   getResolvedLanguage,
   localizeKnownError,
@@ -33,6 +40,11 @@ import {
   type LanguagePreference,
   type TranslationKey,
 } from "./i18n";
+import {
+  createToolUIFrameDocument,
+  ToolUIFrame,
+  type ToolUICapabilities,
+} from "./tool-ui-frame";
 
 const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
   connectionState: "disconnected",
@@ -83,6 +95,17 @@ const elements = {
     "apply-tool-changes-button",
   ),
   messages: requireElement<HTMLElement>("messages"),
+  liveToolPanel: requireElement<HTMLElement>("live-tool-panel"),
+  liveToolStatusToggle: requireElement<HTMLButtonElement>(
+    "live-tool-status-toggle",
+  ),
+  liveToolStatusTitle: requireElement<HTMLElement>(
+    "live-tool-status-title",
+  ),
+  liveToolStatusSummary: requireElement<HTMLElement>(
+    "live-tool-status-summary",
+  ),
+  liveToolContent: requireElement<HTMLElement>("live-tool-content"),
   textComposer: requireElement<HTMLFormElement>("text-composer"),
   messageInput: requireElement<HTMLTextAreaElement>("message-input"),
   sendTextButton: requireElement<HTMLButtonElement>("send-text-button"),
@@ -152,6 +175,8 @@ const elements = {
 
 let adapter: XtalkClientAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
+let toolUIAdapter: ToolUIAdapter | null = null;
+let unsubscribeToolUI: (() => void) | null = null;
 let discoveringBackend = false;
 let sessionOperation = false;
 let sendingText = false;
@@ -169,6 +194,17 @@ let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
+let activeToolUISessionId: string | null = null;
+let toolUIOrder = 0;
+let toolUIHistory: ToolUIHistoryItem[] = [];
+let toolUILiveExpanded = false;
+const toolUILive = new Map<string, ToolUILiveItem>();
+const toolUIRows = new Map<string, ToolUIRow>();
+const toolUISourceCache = new Map<string, Promise<string>>();
+const toolUICapabilities = new Map<
+  string,
+  Partial<ToolUICapabilities>
+>();
 let persistedSessions: DesktopSessionSummary[] = [];
 let sessionListError: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
@@ -181,6 +217,33 @@ let visibleError:
       parameters: Readonly<Record<string, unknown>>;
     }
   | null = null;
+
+interface ToolUIHistoryItem {
+  kind: "history";
+  id: string;
+  anchorMessageIndex: number;
+  order: number;
+  event: ToolUIEmitEvent;
+}
+
+interface ToolUILiveItem {
+  kind: "live";
+  id: string;
+  anchorMessageIndex: number;
+  order: number;
+  event: ToolUIStatusEvent;
+}
+
+type ToolUITimelineItem = ToolUIHistoryItem | ToolUILiveItem;
+
+interface ToolUIRow {
+  element: HTMLElement;
+  frame: ToolUIFrame | null;
+  mode: "live" | "history";
+}
+
+const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
+const MAX_TOOL_UI_HISTORY_ITEMS = 200;
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -901,6 +964,341 @@ function updateOrbPresentation(snapshot: DesktopSessionSnapshot): void {
   elements.orbCaption.textContent = t("orb.openChatHint");
 }
 
+function handleToolUIEvent(event: ToolUIEvent): void {
+  const sessionId = event.sessionId ?? latestSnapshot.sessionId;
+  if (sessionId === null || !toolHasUI(event.toolId)) {
+    return;
+  }
+  if (event.type === "tool_ui.emit") {
+    const item: ToolUIHistoryItem = {
+      kind: "history",
+      id: `history:${event.callId}:${event.sequence}`,
+      anchorMessageIndex:
+        sessionId === latestSnapshot.sessionId
+          ? latestSnapshot.messages.length
+          : Number.MAX_SAFE_INTEGER,
+      order: ++toolUIOrder,
+      event: { ...event, sessionId },
+    };
+    const history = appendToolUIHistory(sessionId, item);
+    if (sessionId === activeToolUISessionId) {
+      toolUIHistory = history;
+    }
+  } else if (sessionId === activeToolUISessionId) {
+    const id = `live:${event.callId}`;
+    if (event.running) {
+      const existing = toolUILive.get(event.callId);
+      toolUILive.set(event.callId, {
+        kind: "live",
+        id,
+        anchorMessageIndex:
+          existing?.anchorMessageIndex ?? latestSnapshot.messages.length,
+        order: existing?.order ?? ++toolUIOrder,
+        event: { ...event, sessionId },
+      });
+      const row = toolUIRows.get(id);
+      row?.frame?.status(event);
+    } else {
+      toolUILive.delete(event.callId);
+      removeToolUIRow(id);
+    }
+  }
+  renderSnapshot(latestSnapshot);
+}
+
+function switchToolUISession(sessionId: string | null): void {
+  activeToolUISessionId = sessionId;
+  toolUILiveExpanded = false;
+  toolUILive.clear();
+  for (const row of toolUIRows.values()) {
+    row.frame?.destroy();
+  }
+  toolUIRows.clear();
+  toolUIHistory = sessionId === null ? [] : readToolUIHistory(sessionId);
+  toolUIOrder = toolUIHistory.reduce(
+    (maximum, item) => Math.max(maximum, item.order),
+    toolUIOrder,
+  );
+}
+
+function renderLiveToolPanel(): void {
+  const items = [...toolUILive.values()]
+    .filter(
+      (item) =>
+        toolUICapabilities.get(item.event.toolId)?.status !== false,
+    )
+    .sort((left, right) => left.order - right.order);
+  if (items.length === 0) {
+    toolUILiveExpanded = false;
+    elements.liveToolPanel.hidden = true;
+    elements.liveToolStatusToggle.setAttribute("aria-expanded", "false");
+    elements.liveToolContent.hidden = true;
+    elements.liveToolContent.replaceChildren();
+    return;
+  }
+
+  const latest = items[items.length - 1]!;
+  const tool = installedTools.find(
+    (candidate) => candidate.id === latest.event.toolId,
+  );
+  const toolName =
+    tool === undefined
+      ? latest.event.toolName
+      : resolveToolDisplayName(tool.displayName);
+  elements.liveToolPanel.hidden = false;
+  elements.liveToolStatusTitle.textContent = t("tools.liveCount", {
+    count: items.length,
+  });
+  elements.liveToolStatusSummary.textContent =
+    `${toolName} · ${latest.event.status}`;
+  elements.liveToolStatusToggle.setAttribute(
+    "aria-expanded",
+    String(toolUILiveExpanded),
+  );
+  elements.liveToolStatusToggle.setAttribute(
+    "aria-label",
+    t(
+      toolUILiveExpanded
+        ? "tools.liveCollapse"
+        : "tools.liveExpand",
+    ),
+  );
+  elements.liveToolContent.hidden = !toolUILiveExpanded;
+  elements.liveToolContent.replaceChildren(
+    ...items.map((item) => getOrCreateToolUIRow(item).element),
+  );
+}
+
+function getOrCreateToolUIRow(item: ToolUITimelineItem): ToolUIRow {
+  const existing = toolUIRows.get(item.id);
+  if (existing !== undefined) {
+    if (item.kind === "live") {
+      existing.frame?.status(item.event);
+    }
+    return existing;
+  }
+
+  const row = document.createElement("article");
+  row.className = `tool-ui-row tool-ui-row-${item.kind}`;
+  row.dataset.toolUiId = item.id;
+
+  const fallback = document.createElement("div");
+  fallback.className = "tool-ui-fallback";
+  const fallbackTitle = document.createElement("strong");
+  const tool = installedTools.find(
+    (candidate) => candidate.id === item.event.toolId,
+  );
+  fallbackTitle.textContent =
+    tool === undefined
+      ? item.event.toolName
+      : resolveToolDisplayName(tool.displayName);
+  const fallbackBody = document.createElement("span");
+  fallbackBody.textContent =
+    item.kind === "history" ? item.event.message : item.event.status;
+  fallback.append(fallbackTitle, fallbackBody);
+  row.append(fallback);
+
+  const record: ToolUIRow = {
+    element: row,
+    frame: null,
+    mode: item.kind === "live" ? "live" : "history",
+  };
+  toolUIRows.set(item.id, record);
+  void hydrateToolUIRow(record, item, fallback);
+  return record;
+}
+
+async function hydrateToolUIRow(
+  row: ToolUIRow,
+  item: ToolUITimelineItem,
+  fallback: HTMLElement,
+): Promise<void> {
+  const capability = toolUICapabilities.get(item.event.toolId);
+  const requiredCapability = item.kind === "live" ? "status" : "emit";
+  if (capability?.[requiredCapability] === false) {
+    row.element.hidden = true;
+    return;
+  }
+  try {
+    const source = await loadToolUISource(item.event.toolId);
+    if (toolUIRows.get(item.id) !== row) {
+      return;
+    }
+    const tool = installedTools.find(
+      (candidate) => candidate.id === item.event.toolId,
+    );
+    const title =
+      tool === undefined
+        ? item.event.toolName
+        : resolveToolDisplayName(tool.displayName);
+    const frameAdapter = toolUIAdapter;
+    if (frameAdapter === null) {
+      throw new Error("Tool UI adapter is unavailable.");
+    }
+    const channelId = crypto.randomUUID();
+    const frameUrl = await frameAdapter.createFrame(
+      createToolUIFrameDocument(source, channelId, row.mode),
+    );
+    if (
+      toolUIRows.get(item.id) !== row ||
+      toolUIAdapter !== frameAdapter
+    ) {
+      return;
+    }
+    const frame = new ToolUIFrame(
+      frameUrl,
+      channelId,
+      row.mode,
+      t("tools.uiFrameTitle", { name: title }),
+      (capabilities) => {
+        toolUICapabilities.set(item.event.toolId, {
+          ...toolUICapabilities.get(item.event.toolId),
+          [requiredCapability]: capabilities[requiredCapability],
+        });
+        if (!capabilities[requiredCapability]) {
+          row.element.hidden = true;
+          frame.destroy();
+          if (item.kind === "live") {
+            renderLiveToolPanel();
+          }
+          return;
+        }
+        row.element.hidden = false;
+        if (item.kind === "live") {
+          renderLiveToolPanel();
+        }
+      },
+    );
+    row.frame = frame;
+    fallback.replaceWith(frame.element);
+    if (item.kind === "live") {
+      frame.status(item.event);
+    } else {
+      frame.emit(item.event);
+    }
+  } catch {
+    fallback.classList.add("is-error");
+    const error = document.createElement("span");
+    error.textContent = t("tools.uiUnavailable");
+    fallback.append(error);
+  }
+}
+
+function loadToolUISource(toolId: string): Promise<string> {
+  const cached = toolUISourceCache.get(toolId);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const source = getNativeToolUiSource(toolId).then((payload) => payload.source);
+  toolUISourceCache.set(toolId, source);
+  return source;
+}
+
+function removeToolUIRow(id: string): void {
+  const row = toolUIRows.get(id);
+  row?.frame?.destroy();
+  row?.element.remove();
+  toolUIRows.delete(id);
+}
+
+function toolHasUI(toolId: string): boolean {
+  return installedTools.some(
+    (tool) => tool.id === toolId && tool.ui !== null,
+  );
+}
+
+function resolveToolDisplayName(
+  displayName: NativeToolDefinition["displayName"],
+): string {
+  if (typeof displayName === "string") {
+    return displayName;
+  }
+  const language = getResolvedLanguage().toLowerCase();
+  const primaryLanguage = language.split("-", 1)[0] ?? language;
+  return (
+    displayName[language] ??
+    displayName[primaryLanguage] ??
+    displayName.en ??
+    displayName.zh ??
+    Object.entries(displayName).sort(([left], [right]) =>
+      left.localeCompare(right),
+    )[0]?.[1] ??
+    t("tools.generic")
+  );
+}
+
+function appendToolUIHistory(
+  sessionId: string,
+  item: ToolUIHistoryItem,
+): ToolUIHistoryItem[] {
+  const history = readToolUIHistory(sessionId);
+  if (history.some((candidate) => candidate.id === item.id)) {
+    return history;
+  }
+  history.push(item);
+  let bounded = history
+    .sort((left, right) => left.order - right.order)
+    .slice(-MAX_TOOL_UI_HISTORY_ITEMS);
+  const key = `${TOOL_UI_HISTORY_PREFIX}${sessionId}`;
+  while (bounded.length > 0) {
+    try {
+      localStorage.setItem(key, JSON.stringify(bounded));
+      return bounded;
+    } catch {
+      bounded = bounded.slice(1);
+    }
+  }
+  return [item];
+}
+
+function readToolUIHistory(sessionId: string): ToolUIHistoryItem[] {
+  const serialized = localStorage.getItem(
+    `${TOOL_UI_HISTORY_PREFIX}${sessionId}`,
+  );
+  if (serialized === null) {
+    return [];
+  }
+  try {
+    const payload: unknown = JSON.parse(serialized);
+    if (!Array.isArray(payload)) {
+      return [];
+    }
+    return payload
+      .filter(isStoredToolUIHistoryItem)
+      .slice(-MAX_TOOL_UI_HISTORY_ITEMS);
+  } catch {
+    return [];
+  }
+}
+
+function isStoredToolUIHistoryItem(
+  value: unknown,
+): value is ToolUIHistoryItem {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<ToolUIHistoryItem>;
+  const event = candidate.event as Partial<ToolUIEmitEvent> | undefined;
+  return (
+    candidate.kind === "history" &&
+    typeof candidate.id === "string" &&
+    typeof candidate.anchorMessageIndex === "number" &&
+    Number.isInteger(candidate.anchorMessageIndex) &&
+    candidate.anchorMessageIndex >= 0 &&
+    typeof candidate.order === "number" &&
+    Number.isInteger(candidate.order) &&
+    event?.type === "tool_ui.emit" &&
+    typeof event.toolId === "string" &&
+    typeof event.toolName === "string" &&
+    typeof event.callId === "string" &&
+    typeof event.sequence === "number" &&
+    typeof event.message === "string" &&
+    typeof event.status === "string" &&
+    typeof event.running === "boolean" &&
+    typeof event.emittedAt === "string"
+  );
+}
+
 function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   const nextSessionActivityKey = `${snapshot.sessionId ?? ""}:${
     snapshot.messages.filter((message) => message.final).length
@@ -910,6 +1308,10 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     nextSessionActivityKey !== sessionActivityKey;
   sessionActivityKey = nextSessionActivityKey;
   latestSnapshot = snapshot;
+  toolUIAdapter?.bindSession(snapshot.sessionId);
+  if (activeToolUISessionId !== snapshot.sessionId) {
+    switchToolUISession(snapshot.sessionId);
+  }
   elements.connectionStateDetail.textContent = t(
     `runtime.${snapshot.connectionState}` as TranslationKey,
   );
@@ -940,10 +1342,30 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     return row;
   });
 
-  elements.messages.replaceChildren(...messageElements);
-  if (messageElements.length > 0) {
+  const timelineItems = [...toolUIHistory].sort(
+    (left, right) =>
+      left.anchorMessageIndex - right.anchorMessageIndex ||
+      left.order - right.order,
+  );
+  const timelineElements: HTMLElement[] = [];
+  for (let index = 0; index <= messageElements.length; index += 1) {
+    if (index > 0) {
+      timelineElements.push(messageElements[index - 1]!);
+    }
+    for (const item of timelineItems) {
+      if (
+        Math.min(item.anchorMessageIndex, messageElements.length) === index
+      ) {
+        timelineElements.push(getOrCreateToolUIRow(item).element);
+      }
+    }
+  }
+
+  elements.messages.replaceChildren(...timelineElements);
+  if (timelineElements.length > 0) {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
+  renderLiveToolPanel();
 
   updateOrbPresentation(snapshot);
   updateControls(snapshot);
@@ -997,7 +1419,7 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     copy.className = "developer-tool-copy";
 
     const name = document.createElement("strong");
-    name.textContent = tool.displayName;
+    name.textContent = resolveToolDisplayName(tool.displayName);
 
     const entrypoint = document.createElement("code");
     entrypoint.textContent = tool.entrypoint;
@@ -1016,7 +1438,7 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     toggle.setAttribute(
       "aria-label",
       t(tool.enabled ? "tools.disableName" : "tools.enableName", {
-        name: tool.displayName,
+        name: resolveToolDisplayName(tool.displayName),
       }),
     );
     toggle.addEventListener("change", () => {
@@ -1033,7 +1455,9 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     remove.textContent = "×";
     remove.setAttribute(
       "aria-label",
-      t("tools.removeName", { name: tool.displayName }),
+      t("tools.removeName", {
+        name: resolveToolDisplayName(tool.displayName),
+      }),
     );
     remove.title = t("tools.removeTitle");
     remove.addEventListener("click", () => {
@@ -1096,6 +1520,10 @@ async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
 
 async function detachCurrentAdapter(): Promise<void> {
   const previousAdapter = adapter;
+  unsubscribeToolUI?.();
+  unsubscribeToolUI = null;
+  toolUIAdapter?.close();
+  toolUIAdapter = null;
   unsubscribe?.();
   unsubscribe = null;
   adapter = null;
@@ -1129,6 +1557,10 @@ async function discoverBackend(): Promise<void> {
   try {
     const connection = await getNativeBackendConnection();
     const nextAdapter = new XtalkClientAdapter(connection);
+    const nextToolUIAdapter = new ToolUIAdapter(connection);
+    toolUIAdapter = nextToolUIAdapter;
+    unsubscribeToolUI = nextToolUIAdapter.subscribe(handleToolUIEvent);
+    nextToolUIAdapter.connect();
     adapter = nextAdapter;
     unsubscribe = nextAdapter.subscribe(renderSnapshot);
 
@@ -1240,7 +1672,9 @@ async function chooseAndInstallToolDirectory(): Promise<void> {
     toolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
-      t("tools.installed", { name: installed.displayName }),
+      t("tools.installed", {
+        name: resolveToolDisplayName(installed.displayName),
+      }),
     );
   } catch (error) {
     await refreshInstalledTools().catch(() => undefined);
@@ -1271,7 +1705,7 @@ async function updateInstalledToolEnabled(
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       t("tools.updated", {
-        name: updated.displayName,
+        name: resolveToolDisplayName(updated.displayName),
         state: t(
           updated.enabled ? "tools.stateEnabled" : "tools.stateDisabled",
         ),
@@ -1304,7 +1738,10 @@ async function removeInstalledTool(toolId: string): Promise<void> {
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       t("tools.removed", {
-        name: tool?.displayName ?? t("tools.generic"),
+        name:
+          tool === undefined
+            ? t("tools.generic")
+            : resolveToolDisplayName(tool.displayName),
       }),
     );
   } catch (error) {
@@ -1447,6 +1884,10 @@ async function sendTextMessage(): Promise<void> {
 
 elements.toggleSidebarButton.addEventListener("click", () => {
   setSidebarOpen(!sidebarOpen);
+});
+elements.liveToolStatusToggle.addEventListener("click", () => {
+  toolUILiveExpanded = !toolUILiveExpanded;
+  renderLiveToolPanel();
 });
 elements.sidebarBackdrop.addEventListener("click", () => {
   setSidebarOpen(false);

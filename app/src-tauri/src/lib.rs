@@ -27,6 +27,7 @@ pub fn run() {
             get_installed_tools,
             get_managed_model_plan,
             get_model_config_selection,
+            get_tool_ui_source,
             install_tool_directory,
             remove_installed_tool,
             set_tool_enabled,
@@ -80,6 +81,14 @@ async fn apply_model_config(
 #[tauri::command]
 fn get_installed_tools(app: tauri::AppHandle) -> Result<Vec<NativeToolDefinition>, String> {
     tools::list_installed_tools(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_tool_ui_source(
+    app: tauri::AppHandle,
+    tool_id: String,
+) -> Result<tools::NativeToolUiSource, String> {
+    tools::read_tool_ui_source(&app, &tool_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]

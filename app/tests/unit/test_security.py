@@ -240,6 +240,22 @@ def test_non_core_websocket_requires_the_launch_token() -> None:
     )
 
 
+def test_tool_ui_frame_defers_to_one_time_ticket_authentication() -> None:
+    """Keep the launch token out of the sandboxed iframe document URL."""
+
+    policy = SecurityPolicy(token=TOKEN, origins=(ORIGIN,))
+
+    assert policy.evaluate(_scope(path="/tool-ui-frame/random-ticket")) is None
+    denial = policy.evaluate(
+        _scope(
+            path="/tool-ui-frame/random-ticket",
+            client_host="192.0.2.10",
+        )
+    )
+    assert denial is not None
+    assert denial.status_code == 403
+
+
 def test_options_requires_an_allowed_origin_but_not_a_token() -> None:
     """Permit only exact-origin CORS preflight requests."""
 

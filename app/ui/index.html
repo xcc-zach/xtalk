@@ -384,7 +384,38 @@
           </svg>
         </button>
 
-        <div class="brand">XTalk</div>
+        <div id="live-tool-panel" class="live-tool-panel" hidden>
+          <button
+            id="live-tool-status-toggle"
+            class="live-tool-status-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="live-tool-content"
+          >
+            <span class="live-tool-status-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="7"></circle>
+                <path d="M12 13V9M12 13l3 2M9 3h6M12 3v3"></path>
+              </svg>
+            </span>
+            <span class="live-tool-status-copy">
+              <strong id="live-tool-status-title"></strong>
+              <span id="live-tool-status-summary"></span>
+            </span>
+            <svg
+              class="live-tool-status-chevron"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="m7 10 5 5 5-5"></path>
+            </svg>
+          </button>
+          <div
+            id="live-tool-content"
+            class="live-tool-content"
+            hidden
+          ></div>
+        </div>
 
         <button
           id="toggle-debug-button"

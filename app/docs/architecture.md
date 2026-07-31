@@ -34,8 +34,8 @@ public SDK cannot appear in URL logs.
 
 The WebView follows the layout and visual language of `examples/sample_app`
 without importing example implementation code. It provides a left-side
-conversation history that starts collapsed, a centered brand bar, Orb and
-conversation views, a bottom glass control dock, and a right-side
+conversation history that starts collapsed, a context-sensitive top bar, Orb
+and conversation views, a bottom glass control dock, and a right-side
 settings-and-diagnostics drawer. The conversation sidebar creates new
 conversations and switches among all sessions returned by the public client
 API. A same-style Tools action below New chat opens a centered dialog that can
@@ -210,13 +210,20 @@ model-type branches into application behavior.
 
 ## Developer tools
 
-A selected directory contains Python files and an exact two-field
-`xtalk_tool.json` manifest:
+A selected directory contains Python files and an `xtalk_tool.json` manifest.
+`display_name` may be a string or a language dictionary. `ui` is optional:
 
 ```json
 {
-  "display_name": "Timer",
-  "entrypoint": "timer_tool:create_tools"
+  "display_name": {
+    "zh": "计时器",
+    "en": "Timer"
+  },
+  "entrypoint": "timer_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 0.5
+  }
 }
 ```
 
@@ -229,6 +236,40 @@ list of tool values accepted by `XtalkBuilder.add_agent_tools()`.
 The configured Agent is built after this registry is loaded, so tool changes
 take effect through a controlled sidecar restart. A failed developer factory is
 omitted without preventing the remaining local service from starting.
+
+The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
+separate from the Python entrypoint and declares capabilities by registering
+`window.xtalkToolUI.status(callback)` and/or
+`window.xtalkToolUI.emit(callback)`. A missing registration means that the
+corresponding live or history UI does not exist. `update_every_s` controls live
+status polling, defaults to one second, uses `-1` to disable periodic polling,
+and otherwise accepts 0.1 through 3600 seconds.
+
+The App wraps only native `AsyncTool` classes at registry load time. The wrapper
+delegates the original lifecycle unchanged, observes `astatus()`, and publishes
+read-only events over a launch-token-protected App WebSocket. Live events track
+the active call. Every original initial/update emit produces a separate history
+event containing the emitted message plus status at that moment. History
+snapshots are immutable, bounded to 200 items per session, and stored in WebView
+AppData under the persisted session ID; live state is memory-only.
+
+The conversation top bar does not repeat the XTalk product name. It remains
+empty when no live-capable tool is running. Active tools create one compact,
+collapsed status bar containing the latest status and running count; the user
+can expand it to inspect all current live UI cards. Live cards are not inserted
+into the message timeline. History cards remain anchored to their immutable
+emit positions.
+
+Each card uses a separate `sandbox="allow-scripts"` iframe. The injected CSP
+blocks external resources and network APIs, and the bridge suppresses link and
+form actions. The opaque frame origin has no Tauri capability. The frame can
+receive status/emit data and report desired height, but it cannot invoke, stop,
+or otherwise operate the tool. To keep the App's strict top-level CSP, the host
+publishes each prepared document behind a high-entropy, 30-second, one-time
+loopback ticket; the launch token never enters the iframe URL or document. The
+host owns full available width and clamps height to 120–420 px for live cards
+and 80–600 px for history cards, with both also capped at 60% of the window
+height.
 
 ## Shutdown
 

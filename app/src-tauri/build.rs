@@ -4,6 +4,7 @@ const APP_COMMANDS: &[&str] = &[
     "get_backend_connection",
     "get_installed_tools",
     "get_managed_model_plan",
+    "get_tool_ui_source",
     "get_model_config_selection",
     "install_tool_directory",
     "remove_installed_tool",

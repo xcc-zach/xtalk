@@ -11,6 +11,7 @@
     "allow-get-backend-connection",
     "allow-get-installed-tools",
     "allow-get-managed-model-plan",
+    "allow-get-tool-ui-source",
     "allow-get-model-config-selection",
     "allow-install-tool-directory",
     "allow-remove-installed-tool",

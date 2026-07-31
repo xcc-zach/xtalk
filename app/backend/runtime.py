@@ -6,12 +6,13 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import PROTOCOL_VERSION, StartupConfig, build_effective_config
 from .security import STARTUP_TOKEN_HEADER, SidecarSecurityMiddleware
+from .tool_ui import ToolUIBroker
 from .xtalk_adapter import build_xtalk_runtime, mount_xtalk_routes
 
 
@@ -23,6 +24,7 @@ def create_application(
     startup: StartupConfig,
     xtalk_runtime: Any,
     shutdown_callback: ShutdownCallback,
+    tool_ui_broker: ToolUIBroker | None = None,
 ) -> FastAPI:
     """Create the secured app wrapper and mount a prebuilt XTalk runtime.
 
@@ -34,6 +36,8 @@ def create_application(
         Public XTalk runtime wrapper.
     shutdown_callback : ShutdownCallback
         Callback requesting graceful Uvicorn termination.
+    tool_ui_broker : ToolUIBroker | None, optional
+        Read-only developer-tool UI event broker.
 
     Returns
     -------
@@ -99,6 +103,61 @@ def create_application(
             await callback_result
         return {"status": "shutting_down"}
 
+    if tool_ui_broker is not None:
+
+        @app.post("/app/api/tool-ui/frames")
+        async def _create_tool_ui_frame(payload: dict[str, Any]) -> dict[str, str]:
+            """Create one short-lived sandbox-frame document ticket."""
+
+            if set(payload) != {"source"} or not isinstance(
+                payload["source"],
+                str,
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="A tool UI frame source is required",
+                )
+            try:
+                ticket = await tool_ui_broker.create_frame_ticket(
+                    payload["source"]
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
+            return {"ticket": ticket}
+
+        @app.get("/tool-ui-frame/{ticket}")
+        async def _tool_ui_frame(ticket: str) -> HTMLResponse:
+            """Consume one ticket and return a sandboxed frame document."""
+
+            source = await tool_ui_broker.consume_frame_ticket(ticket)
+            if source is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Tool UI frame is unavailable",
+                )
+            return HTMLResponse(
+                source,
+                headers={
+                    "Cache-Control": "no-store",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; base-uri 'none'; "
+                        "connect-src 'none'; font-src 'none'; "
+                        "form-action 'none'; frame-src 'none'; "
+                        "img-src data: blob:; media-src 'none'; "
+                        "object-src 'none'; style-src 'unsafe-inline'; "
+                        "script-src 'unsafe-inline'"
+                    ),
+                    "Referrer-Policy": "no-referrer",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        @app.websocket("/app/tool-ui/ws")
+        async def _tool_ui(websocket: Any) -> None:
+            """Stream read-only developer-tool UI events to the App."""
+
+            await tool_ui_broker.serve(websocket)
+
     mount_xtalk_routes(xtalk_runtime, app)
     app.state.sidecar_ready = True
     return app
@@ -125,13 +184,16 @@ def build_application(
     """
 
     effective_config = build_effective_config(startup)
+    tool_ui_broker = ToolUIBroker()
     xtalk_runtime = build_xtalk_runtime(
         effective_config,
         tools_root=startup.data_dir / "tools",
         anonymous_user_id=startup.anonymous_user_id,
+        tool_ui_broker=tool_ui_broker,
     )
     return create_application(
         startup=startup,
         xtalk_runtime=xtalk_runtime,
         shutdown_callback=shutdown_callback,
+        tool_ui_broker=tool_ui_broker,
     )
