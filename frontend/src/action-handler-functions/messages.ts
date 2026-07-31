@@ -1,6 +1,19 @@
 import type { ActionToFunctionMap } from "./types";
 const messagesMap: ActionToFunctionMap = {
+    "error": async (data, websocket, conversation, outputAudioSession) => {
+        const message = typeof data === "string" && data.trim()
+            ? data.trim()
+            : "The conversation failed without an error message.";
+        conversation.finalizePendingMessages();
+        conversation.appendMessage({
+            role: "info",
+            content: message,
+            final: true,
+        });
+        conversation.state.streamState = "idle";
+    },
     "update_asr": async (data, websocket, conversation, outputAudioSession) => {
+        conversation.finalizePendingMessages("assistant");
         conversation.appendMessage({
             role: "user",
             content: data.text,
@@ -8,6 +21,7 @@ const messagesMap: ActionToFunctionMap = {
         })
     },
     "finish_asr": async (data, websocket, conversation, outputAudioSession) => {
+        conversation.finalizePendingMessages("assistant");
         conversation.appendMessage({
             role: "user",
             content: data.text,

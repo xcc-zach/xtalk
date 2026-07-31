@@ -55,10 +55,16 @@ class MossTTSNanoTest(unittest.IsolatedAsyncioTestCase):
         python_app.router.add_post("/api/generate", self._python_generate)
         self.python_runner, self.python_base_url = await self._start_app(python_app)
 
+        self.retry_requests: dict[str, int] = {}
+        retry_app = web.Application()
+        retry_app.router.add_post("/api/generate", self._retry_generate)
+        self.retry_runner, self.retry_base_url = await self._start_app(retry_app)
+
     async def asyncTearDown(self) -> None:
         """Stop local HTTP test services and remove temporary voices."""
         await self.rust_runner.cleanup()
         await self.python_runner.cleanup()
+        await self.retry_runner.cleanup()
         self.temporary_directory.cleanup()
 
     async def _start_app(
@@ -123,6 +129,26 @@ class MossTTSNanoTest(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    async def _retry_generate(self, request: web.Request) -> web.Response:
+        """Return empty audio once per text before a usable retry response."""
+        form = await request.post()
+        text = str(form["text"])
+        request_count = self.retry_requests.get(text, 0) + 1
+        self.retry_requests[text] = request_count
+        samples = (
+            []
+            if request_count == 1 or text == "永远为空"
+            else [0, 1_000, -1_000, 0]
+        )
+        return web.json_response(
+            {
+                "audio_base64": base64.b64encode(
+                    _wav_bytes(48_000, samples)
+                ).decode("ascii"),
+                "sample_rate": 48_000,
+            }
+        )
+
     def _voices(self) -> list[dict[str, str]]:
         """Return two IndexTTS-compatible voice entries."""
         return [
@@ -177,6 +203,33 @@ class MossTTSNanoTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(pcm), 8)
         self.assertEqual(self.python_requests[0]["filename"], "first.wav")
+
+    async def test_sync_client_retries_empty_audio(self) -> None:
+        """Retry one successful service response containing an empty WAV."""
+        client = MossTTSNano(self.retry_base_url, voices=self._voices())
+
+        pcm = await asyncio.to_thread(client.synthesize, "同步重试")
+
+        self.assertEqual(len(pcm), 8)
+        self.assertEqual(self.retry_requests["同步重试"], 2)
+
+    async def test_async_client_retries_empty_audio(self) -> None:
+        """Apply the same empty-audio retry policy to async synthesis."""
+        client = MossTTSNano(self.retry_base_url, voices=self._voices())
+
+        pcm = await client.async_synthesize("异步重试")
+
+        self.assertEqual(len(pcm), 8)
+        self.assertEqual(self.retry_requests["异步重试"], 2)
+
+    async def test_client_reports_repeated_empty_audio(self) -> None:
+        """Raise a specific failure after the bounded retry is exhausted."""
+        client = MossTTSNano(self.retry_base_url, voices=self._voices())
+
+        with self.assertRaisesRegex(RuntimeError, "after 2 attempts"):
+            await client.async_synthesize("永远为空")
+
+        self.assertEqual(self.retry_requests["永远为空"], 2)
 
     async def test_clone_preserves_voice(self) -> None:
         """Copy voice selection without sharing mutable client state."""
