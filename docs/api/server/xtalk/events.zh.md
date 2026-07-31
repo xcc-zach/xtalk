@@ -114,7 +114,7 @@ _定义于 [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/
 class EnhancedAudioFrameReceived(Event)
 ```
 
-Enhanced audio frame for downstream ASR/VAD.
+供下游 VAD、说话人识别和轮次检测使用的增强音频帧。
 
 ### 类字段
 

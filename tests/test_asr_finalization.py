@@ -7,8 +7,28 @@ import unittest
 
 from xtalk.models import ASR, Models
 from xtalk.serving.event_bus import EventBus
-from xtalk.serving.events import ASRResultFinal, ASRResultPartial
-from xtalk.serving.modules.asr_manager import AudioConsumer
+from xtalk.serving.events import (
+    ASRResultFinal,
+    ASRResultPartial,
+    AudioFrameReceived,
+)
+from xtalk.serving.modules.asr_manager import ASRManager, AudioConsumer
+
+
+class ASRManagerAudioSourceTests(unittest.TestCase):
+    """Verify ASR consumes the original microphone audio stream."""
+
+    def test_audio_handler_subscribes_to_raw_frames(self) -> None:
+        """Subscribe the ASR audio handler only to raw audio frames."""
+
+        event_types = {
+            metadata["event_type"]
+            for method_name, handlers in ASRManager.__event_handlers_meta__
+            if method_name == "_handle_audio_frame"
+            for metadata in handlers
+        }
+
+        self.assertEqual(event_types, {AudioFrameReceived})
 
 
 class _BlankFinalASR(ASR):
