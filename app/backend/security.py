@@ -15,6 +15,7 @@ from .config import normalize_origin
 STARTUP_TOKEN_HEADER = "X-XTalk-App-Token"
 STARTUP_TOKEN_QUERY = "app_token"
 CORE_ACCESS_TOKEN_QUERY = "access_token"
+TOOL_UI_FRAME_PATH_PREFIX = "/tool-ui-frame"
 
 ASGIReceive = Callable[[], Awaitable[dict[str, Any]]]
 ASGISend = Callable[[dict[str, Any]], Awaitable[None]]
@@ -157,6 +158,11 @@ class SecurityPolicy:
                         403,
                         "Origin is required for preflight",
                     )
+                return None
+            if self._has_path_prefix(path, TOOL_UI_FRAME_PATH_PREFIX):
+                # The route consumes a high-entropy, short-lived one-time
+                # ticket. Keeping the launch token out of the iframe URL
+                # prevents untrusted display code from learning that token.
                 return None
             if self._has_path_prefix(path, "/app"):
                 if not self._has_startup_token(

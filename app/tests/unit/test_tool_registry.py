@@ -13,6 +13,7 @@ def _write_tool(
     *,
     identifier: str = "tool-1",
     enabled: bool = True,
+    manifest: dict[str, object] | None = None,
 ) -> None:
     """Write one representative installed tool and registry."""
 
@@ -20,7 +21,8 @@ def _write_tool(
     tool_directory.mkdir(parents=True)
     (tool_directory / "xtalk_tool.json").write_text(
         json.dumps(
-            {
+            manifest
+            or {
                 "display_name": "Test timer",
                 "entrypoint": "timer_tool:create_tools",
             }
@@ -134,3 +136,62 @@ def test_load_enabled_tools_omits_broken_factory(
 
     assert load_enabled_tools(tools_root) == []
     assert "Test timer" in capsys.readouterr().err
+
+
+def test_load_enabled_tools_accepts_localized_ui_manifest(
+    tmp_path: Path,
+) -> None:
+    """Accept localized names and optional UI metadata without changing tools."""
+
+    tools_root = tmp_path / "tools"
+    _write_tool(
+        tools_root,
+        manifest={
+            "display_name": {"zh": "计时器", "en": "Timer"},
+            "entrypoint": "timer_tool:create_tools",
+            "ui": {
+                "entrypoint": "ui/index.html",
+                "update_every_s": -1,
+            },
+        },
+    )
+    ui_directory = tools_root / "tool-1" / "ui"
+    ui_directory.mkdir()
+    (ui_directory / "index.html").write_text(
+        "<!doctype html><title>Timer</title>",
+        encoding="utf-8",
+    )
+
+    tools = load_enabled_tools(tools_root)
+
+    assert len(tools) == 1
+    assert tools[0].__name__ == "developer_timer"
+
+
+def test_load_enabled_tools_omits_invalid_ui_interval(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Reject an interval outside the App's bounded polling contract."""
+
+    tools_root = tmp_path / "tools"
+    _write_tool(
+        tools_root,
+        manifest={
+            "display_name": {"en": "Timer"},
+            "entrypoint": "timer_tool:create_tools",
+            "ui": {
+                "entrypoint": "ui/index.html",
+                "update_every_s": 0,
+            },
+        },
+    )
+    ui_directory = tools_root / "tool-1" / "ui"
+    ui_directory.mkdir()
+    (ui_directory / "index.html").write_text(
+        "<!doctype html><title>Timer</title>",
+        encoding="utf-8",
+    )
+
+    assert load_enabled_tools(tools_root) == []
+    assert "tool-1" in capsys.readouterr().err

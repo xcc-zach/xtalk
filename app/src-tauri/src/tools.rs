@@ -1,8 +1,9 @@
 //! Application-data installation and state for developer tool directories.
 
 use std::{
+    collections::BTreeMap,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -12,22 +13,51 @@ use thiserror::Error;
 const TOOL_MANIFEST_FILE: &str = "xtalk_tool.json";
 const TOOL_REGISTRY_FILE: &str = "registry.json";
 const TOOLS_DIRECTORY: &str = "tools";
+const MAX_UI_ENTRYPOINT_BYTES: u64 = 1024 * 1024;
+const DEFAULT_UI_UPDATE_EVERY_SECONDS: f64 = 1.0;
+const MIN_UI_UPDATE_EVERY_SECONDS: f64 = 0.1;
+const MAX_UI_UPDATE_EVERY_SECONDS: f64 = 3600.0;
 
 /// Developer tool metadata exposed to the trusted WebView.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NativeToolDefinition {
     id: String,
-    display_name: String,
+    display_name: ToolDisplayName,
     entrypoint: String,
+    ui: Option<ToolUiConfig>,
     enabled: bool,
+}
+
+/// Self-contained HTML source for one installed tool UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeToolUiSource {
+    tool_id: String,
+    source: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(untagged)]
+enum ToolDisplayName {
+    Text(String),
+    Localized(BTreeMap<String, String>),
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ToolUiConfig {
+    entrypoint: String,
+    #[serde(default = "default_ui_update_every_seconds")]
+    update_every_s: f64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ToolManifest {
-    display_name: String,
+    display_name: ToolDisplayName,
     entrypoint: String,
+    ui: Option<ToolUiConfig>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -57,8 +87,18 @@ enum ToolDirectoryError {
     MissingManifest,
     #[error("tool display_name must be a non-empty string")]
     InvalidDisplayName,
+    #[error("tool display_name language dictionary must contain non-empty names")]
+    InvalidLocalizedDisplayName,
     #[error("tool entrypoint must use the module:factory format")]
     InvalidEntrypoint,
+    #[error("tool ui.entrypoint must name a safe self-contained HTML file")]
+    InvalidUiEntrypoint,
+    #[error("tool ui.update_every_s must be -1 or between 0.1 and 3600 seconds")]
+    InvalidUiUpdateInterval,
+    #[error("tool UI entrypoint exceeds the one MiB size limit")]
+    UiEntrypointTooLarge,
+    #[error("tool UI entrypoint is not valid UTF-8")]
+    InvalidUiEncoding,
     #[error("the selected tool is not installed")]
     ToolNotFound,
     #[error("could not generate an installed tool identifier: {0}")]
@@ -96,6 +136,15 @@ pub(crate) fn remove_installed_tool(app: &AppHandle, tool_id: &str) -> Result<()
     remove_installed_tool_at(&tools_root, tool_id).map_err(|error| error.to_string())
 }
 
+/// Reads one installed self-contained tool UI entrypoint.
+pub(crate) fn read_tool_ui_source(
+    app: &AppHandle,
+    tool_id: &str,
+) -> Result<NativeToolUiSource, String> {
+    let tools_root = tools_root(app).map_err(|error| error.to_string())?;
+    read_tool_ui_source_at(&tools_root, tool_id).map_err(|error| error.to_string())
+}
+
 fn tools_root(app: &AppHandle) -> Result<PathBuf, ToolDirectoryError> {
     Ok(app.path().app_data_dir()?.join(TOOLS_DIRECTORY))
 }
@@ -110,8 +159,8 @@ fn list_installed_tools_at(
         .map(|entry| definition_for_entry(tools_root, entry))
         .collect::<Result<Vec<_>, _>>()?;
     tools.sort_by(|left, right| {
-        left.display_name
-            .cmp(&right.display_name)
+        display_name_sort_key(&left.display_name)
+            .cmp(&display_name_sort_key(&right.display_name))
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(tools)
@@ -151,6 +200,7 @@ fn install_tool_directory_at(
         id,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
+        ui: manifest.ui,
         enabled: true,
     })
 }
@@ -201,6 +251,7 @@ fn definition_for_entry(
         id: entry.id.clone(),
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
+        ui: manifest.ui,
         enabled: entry.enabled,
     })
 }
@@ -231,18 +282,117 @@ fn read_manifest(tool_directory: &Path) -> Result<ToolManifest, ToolDirectoryErr
         return Err(ToolDirectoryError::MissingManifest);
     }
     let mut manifest: ToolManifest = serde_json::from_slice(&fs::read(path)?)?;
-    manifest.display_name = manifest.display_name.trim().to_owned();
+    normalize_display_name(&mut manifest.display_name)?;
     manifest.entrypoint = manifest.entrypoint.trim().to_owned();
-    if manifest.display_name.is_empty() {
-        return Err(ToolDirectoryError::InvalidDisplayName);
-    }
     let Some((module_name, factory_name)) = manifest.entrypoint.split_once(':') else {
         return Err(ToolDirectoryError::InvalidEntrypoint);
     };
     if module_name.is_empty() || factory_name.is_empty() || factory_name.contains(':') {
         return Err(ToolDirectoryError::InvalidEntrypoint);
     }
+    if let Some(ui) = manifest.ui.as_mut() {
+        validate_ui_config(tool_directory, ui)?;
+    }
     Ok(manifest)
+}
+
+fn normalize_display_name(display_name: &mut ToolDisplayName) -> Result<(), ToolDirectoryError> {
+    match display_name {
+        ToolDisplayName::Text(value) => {
+            *value = value.trim().to_owned();
+            if value.is_empty() {
+                return Err(ToolDirectoryError::InvalidDisplayName);
+            }
+        }
+        ToolDisplayName::Localized(values) => {
+            if values.is_empty() {
+                return Err(ToolDirectoryError::InvalidLocalizedDisplayName);
+            }
+            let mut normalized = BTreeMap::new();
+            for (language, value) in std::mem::take(values) {
+                let language = language.trim().to_ascii_lowercase();
+                let value = value.trim().to_owned();
+                if language.is_empty()
+                    || value.is_empty()
+                    || normalized.insert(language, value).is_some()
+                {
+                    return Err(ToolDirectoryError::InvalidLocalizedDisplayName);
+                }
+            }
+            *values = normalized;
+        }
+    }
+    Ok(())
+}
+
+fn validate_ui_config(
+    tool_directory: &Path,
+    ui: &mut ToolUiConfig,
+) -> Result<(), ToolDirectoryError> {
+    ui.entrypoint = ui.entrypoint.trim().to_owned();
+    let relative = Path::new(&ui.entrypoint);
+    if relative.is_absolute()
+        || relative.extension().and_then(|value| value.to_str()) != Some("html")
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(ToolDirectoryError::InvalidUiEntrypoint);
+    }
+    let entrypoint = tool_directory.join(relative);
+    if !entrypoint.is_file() {
+        return Err(ToolDirectoryError::InvalidUiEntrypoint);
+    }
+    let size = fs::metadata(entrypoint)?.len();
+    if size > MAX_UI_ENTRYPOINT_BYTES {
+        return Err(ToolDirectoryError::UiEntrypointTooLarge);
+    }
+    if ui.update_every_s != -1.0
+        && (!ui.update_every_s.is_finite()
+            || !(MIN_UI_UPDATE_EVERY_SECONDS..=MAX_UI_UPDATE_EVERY_SECONDS)
+                .contains(&ui.update_every_s))
+    {
+        return Err(ToolDirectoryError::InvalidUiUpdateInterval);
+    }
+    Ok(())
+}
+
+fn read_tool_ui_source_at(
+    tools_root: &Path,
+    tool_id: &str,
+) -> Result<NativeToolUiSource, ToolDirectoryError> {
+    let registry = load_registry(tools_root)?;
+    if !registry.tools.iter().any(|entry| entry.id == tool_id) {
+        return Err(ToolDirectoryError::ToolNotFound);
+    }
+    let tool_directory = tools_root.join(tool_id);
+    let manifest = read_manifest(&tool_directory)?;
+    let ui = manifest.ui.ok_or(ToolDirectoryError::InvalidUiEntrypoint)?;
+    let bytes = fs::read(tool_directory.join(ui.entrypoint))?;
+    if bytes.len() as u64 > MAX_UI_ENTRYPOINT_BYTES {
+        return Err(ToolDirectoryError::UiEntrypointTooLarge);
+    }
+    let source = String::from_utf8(bytes).map_err(|_| ToolDirectoryError::InvalidUiEncoding)?;
+    Ok(NativeToolUiSource {
+        tool_id: tool_id.to_owned(),
+        source,
+    })
+}
+
+fn display_name_sort_key(display_name: &ToolDisplayName) -> &str {
+    match display_name {
+        ToolDisplayName::Text(value) => value,
+        ToolDisplayName::Localized(values) => values
+            .get("en")
+            .or_else(|| values.get("zh"))
+            .or_else(|| values.values().next())
+            .map(String::as_str)
+            .unwrap_or_default(),
+    }
+}
+
+const fn default_ui_update_every_seconds() -> f64 {
+    DEFAULT_UI_UPDATE_EVERY_SECONDS
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), ToolDirectoryError> {
@@ -307,6 +457,30 @@ mod tests {
         .expect("tool source must be writable");
     }
 
+    fn write_tool_ui_source(root: &Path, update_every_s: Option<f64>) {
+        fs::create_dir_all(root.join("ui")).expect("UI directory must be created");
+        fs::write(
+            root.join("ui/index.html"),
+            "<!doctype html><title>Timer</title>",
+        )
+        .expect("UI source must be writable");
+        let interval = update_every_s
+            .map(|value| format!(r#","update_every_s":{value}"#))
+            .unwrap_or_default();
+        fs::write(
+            root.join(TOOL_MANIFEST_FILE),
+            format!(
+                r#"{{"display_name":{{"zh":"计时器","en":"Timer"}},"entrypoint":"timer_tool:create_tools","ui":{{"entrypoint":"ui/index.html"{interval}}}}}"#
+            ),
+        )
+        .expect("UI manifest must be writable");
+        fs::write(
+            root.join("timer_tool.py"),
+            "def create_tools():\n    return []\n",
+        )
+        .expect("tool source must be writable");
+    }
+
     #[test]
     fn installs_lists_toggles_and_removes_a_tool_directory() {
         let root = temporary_directory("tool-registry");
@@ -317,7 +491,10 @@ mod tests {
 
         let installed =
             install_tool_directory_at(&tools_root, &source).expect("tool directory must install");
-        assert_eq!(installed.display_name, "Timer");
+        assert_eq!(
+            installed.display_name,
+            ToolDisplayName::Text("Timer".to_owned())
+        );
         assert!(installed.enabled);
         assert!(tools_root
             .join(&installed.id)
@@ -353,6 +530,67 @@ mod tests {
             read_manifest(&root),
             Err(ToolDirectoryError::Json(_))
         ));
+        fs::remove_dir_all(root).expect("temporary directory must be removable");
+    }
+
+    #[test]
+    fn installs_localized_tool_ui_and_reads_its_source() {
+        let root = temporary_directory("localized-tool-ui");
+        let source = root.join("source");
+        let tools_root = root.join("app-data-tools");
+        fs::create_dir_all(&source).expect("tool source must be created");
+        write_tool_ui_source(&source, None);
+
+        let installed =
+            install_tool_directory_at(&tools_root, &source).expect("tool directory must install");
+
+        assert_eq!(
+            installed.display_name,
+            ToolDisplayName::Localized(BTreeMap::from([
+                ("en".to_owned(), "Timer".to_owned()),
+                ("zh".to_owned(), "计时器".to_owned()),
+            ]))
+        );
+        assert_eq!(
+            installed.ui,
+            Some(ToolUiConfig {
+                entrypoint: "ui/index.html".to_owned(),
+                update_every_s: DEFAULT_UI_UPDATE_EVERY_SECONDS,
+            })
+        );
+        let ui = read_tool_ui_source_at(&tools_root, &installed.id)
+            .expect("installed UI source must be readable");
+        assert_eq!(ui.tool_id, installed.id);
+        assert_eq!(ui.source, "<!doctype html><title>Timer</title>");
+
+        fs::remove_dir_all(root).expect("temporary directory must be removable");
+    }
+
+    #[test]
+    fn rejects_unsafe_ui_entrypoint_and_invalid_update_interval() {
+        let root = temporary_directory("invalid-tool-ui");
+        fs::create_dir_all(root.join("ui")).expect("UI directory must be created");
+        fs::write(root.join("ui/index.html"), "<p>Timer</p>").expect("UI source must be writable");
+        fs::write(
+            root.join(TOOL_MANIFEST_FILE),
+            r#"{"display_name":"Timer","entrypoint":"timer:create_tools","ui":{"entrypoint":"../index.html"}}"#,
+        )
+        .expect("manifest must be writable");
+        assert!(matches!(
+            read_manifest(&root),
+            Err(ToolDirectoryError::InvalidUiEntrypoint)
+        ));
+
+        fs::write(
+            root.join(TOOL_MANIFEST_FILE),
+            r#"{"display_name":"Timer","entrypoint":"timer:create_tools","ui":{"entrypoint":"ui/index.html","update_every_s":0}}"#,
+        )
+        .expect("manifest must be writable");
+        assert!(matches!(
+            read_manifest(&root),
+            Err(ToolDirectoryError::InvalidUiUpdateInterval)
+        ));
+
         fs::remove_dir_all(root).expect("temporary directory must be removable");
     }
 }

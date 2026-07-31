@@ -305,7 +305,7 @@ summary,
   z-index: 20;
   inset: 0 0 auto var(--content-inset);
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr minmax(0, 680px) 1fr;
   align-items: center;
   height: var(--topbar-height);
   padding: max(12px, env(safe-area-inset-top)) 24px 8px;
@@ -317,12 +317,116 @@ summary,
   pointer-events: auto;
 }
 
-.brand {
+.live-tool-panel {
+  position: relative;
   grid-column: 2;
+  width: min(100%, 680px);
   justify-self: center;
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
+}
+
+.live-tool-status-toggle {
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  padding: 5px 12px;
+  cursor: pointer;
+  align-items: center;
+  grid-template-columns: 34px minmax(0, 1fr) 24px;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgba(24, 24, 27, 0.07);
+  text-align: left;
+  backdrop-filter: blur(18px);
+}
+
+.live-tool-status-toggle:hover {
+  background: var(--surface-solid);
+}
+
+.live-tool-status-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.live-tool-status-icon svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.live-tool-status-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.live-tool-status-copy strong,
+.live-tool-status-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-tool-status-copy strong {
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.live-tool-status-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.live-tool-status-chevron {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 160ms ease;
+}
+
+.live-tool-status-toggle[aria-expanded="true"]
+  .live-tool-status-chevron {
+  transform: rotate(180deg);
+}
+
+.live-tool-content {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: 0;
+  max-height: min(62vh, 560px);
+  padding: 8px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+
+.live-tool-content .tool-ui-row + .tool-ui-row {
+  margin-top: 8px;
+}
+
+.live-tool-content .tool-ui-frame,
+.live-tool-content .tool-ui-fallback {
+  width: 100%;
 }
 
 .sidebar-toggle-button {
@@ -609,6 +713,50 @@ summary,
   content: "";
   vertical-align: -0.12em;
   animation: cursor-blink 0.8s steps(2, start) infinite;
+}
+
+.tool-ui-row {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.tool-ui-frame,
+.tool-ui-fallback {
+  display: block;
+  width: min(100%, 680px);
+  min-height: 80px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  transition: height 120ms ease;
+}
+
+.tool-ui-row-live .tool-ui-frame,
+.tool-ui-row-live .tool-ui-fallback {
+  min-height: 120px;
+}
+
+.tool-ui-fallback {
+  display: flex;
+  padding: 14px 16px;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.tool-ui-fallback span {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.tool-ui-fallback.is-error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
 .chat-composer-shell {
@@ -1585,7 +1733,7 @@ summary,
     z-index: 31;
   }
 
-  .app.sidebar-open .brand,
+  .app.sidebar-open .live-tool-panel,
   .app.sidebar-open #toggle-debug-button {
     visibility: hidden;
     pointer-events: none;
@@ -1609,6 +1757,7 @@ summary,
   }
 
   .topbar {
+    grid-template-columns: 52px minmax(0, 1fr) 52px;
     padding-right: 14px;
     padding-left: 14px;
   }

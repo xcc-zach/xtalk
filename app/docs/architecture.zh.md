@@ -29,7 +29,7 @@ sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出
 ## 本地界面
 
 WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
-界面包含默认收起的左侧聊天记录栏、居中品牌栏、Orb/对话双视图、底部玻璃控制坞
+界面包含默认收起的左侧聊天记录栏、上下文状态栏、Orb/对话双视图、底部玻璃控制坞
 和右侧“设置与诊断”抽屉。左侧栏可创建新聊天，并通过公开客户端 API 切换全部持久
 化会话。“新聊天”下方的同款“工具”按钮会打开居中浮窗，用于将工具目录复制到
 AppData、修改启用状态、删除已复制工具，并通过重启 sidecar 应用变更。“设置与诊
@@ -163,12 +163,20 @@ XTalk 原始配置错误返回。
 
 ## 开发者工具
 
-用户选择的目录包含 Python 文件，以及字段严格限定为两个的 `xtalk_tool.json`：
+用户选择的目录包含 Python 文件和 `xtalk_tool.json`。`display_name` 可以是单个
+字符串，也可以是语言字典；`ui` 为可选配置：
 
 ```json
 {
-  "display_name": "Timer",
-  "entrypoint": "timer_tool:create_tools"
+  "display_name": {
+    "zh": "计时器",
+    "en": "Timer"
+  },
+  "entrypoint": "timer_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 0.5
+  }
 }
 ```
 
@@ -179,6 +187,32 @@ Tauri 生成内部标识，将目录递归复制到 `AppData/tools/<id>/`，并�
 
 配置中的 Agent 会在读取该注册表后构建，因此工具变更通过受控重启 sidecar 生效。
 单个开发者工厂加载失败时会被忽略，不会阻止其余本地服务启动。
+
+可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
+`window.xtalkToolUI.status(callback)` 和/或
+`window.xtalkToolUI.emit(callback)` 声明能力；没有注册某个 hook，就表示该工具没有
+对应的 live UI 或 history UI。`update_every_s` 控制 live 状态轮询，默认为一秒；
+`-1` 表示禁用周期轮询，其余取值范围为 0.1 到 3600 秒。
+
+App 在注册表加载时仅包装原生 `AsyncTool` 类。包装层保持原生命周期调用和返回值
+不变，只观察 `astatus()`，再通过受启动 token 保护的 App WebSocket 发布只读事件。
+live 事件跟随正在运行的调用；原工具的 initial emit 和每次 update emit 都会产生独立
+的 history 事件，其中保存当次 emit 消息和当时的 status。history 快照不会变化，
+每个会话最多保留 200 条，并按持久化 session ID 保存到 WebView AppData；live 状态
+只保存在内存中。
+
+对话顶部不再重复显示 XTalk 产品名。没有支持 live UI 的工具运行时，顶部中心保持
+空白；有工具运行时显示一条默认收起的紧凑状态栏，其中包含运行数量和最新状态。
+用户点击后可展开查看所有当前 live UI。live 卡片不再插入消息时间线，history 卡片
+仍固定在对应 emit 的历史位置。
+
+每张卡片使用独立的 `sandbox="allow-scripts"` iframe。注入的 CSP 阻止外部资源和
+网络 API，bridge 还会拦截链接和表单行为；frame 的不透明 origin 不具备 Tauri
+权限。frame 只能接收 status/emit 数据并报告期望高度，不能调用、停止或以其他方式
+操作工具。为保留 App 顶层的严格 CSP，host 会把每个准备好的文档放在一个高熵、
+30 秒有效且只能使用一次的 loopback ticket 后面；启动 token 不会进入 iframe URL
+或文档。host 控制卡片完整可用宽度，并把 live 卡片高度限制在 120–420 px、
+history 卡片限制在 80–600 px；两者还同时受窗口高度 60% 的上限约束。
 
 ## 关闭
 

@@ -57,11 +57,28 @@ export interface NativeToolDefinition {
   /** App-generated stable identifier for this installed copy. */
   id: string;
   /** Human-readable name declared by the developer tool. */
-  displayName: string;
+  displayName: string | Record<string, string>;
   /** Python `module:factory` entrypoint declared by the tool. */
   entrypoint: string;
+  /** Optional read-only custom UI configuration. */
+  ui: {
+    /** Self-contained HTML entrypoint relative to the installed tool. */
+    entrypoint: string;
+    /** Live status polling interval, or `-1` when polling is disabled. */
+    updateEveryS: number;
+  } | null;
   /** Whether the sidecar loads this tool during its next restart. */
   enabled: boolean;
+}
+
+/**
+ * Self-contained HTML returned for one installed tool UI.
+ */
+export interface NativeToolUiSource {
+  /** Installed tool identifier owning the source. */
+  toolId: string;
+  /** Untrusted self-contained HTML loaded only inside a sandbox iframe. */
+  source: string;
 }
 
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
@@ -74,6 +91,7 @@ const MANAGED_MODEL_PROGRESS_EVENT = "managed-model-progress";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
 const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
 const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
+const TOOL_UI_SOURCE_COMMAND = "get_tool_ui_source";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
 
 /**
@@ -291,6 +309,30 @@ export async function applyNativeToolChanges(): Promise<NativeBackendConnection>
   return parseNativeBackendConnection(payload);
 }
 
+/**
+ * Reads one installed tool's self-contained UI entrypoint.
+ *
+ * @param toolId Installed tool identifier returned by Tauri.
+ * @returns Untrusted HTML source for sandboxed rendering.
+ */
+export async function getNativeToolUiSource(
+  toolId: string,
+): Promise<NativeToolUiSource> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(TOOL_UI_SOURCE_COMMAND, { toolId });
+  if (
+    !isRecord(payload) ||
+    payload.toolId !== toolId ||
+    typeof payload.source !== "string"
+  ) {
+    throw new Error("Tauri returned an invalid tool UI source.");
+  }
+  return {
+    toolId,
+    source: payload.source,
+  };
+}
+
 function requireTauriRuntime(): void {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
     throw new Error(t("native.runtimeUnavailable"));
@@ -363,24 +405,70 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   const id = payload.id;
   const displayName = payload.displayName;
   const entrypoint = payload.entrypoint;
+  const ui = payload.ui;
   const enabled = payload.enabled;
   if (
     typeof id !== "string" ||
-    typeof displayName !== "string" ||
+    !isDisplayName(displayName) ||
     typeof entrypoint !== "string" ||
     typeof enabled !== "boolean" ||
     !id.trim() ||
-    !displayName.trim() ||
-    !entrypoint.trim()
+    !entrypoint.trim() ||
+    !isToolUiConfig(ui)
   ) {
     throw new Error("Tool definition contains invalid fields.");
   }
+  const normalizedUi =
+    ui === null
+      ? null
+      : (ui as {
+          entrypoint: string;
+          update_every_s: number;
+        });
   return {
     id,
     displayName,
     entrypoint,
+    ui:
+      normalizedUi === null
+        ? null
+        : {
+            entrypoint: normalizedUi.entrypoint,
+            updateEveryS: normalizedUi.update_every_s,
+          },
     enabled,
   };
+}
+
+function isDisplayName(value: unknown): value is string | Record<string, string> {
+  if (typeof value === "string") {
+    return Boolean(value.trim());
+  }
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    return false;
+  }
+  return Object.entries(value).every(
+    ([language, name]) =>
+      Boolean(language.trim()) && typeof name === "string" && Boolean(name.trim()),
+  );
+}
+
+function isToolUiConfig(value: unknown): boolean {
+  if (value === null) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const entrypoint = value.entrypoint;
+  const updateEveryS = value.update_every_s;
+  return (
+    typeof entrypoint === "string" &&
+    Boolean(entrypoint.trim()) &&
+    typeof updateEveryS === "number" &&
+    Number.isFinite(updateEveryS) &&
+    (updateEveryS === -1 || (updateEveryS >= 0.1 && updateEveryS <= 3600))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

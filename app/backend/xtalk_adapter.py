@@ -9,6 +9,7 @@ from xtalk import Xtalk
 
 from .timer_tool import TimerTool
 from .tool_registry import load_enabled_tools
+from .tool_ui import ToolUIBroker
 
 
 def build_xtalk_runtime(
@@ -16,6 +17,7 @@ def build_xtalk_runtime(
     *,
     tools_root: Path | None = None,
     anonymous_user_id: str | None = None,
+    tool_ui_broker: ToolUIBroker | None = None,
 ) -> Any:
     """Build XTalk with the sample-compatible desktop timer tool.
 
@@ -27,6 +29,8 @@ def build_xtalk_runtime(
         Application data directory containing installed developer tools.
     anonymous_user_id : str | None, optional
         Runtime-only stable identity for the built-in anonymous login.
+    tool_ui_broker : ToolUIBroker | None, optional
+        App-only observer for developer tools that declare a UI entrypoint.
 
     Returns
     -------
@@ -36,11 +40,15 @@ def build_xtalk_runtime(
 
     builder = Xtalk.configure(config)
     if config.get("llm_agent") is not None:
-        tools = (
-            load_enabled_tools(tools_root)
-            if tools_root is not None
-            else []
-        )
+        if tools_root is None:
+            tools = []
+        elif tool_ui_broker is None:
+            tools = load_enabled_tools(tools_root)
+        else:
+            tools = load_enabled_tools(
+                tools_root,
+                tool_ui_broker=tool_ui_broker,
+            )
         if not any(getattr(tool, "name", None) == TimerTool.name for tool in tools):
             tools.insert(0, TimerTool)
         builder.add_agent_tools(tools)
