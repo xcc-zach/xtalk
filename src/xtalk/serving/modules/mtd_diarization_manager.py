@@ -33,12 +33,8 @@ _DEFAULT_POOL_CONFIG: dict[str, Any] = {
     "min_update_duration_s": 0.45,
     "preferred_min_duration_s": 1.0,
     "preferred_max_duration_s": 7.0,
-    "hard_max_duration_s": 7.0,
     "min_rms_dbfs": -42.0,
     "max_clipping_ratio": 0.01,
-    "max_overlap_ratio": 0.45,
-    "prefer_non_overlap": True,
-    "allow_overlap_fallback": True,
     "min_boundary_margin_s": 0.08,
     "replace_score_margin": 0.08,
     "score_weights": {
