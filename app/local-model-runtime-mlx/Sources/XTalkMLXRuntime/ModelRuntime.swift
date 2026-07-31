@@ -84,23 +84,32 @@ actor ModelRuntime {
         }
         var generationParameters = mossTTS.defaultGenerationParameters
         generationParameters.maxTokens = mossTTSFrameLimit(for: generationChunks)
-        let output = try await mossTTS.generate(
-            text: normalizedText,
-            voice: nil,
-            refAudio: referenceAudio,
-            refText: nil,
-            language: nil,
-            generationParameters: generationParameters
-        )
-        let channelCount = output.ndim > 1 ? output.dim(output.ndim - 1) : 1
-        let monoSamples = downmixInterleavedAudio(
-            output.asArray(Float.self),
-            channelCount: channelCount
-        )
-        let samples = trimTrailingSilence(
-            monoSamples,
-            sampleRate: ManagedModelService.mossTTSNano.sampleRate
-        )
+        var samples: [Float] = []
+        for _ in 0 ..< 2 {
+            let output = try await mossTTS.generate(
+                text: normalizedText,
+                voice: nil,
+                refAudio: referenceAudio,
+                refText: nil,
+                language: nil,
+                generationParameters: generationParameters
+            )
+            let channelCount = output.ndim > 1 ? output.dim(output.ndim - 1) : 1
+            let monoSamples = downmixInterleavedAudio(
+                output.asArray(Float.self),
+                channelCount: channelCount
+            )
+            samples = trimTrailingSilence(
+                monoSamples,
+                sampleRate: ManagedModelService.mossTTSNano.sampleRate
+            )
+            if !samples.isEmpty {
+                break
+            }
+        }
+        guard !samples.isEmpty else {
+            throw ModelRuntimeError.emptyAudio
+        }
         return encodePCM16Wave(
             samples: samples,
             sampleRate: ManagedModelService.mossTTSNano.sampleRate
@@ -131,6 +140,7 @@ func mossTTSFrameLimit(for chunks: [String]) -> Int {
 enum ModelRuntimeError: Error, LocalizedError {
     case wrongService
     case emptyText
+    case emptyAudio
     case promptAudioTooLarge
 
     var errorDescription: String? {
@@ -139,6 +149,8 @@ enum ModelRuntimeError: Error, LocalizedError {
             "Requested operation is unavailable for this MLX service"
         case .emptyText:
             "text must not be empty"
+        case .emptyAudio:
+            "MOSS generation returned no audio after two attempts"
         case .promptAudioTooLarge:
             "prompt_audio exceeds 32 MiB"
         }

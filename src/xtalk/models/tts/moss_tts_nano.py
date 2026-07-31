@@ -22,6 +22,7 @@ from .interfaces import TTS
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:18083"
 _SYNTHESIS_TIMEOUT_SECONDS = 300.0
+_SYNTHESIS_ATTEMPT_LIMIT = 2
 
 
 def _resolve_base_url(base_url: str) -> str:
@@ -168,8 +169,15 @@ class MossTTSNano(TTS):
     def synthesize(self, text: str) -> bytes:
         """Synthesize text and return 48 kHz mono PCM16 bytes."""
         normalized_text = self._validate_text(text)
-        wav_bytes = self._synthesize_service(normalized_text)
-        return _decode_wav_to_pcm48(wav_bytes)
+        for _ in range(_SYNTHESIS_ATTEMPT_LIMIT):
+            wav_bytes = self._synthesize_service(normalized_text)
+            pcm = _decode_wav_to_pcm48(wav_bytes)
+            if pcm:
+                return pcm
+        raise RuntimeError(
+            "MOSS service returned no audio data after "
+            f"{_SYNTHESIS_ATTEMPT_LIMIT} attempts"
+        )
 
     async def async_synthesize(self, text: str, **kwargs: object) -> bytes:
         """Asynchronously synthesize text into 48 kHz mono PCM16 bytes."""
@@ -177,10 +185,17 @@ class MossTTSNano(TTS):
         normalized_text = self._validate_text(text)
         timeout = aiohttp.ClientTimeout(total=_SYNTHESIS_TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            wav_bytes = await self._async_synthesize_service(
-                session, normalized_text
-            )
-        return _decode_wav_to_pcm48(wav_bytes)
+            for _ in range(_SYNTHESIS_ATTEMPT_LIMIT):
+                wav_bytes = await self._async_synthesize_service(
+                    session, normalized_text
+                )
+                pcm = _decode_wav_to_pcm48(wav_bytes)
+                if pcm:
+                    return pcm
+        raise RuntimeError(
+            "MOSS service returned no audio data after "
+            f"{_SYNTHESIS_ATTEMPT_LIMIT} attempts"
+        )
 
     @staticmethod
     def _validate_text(text: str) -> str:

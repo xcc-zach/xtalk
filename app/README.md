@@ -19,7 +19,7 @@ The installed application does not require Python, Node.js, or Rust. They are
 build-time dependencies only.
 
 The locked npm dependency resolves the client from
-`resources/artifacts/xtalk-client-0.2.7.tgz`. Prepare that ignored artifact from
+`resources/artifacts/xtalk-client-0.2.8.tgz`. Prepare that ignored artifact from
 a client build that exposes `Session.sendText()` before running `npm ci`.
 
 ## Local checks

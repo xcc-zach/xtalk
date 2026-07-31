@@ -125,15 +125,41 @@ class Conversation {
 
         if (lastMessage?.role === message.role && !lastMessage.final) {
             const prefix = this.messagePrefixes[lastIndex];
-            if (prefix && message.content.startsWith(prefix)) {
-                lastMessage.content = message.content.slice(prefix.length);
-            } else {
-                lastMessage.content = message.content;
+            const fullContent = `${prefix ?? ""}${lastMessage.content}`;
+            if (message.role === "assistant") {
+                if (message.content.startsWith(fullContent)) {
+                    lastMessage.content = prefix
+                        ? message.content.slice(prefix.length)
+                        : message.content;
+                    lastMessage.final = final;
+                    this.notifyStateChange();
+                    return;
+                }
+                if (fullContent.startsWith(message.content)) {
+                    if (final) {
+                        lastMessage.final = true;
+                        this.messagePrefixes[lastIndex] = undefined;
+                    }
+                    this.notifyStateChange();
+                    return;
+                }
+
+                // A non-prefix assistant update belongs to a new turn. Preserve
+                // the playback-confirmed text from the previous turn instead of
+                // replacing it merely because its finish signal was delayed.
+                lastMessage.final = true;
                 this.messagePrefixes[lastIndex] = undefined;
+            } else {
+                if (prefix && message.content.startsWith(prefix)) {
+                    lastMessage.content = message.content.slice(prefix.length);
+                } else {
+                    lastMessage.content = message.content;
+                    this.messagePrefixes[lastIndex] = undefined;
+                }
+                lastMessage.final = final;
+                this.notifyStateChange();
+                return;
             }
-            lastMessage.final = final;
-            this.notifyStateChange();
-            return;
         }
 
         const previousSameRole = this.findPreviousSameRoleMessage(message.role);
@@ -163,6 +189,29 @@ class Conversation {
         });
         this.messagePrefixes.push(prefix);
         this.notifyStateChange();
+    }
+
+    /**
+     * Mark unfinished messages as final after a turn boundary or stream failure.
+     *
+     * This prevents stale streaming cursors when the server cannot emit the
+     * normal role-specific finish action, for example after empty TTS output.
+     *
+     * @param role Optional role used to limit which pending messages are closed.
+     */
+    finalizePendingMessages(role?: ConversationMessage["role"]): void {
+        let changed = false;
+        for (let index = 0; index < this._state.messages.length; index++) {
+            const message = this._state.messages[index];
+            if (message && !message.final && (!role || message.role === role)) {
+                message.final = true;
+                this.messagePrefixes[index] = undefined;
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.notifyStateChange();
+        }
     }
 
     private findPreviousSameRoleMessage(
