@@ -47,8 +47,9 @@ actor ModelRuntime {
     func synthesize(
         text: String,
         promptAudio: Data,
-        filename: String?
-    ) async throws -> Data {
+        filename: String?,
+        seed: UInt64
+    ) async throws -> MossSynthesisResult {
         guard let mossTTS else {
             throw ModelRuntimeError.wrongService
         }
@@ -74,56 +75,172 @@ actor ModelRuntime {
         )
         let generationChunks: [String]
         if let tokenizer = mossTTS.tokenizer {
-            generationChunks = try mossSplitTextIntoBestSentences(
+            generationChunks = try mossTTSGenerationChunks(
                 tokenizer: tokenizer,
-                text: mossLightweightNormalizeText(normalizedText),
-                maxTokens: 75
+                text: normalizedText
             )
         } else {
-            generationChunks = [normalizedText]
+            generationChunks = mossTTSClauseChunks(for: normalizedText)
+                .map(mossTTSClosingClauseBoundary)
         }
-        var generationParameters = mossTTS.defaultGenerationParameters
-        generationParameters.maxTokens = mossTTSFrameLimit(for: generationChunks)
         var samples: [Float] = []
-        for _ in 0 ..< 2 {
-            let output = try await mossTTS.generate(
-                text: normalizedText,
-                voice: nil,
-                refAudio: referenceAudio,
-                refText: nil,
-                language: nil,
-                generationParameters: generationParameters
-            )
-            let channelCount = output.ndim > 1 ? output.dim(output.ndim - 1) : 1
-            let monoSamples = downmixInterleavedAudio(
-                output.asArray(Float.self),
-                channelCount: channelCount
-            )
-            samples = trimTrailingSilence(
-                monoSamples,
-                sampleRate: ManagedModelService.mossTTSNano.sampleRate
-            )
-            if !samples.isEmpty {
-                break
+        for (chunkIndex, chunk) in generationChunks.enumerated() {
+            var generationParameters = mossTTS.defaultGenerationParameters
+            generationParameters.maxTokens = mossTTSFrameLimit(for: chunk)
+            var chunkSamples: [Float] = []
+            let chunkSeed = mossTTSSeed(for: chunk, requestedSeed: seed)
+            for attempt in 0 ..< 2 {
+                MLXRandom.seed(chunkSeed &+ UInt64(attempt))
+                let output = try await mossTTS.generate(
+                    text: chunk,
+                    voice: nil,
+                    refAudio: referenceAudio,
+                    refText: nil,
+                    language: nil,
+                    generationParameters: generationParameters
+                )
+                let channelCount = output.ndim > 1 ? output.dim(output.ndim - 1) : 1
+                let monoSamples = downmixInterleavedAudio(
+                    output.asArray(Float.self),
+                    channelCount: channelCount
+                )
+                chunkSamples = trimTrailingSilence(
+                    monoSamples,
+                    sampleRate: ManagedModelService.mossTTSNano.sampleRate
+                )
+                if !chunkSamples.isEmpty {
+                    break
+                }
+            }
+            guard !chunkSamples.isEmpty else {
+                throw ModelRuntimeError.emptyAudio
+            }
+            samples.append(contentsOf: chunkSamples)
+            if chunkIndex < generationChunks.count - 1 {
+                samples.append(contentsOf: repeatElement(
+                    Float.zero,
+                    count: mossTTSInterChunkPauseSamples(
+                        sampleRate: ManagedModelService.mossTTSNano.sampleRate
+                    )
+                ))
             }
         }
         guard !samples.isEmpty else {
             throw ModelRuntimeError.emptyAudio
         }
-        return encodePCM16Wave(
-            samples: samples,
-            sampleRate: ManagedModelService.mossTTSNano.sampleRate
+        return MossSynthesisResult(
+            wave: encodePCM16Wave(
+                samples: samples,
+                sampleRate: ManagedModelService.mossTTSNano.sampleRate
+            ),
+            textChunks: generationChunks
         )
+    }
+}
+
+struct MossSynthesisResult: Sendable {
+    let wave: Data
+    let textChunks: [String]
+}
+
+private let mossTTSChunkPunctuation = Set(".!?。！？；;，,、：:")
+private let mossTTSOpenClausePunctuation = Set("；;，,、：:")
+private let mossTTSShortChunkCharacterLimit = 4
+private let mossTTSShortChunkSeed: UInt64 = 21
+private let mossTTSInterChunkPauseMilliseconds = 400
+
+/// Split one request at natural sentence and clause boundaries.
+func mossTTSClauseChunks(for text: String) -> [String] {
+    let normalized = mossLightweightNormalizeText(text)
+    let punctuationChunks = mossSplitTextByPunctuation(
+        normalized,
+        punctuation: mossTTSChunkPunctuation
+    )
+    var chunks: [String] = []
+    var pending = ""
+    for punctuationChunk in punctuationChunks {
+        pending = mossJoinSentenceParts(pending, punctuationChunk)
+        if let last = punctuationChunk.last,
+           mossTTSOpenClausePunctuation.contains(last),
+           mossTTSMeaningfulCharacterCount(pending)
+               <= mossTTSShortChunkCharacterLimit
+        {
+            continue
+        }
+        chunks.append(pending)
+        pending = ""
+    }
+    if !pending.isEmpty {
+        chunks.append(pending)
+    }
+    return chunks.isEmpty ? [normalized] : chunks
+}
+
+/// Split oversized clauses with the official token budget and close open punctuation.
+func mossTTSGenerationChunks(
+    tokenizer: MossTextTokenizing,
+    text: String
+) throws -> [String] {
+    var chunks: [String] = []
+    for clause in mossTTSClauseChunks(for: text) {
+        let tokenChunks = try mossSplitTextIntoBestSentences(
+            tokenizer: tokenizer,
+            text: clause,
+            maxTokens: 75
+        )
+        chunks.append(contentsOf: tokenChunks.map(mossTTSClosingClauseBoundary))
+    }
+    return chunks
+}
+
+/// Replace an open clause delimiter with a closed sentence delimiter for inference.
+func mossTTSClosingClauseBoundary(_ text: String) -> String {
+    var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let last = normalized.last,
+          mossTTSOpenClausePunctuation.contains(last)
+    else {
+        return normalized
+    }
+    normalized.removeLast()
+    normalized.append(mossContainsCJK(normalized) ? "。" : ".")
+    return normalized
+}
+
+/// Select the stable short-phrase seed while retaining the general default seed.
+func mossTTSSeed(for text: String, requestedSeed: UInt64) -> UInt64 {
+    mossTTSSpokenCharacterCount(text) <= mossTTSShortChunkCharacterLimit
+        ? mossTTSShortChunkSeed
+        : requestedSeed
+}
+
+/// Return the official inter-chunk pause in samples for one output rate.
+func mossTTSInterChunkPauseSamples(sampleRate: Int) -> Int {
+    sampleRate * mossTTSInterChunkPauseMilliseconds / 1_000
+}
+
+/// Count non-whitespace Unicode scalars used by generation heuristics.
+func mossTTSMeaningfulCharacterCount(_ text: String) -> Int {
+    text.unicodeScalars.reduce(into: 0) { count, scalar in
+        if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            count += 1
+        }
+    }
+}
+
+/// Count spoken Unicode scalars while excluding whitespace and punctuation.
+func mossTTSSpokenCharacterCount(_ text: String) -> Int {
+    text.unicodeScalars.reduce(into: 0) { count, scalar in
+        if !CharacterSet.whitespacesAndNewlines.contains(scalar),
+           !CharacterSet.punctuationCharacters.contains(scalar)
+        {
+            count += 1
+        }
     }
 }
 
 /// Estimate a bounded MOSS generation budget for one already-split TTS chunk.
 func mossTTSFrameLimit(for text: String) -> Int {
-    let meaningfulCharacters = text.unicodeScalars.reduce(into: 0) { count, scalar in
-        if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
-            count += 1
-        }
-    }
+    let meaningfulCharacters = mossTTSMeaningfulCharacterCount(text)
     // The official service allows 375 frames per <=75-token chunk. The MLX
     // model does not always emit EOS, so retain that ceiling while bounding
     // short requests by character count. Twelve frames per character plus a

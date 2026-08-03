@@ -10,9 +10,9 @@ use ort::{
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sentencepiece::SentencePieceProcessor;
 
-use crate::audio::ReferenceAudio;
 use crate::manifest::{BuiltinVoice, ModelAssets, TtsConfig};
 use crate::OnnxBackend;
+use crate::{audio::ReferenceAudio, wav::trim_and_fade_trailing_audio};
 
 /// Request parameters accepted by the native MOSS inference engine.
 pub(crate) struct SynthesisOptions<'a> {
@@ -148,7 +148,11 @@ impl MossEngine {
             max_frames,
             options.seed,
         )?;
-        let samples = self.decode_audio_tokens(&audio_tokens)?;
+        let decoded_samples = self.decode_audio_tokens(&audio_tokens)?;
+        let samples = trim_and_fade_trailing_audio(&decoded_samples, self.assets.sample_rate);
+        if samples.is_empty() {
+            bail!("MOSS decoded only inaudible audio");
+        }
 
         Ok(SynthesisOutput {
             samples,

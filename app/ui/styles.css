@@ -695,6 +695,62 @@ summary,
   background: transparent;
 }
 
+.message-actions {
+  display: flex;
+  min-height: 30px;
+  padding-left: 2px;
+  align-items: center;
+  gap: 2px;
+}
+
+.message-copy-button {
+  --message-copy-icon-background: var(--bg);
+
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.message-copy-button:hover {
+  --message-copy-icon-background: var(--surface-muted);
+
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.message-copy-button:active {
+  transform: scale(0.92);
+}
+
+.message-copy-button[data-copied="true"] {
+  color: var(--text);
+}
+
+.message-copy-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.message-copy-button .message-action-icon-copy {
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.8;
+}
+
+.message-copy-icon-front {
+  fill: var(--message-copy-icon-background);
+}
+
 .message-info {
   align-self: center;
   padding: 6px 12px;

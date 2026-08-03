@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastapi import WebSocketDisconnect
 from xtalk.models.agents.tools import (
     AsyncTool,
     Finished,
@@ -191,6 +192,104 @@ def test_frame_ticket_is_one_time() -> None:
     assert second is None
 
 
+class _ReplayWebSocket:
+    """Minimal WebSocket that binds once and records replayed events."""
+
+    def __init__(self) -> None:
+        """Initialize an empty outbound event list."""
+
+        self.accepted = False
+        self.messages: list[dict[str, Any]] = []
+        self._received = False
+
+    async def accept(self) -> None:
+        """Record WebSocket acceptance."""
+
+        self.accepted = True
+
+    async def receive_json(self) -> dict[str, Any]:
+        """Bind once, then close the fake connection."""
+
+        if self._received:
+            raise WebSocketDisconnect()
+        self._received = True
+        return {"type": "bind_session", "sessionId": "session-1"}
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        """Record one replayed status payload."""
+
+        self.messages.append(payload)
+
+
+def test_broker_replays_running_status_after_app_channel_reconnects() -> None:
+    """Show active tool UI even when its initial event preceded the App socket."""
+
+    async def scenario() -> _ReplayWebSocket:
+        broker = ToolUIBroker()
+        await broker.publish_status(
+            binding=ToolUIBinding(tool_id="builtin:codex", update_every_s=1),
+            tool_name="codex_session_create",
+            call_id="call-1",
+            status="Codex is working",
+            running=True,
+        )
+        websocket = _ReplayWebSocket()
+        await broker.serve(websocket)  # type: ignore[arg-type]
+        return websocket
+
+    websocket = asyncio.run(scenario())
+
+    assert websocket.accepted is True
+    assert websocket.messages == [
+        {
+            "type": "tool_ui.status",
+            "toolId": "builtin:codex",
+            "toolName": "codex_session_create",
+            "callId": "call-1",
+            "sessionId": "session-1",
+            "sequence": 1,
+            "status": "Codex is working",
+            "running": True,
+            "updatedAt": websocket.messages[0]["updatedAt"],
+        }
+    ]
+
+
+def test_broker_replays_history_emit_after_app_channel_connects() -> None:
+    """Recover history UI emitted before the App WebSocket was ready."""
+
+    async def scenario() -> _ReplayWebSocket:
+        broker = ToolUIBroker()
+        await broker.publish_emit(
+            binding=ToolUIBinding(tool_id="builtin:codex", update_every_s=1),
+            tool_name="codex_session_create",
+            call_id="call-1",
+            message="Codex completed",
+            status="Complete",
+            running=False,
+        )
+        websocket = _ReplayWebSocket()
+        await broker.serve(websocket)  # type: ignore[arg-type]
+        return websocket
+
+    websocket = asyncio.run(scenario())
+
+    assert websocket.messages == [
+        {
+            "type": "tool_ui.emit",
+            "toolId": "builtin:codex",
+            "toolName": "codex_session_create",
+            "callId": "call-1",
+            "sessionId": "session-1",
+            "sequence": 1,
+            "message": "Codex completed",
+            "status": "Complete",
+            "running": False,
+            "emittedAt": websocket.messages[0]["emittedAt"],
+        }
+    ]
+
+
 def test_timer_example_uses_unlabeled_live_and_history_ui() -> None:
     """Keep mode annotations out of the user-visible timer card."""
 
@@ -220,3 +319,5 @@ def test_chat_topbar_uses_collapsible_live_tool_status() -> None:
     assert 'id="live-tool-status-toggle"' in markup
     assert 'id="live-tool-content"' in markup
     assert "renderLiveToolPanel" in logic
+    assert "timelineItems = [...toolUIHistory]" in logic
+    assert "...toolUILive.values()" in logic

@@ -270,6 +270,41 @@ interface ToolUIRow {
 
 const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
 const MAX_TOOL_UI_HISTORY_ITEMS = 200;
+const MESSAGE_COPY_CONFIRMATION_MS = 1_600;
+const IME_COMPOSITION_COMMIT_GUARD_MS = 250;
+const copiedMessageIds = new Set<string>();
+const copiedMessageTimers = new Map<string, number>();
+let messageInputCompositionActive = false;
+let messageInputCompositionCommitPending = false;
+let messageInputCompositionGuardTimer: number | null = null;
+
+/** Clear the one-key guard created when an IME composition is committed. */
+function clearMessageInputCompositionGuard(): void {
+  messageInputCompositionCommitPending = false;
+  if (messageInputCompositionGuardTimer !== null) {
+    window.clearTimeout(messageInputCompositionGuardTimer);
+    messageInputCompositionGuardTimer = null;
+  }
+}
+
+/** Return whether an Enter key belongs to an active or just-ended IME edit. */
+function isMessageInputCompositionEnter(event: KeyboardEvent): boolean {
+  if (event.key !== "Enter") {
+    return false;
+  }
+  if (
+    event.isComposing ||
+    messageInputCompositionActive ||
+    event.keyCode === 229
+  ) {
+    return true;
+  }
+  if (messageInputCompositionCommitPending) {
+    clearMessageInputCompositionGuard();
+    return true;
+  }
+  return false;
+}
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -1368,6 +1403,12 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
 
     body.append(content);
     row.append(body);
+    if (message.role === "assistant" && message.content.length > 0) {
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      actions.append(createMessageCopyButton(message.id, message.content));
+      row.append(actions);
+    }
     return row;
   });
 
@@ -1401,6 +1442,133 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   renderChatSessions();
   if (shouldRefreshSessions) {
     scheduleChatSessionsRefresh();
+  }
+}
+
+function createMessageActionIcon(kind: "copy" | "check"): SVGSVGElement {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.classList.add(`message-action-icon-${kind}`);
+
+  if (kind === "check") {
+    const path = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    path.setAttribute("d", "m5 12.5 4.1 4.1L19 6.7");
+    icon.append(path);
+    return icon;
+  }
+
+  const rear = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "rect",
+  );
+  rear.setAttribute("x", "8");
+  rear.setAttribute("y", "3.5");
+  rear.setAttribute("width", "12.5");
+  rear.setAttribute("height", "12.5");
+  rear.setAttribute("rx", "3");
+  const front = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "rect",
+  );
+  front.classList.add("message-copy-icon-front");
+  front.setAttribute("x", "3.5");
+  front.setAttribute("y", "8");
+  front.setAttribute("width", "12.5");
+  front.setAttribute("height", "12.5");
+  front.setAttribute("rx", "3");
+  icon.append(rear, front);
+  return icon;
+}
+
+function updateMessageCopyButton(
+  button: HTMLButtonElement,
+  copied: boolean,
+): void {
+  const label = t(copied ? "message.copied" : "message.copy");
+  button.dataset.copied = String(copied);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.replaceChildren(createMessageActionIcon(copied ? "check" : "copy"));
+}
+
+function createMessageCopyButton(
+  messageId: string,
+  content: string,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-copy-button";
+  button.dataset.messageId = messageId;
+  updateMessageCopyButton(button, copiedMessageIds.has(messageId));
+  button.addEventListener("click", () => {
+    void copyAssistantMessage(button, messageId, content);
+  });
+  return button;
+}
+
+async function copyAssistantMessage(
+  button: HTMLButtonElement,
+  messageId: string,
+  content: string,
+): Promise<void> {
+  if (button.dataset.copying === "true") {
+    return;
+  }
+  button.dataset.copying = "true";
+  try {
+    await writeClipboardText(content);
+    copiedMessageIds.add(messageId);
+    updateMessageCopyButton(button, true);
+
+    const previousTimer = copiedMessageTimers.get(messageId);
+    if (previousTimer !== undefined) {
+      window.clearTimeout(previousTimer);
+    }
+    const timer = window.setTimeout(() => {
+      copiedMessageTimers.delete(messageId);
+      copiedMessageIds.delete(messageId);
+      for (const currentButton of elements.messages.querySelectorAll<HTMLButtonElement>(
+        ".message-copy-button",
+      )) {
+        if (currentButton.dataset.messageId === messageId) {
+          updateMessageCopyButton(currentButton, false);
+        }
+      }
+    }, MESSAGE_COPY_CONFIRMATION_MS);
+    copiedMessageTimers.set(messageId, timer);
+  } catch (error) {
+    showError("message.copyFailed", { error });
+  } finally {
+    delete button.dataset.copying;
+  }
+}
+
+async function writeClipboardText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    const copied = await navigator.clipboard.writeText(text).then(
+      () => true,
+      () => false,
+    );
+    if (copied) {
+      return;
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Clipboard API is unavailable");
   }
 }
 
@@ -2231,13 +2399,36 @@ elements.messageInput.addEventListener("input", () => {
   resizeMessageInput();
   updateComposer(latestSnapshot);
 });
+elements.messageInput.addEventListener("compositionstart", () => {
+  clearMessageInputCompositionGuard();
+  messageInputCompositionActive = true;
+});
+elements.messageInput.addEventListener("compositionend", () => {
+  messageInputCompositionActive = false;
+  messageInputCompositionCommitPending = true;
+  messageInputCompositionGuardTimer = window.setTimeout(() => {
+    clearMessageInputCompositionGuard();
+  }, IME_COMPOSITION_COMMIT_GUARD_MS);
+});
 elements.messageInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (isMessageInputCompositionEnter(event)) {
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     if (!elements.sendTextButton.disabled) {
       void sendTextMessage();
     }
   }
+});
+elements.messageInput.addEventListener("keyup", (event) => {
+  if (event.key === "Enter") {
+    clearMessageInputCompositionGuard();
+  }
+});
+elements.messageInput.addEventListener("blur", () => {
+  messageInputCompositionActive = false;
+  clearMessageInputCompositionGuard();
 });
 elements.retryButton.addEventListener("click", () => {
   if (modelConfigPath === null) {

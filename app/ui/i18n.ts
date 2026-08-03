@@ -228,6 +228,9 @@ const zhCN = {
   "voice.closeFailed": "会话关闭失败：{{error}}",
   "message.user": "你",
   "message.system": "系统",
+  "message.copy": "复制消息",
+  "message.copied": "已复制",
+  "message.copyFailed": "复制消息失败：{{error}}",
   "app.initializeFailed": "无法初始化应用：{{error}}",
   "native.runtimeUnavailable": "桌面运行时不可用；当前界面已进入离线模式。",
 } as const;
@@ -453,6 +456,9 @@ const en: Record<keyof typeof zhCN, string> = {
   "voice.closeFailed": "Could not close the conversation: {{error}}",
   "message.user": "You",
   "message.system": "System",
+  "message.copy": "Copy message",
+  "message.copied": "Copied",
+  "message.copyFailed": "Could not copy message: {{error}}",
   "app.initializeFailed": "Could not initialize the application: {{error}}",
   "native.runtimeUnavailable":
     "Desktop runtime unavailable; the interface is now in offline mode.",
