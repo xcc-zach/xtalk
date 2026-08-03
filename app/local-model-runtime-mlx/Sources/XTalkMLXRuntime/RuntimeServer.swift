@@ -144,19 +144,24 @@ final class RuntimeHTTPHandler:
             guard let prompt = parts.first(where: { $0.name == "prompt_audio" }) else {
                 throw RuntimeServerError.missingPromptAudio
             }
-            let wave = try await runtime.synthesize(
+            let rawSeed = parts
+                .first(where: { $0.name == "seed" })
+                .flatMap { String(data: $0.body, encoding: .utf8) }
+            let seed = try parseMossSeed(rawSeed)
+            let synthesis = try await runtime.synthesize(
                 text: text,
                 promptAudio: prompt.body,
-                filename: prompt.filename
+                filename: prompt.filename,
+                seed: seed
             )
             return HTTPResult.json([
-                "audio_base64": wave.base64EncodedString(),
+                "audio_base64": synthesis.wave.base64EncodedString(),
                 "sample_rate": ManagedModelService.mossTTSNano.sampleRate,
-                "run_status": "MOSS MLX generation complete",
+                "run_status": "MOSS MLX generation complete: chunks=\(synthesis.textChunks.count)",
                 "prompt_audio_path": prompt.filename ?? "prompt_audio",
                 "warmup_status_text": "Ready.",
                 "text_normalization_status_text": "Ready.",
-                "text_chunks": [text],
+                "text_chunks": synthesis.textChunks,
                 "normalized_text": text,
                 "normalization_method": "mlx-audio-swift",
                 "text_normalization_language": "auto",
@@ -328,16 +333,37 @@ final class OfflineASRWebSocketHandler:
 
 enum RuntimeServerError: Error, LocalizedError {
     case missingPromptAudio
+    case invalidSeed
     case invalidBoundAddress
 
     var errorDescription: String? {
         switch self {
         case .missingPromptAudio:
             "prompt_audio is required"
+        case .invalidSeed:
+            "seed must be an integer"
         case .invalidBoundAddress:
             "MLX runtime did not bind a TCP port"
         }
     }
+}
+
+/// Stable default seed selected for the MLX sampling implementation.
+let mossDefaultSeed: UInt64 = 42
+
+/// Parse the optional MOSS multipart seed into a deterministic MLX seed.
+func parseMossSeed(_ rawValue: String?) throws -> UInt64 {
+    guard let rawValue else {
+        return mossDefaultSeed
+    }
+    let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    if value.isEmpty || value == "0" {
+        return mossDefaultSeed
+    }
+    guard let seed = UInt64(value) else {
+        throw RuntimeServerError.invalidSeed
+    }
+    return seed
 }
 
 struct RuntimeServer {

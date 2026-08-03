@@ -231,8 +231,12 @@ Do not replace all of `Contents/Frameworks` with links to the resource runtime.
 The PyInstaller bootloader loads `libpython` from `Frameworks`, and a hardened
 sidecar cannot map a differently signed copy through such a link. The packager
 links only top-level Python `*.dist-info` metadata directories, applies the
-sidecar's library-validation entitlement, and verifies that the signed backend
-can load before creating the DMG.
+sidecar's library-validation entitlement, explicitly signs both bundled Codex
+code-mode hosts with the V8 executable-memory entitlements from
+`src-tauri/CodexHostEntitlements.plist`, and verifies that the signed backend
+can load before creating the DMG. Do not distribute a `.app` produced by the
+raw Tauri command alone: its Codex host will fail when V8 creates the first
+isolate.
 
 Verify the final bundle and disk image rather than only the intermediate
 sidecars:
@@ -387,10 +391,12 @@ preference persists locally. Text is sent with the public
 `Session.sendText()` API and appears only after XTalk confirms the user turn
 with a matching `finish_asr` action over the session WebSocket.
 
-Voice input remains raw PCM in the WebView. Frontend VAD and enhancement stay
-disabled; the sidecar runs the packaged Silero model and emits server speech
-boundaries before the configured ASR. This lets `server_configs/sample.json`
-work unchanged while preserving any explicit user-provided `vad` configuration.
+The WebView requests browser-native echo cancellation, automatic gain control,
+and noise suppression for microphone capture. Frontend VAD and the custom
+FastEnhancer stay disabled; the sidecar runs the packaged Silero model and emits
+server speech boundaries before the configured ASR. This lets
+`server_configs/sample.json` work unchanged while preserving any explicit
+user-provided `vad` configuration.
 
 Architecture details are documented in
 [`docs/architecture.md`](docs/architecture.md) and

@@ -24,6 +24,9 @@ DEFAULT_APP = (
     / "XTalk.app"
 )
 ENTITLEMENTS = APP_ROOT / "src-tauri" / "Entitlements.plist"
+CODEX_HOST_ENTITLEMENTS = (
+    APP_ROOT / "src-tauri" / "CodexHostEntitlements.plist"
+)
 METADATA_SUFFIXES = (".dist-info", ".egg-info")
 
 
@@ -143,8 +146,35 @@ def sign_app(app: Path, identity: str) -> None:
     run([*common, "--deep", str(app)])
 
     # --deep signs nested executables but does not propagate entitlements to
-    # them. The PyInstaller bootloader must be allowed to load libpython, then
-    # the outer seal must be refreshed without modifying nested signatures.
+    # them. The Codex code-mode host embeds V8 and requires executable-memory
+    # entitlements even in jitless mode; without them hardened-runtime builds
+    # crash while creating the first isolate. Sign both packaged runtime copies
+    # because Tauri may resolve either layout. The PyInstaller bootloader must
+    # also be allowed to load libpython, then the outer seal is refreshed.
+    codex_host_relative = (
+        Path("codex_cli_bin") / "bin" / "codex-code-mode-host"
+    )
+    codex_common = [
+        "codesign",
+        "--force",
+        "--sign",
+        identity,
+        "--options",
+        "runtime",
+        "--entitlements",
+        str(CODEX_HOST_ENTITLEMENTS),
+    ]
+    for runtime_root in (
+        app / "Contents" / "Frameworks",
+        app / "Contents" / "Resources" / "app-backend-runtime",
+    ):
+        codex_host = runtime_root / codex_host_relative
+        if not codex_host.is_file():
+            raise ValueError(
+                "app bundle is missing Codex code-mode host: "
+                f"{codex_host}"
+            )
+        run([*codex_common, str(codex_host)])
     backend = app / "Contents" / "MacOS" / "app-backend"
     run([*common, str(backend)])
     run([*common, str(app)])

@@ -69,13 +69,41 @@ struct ProtocolTests {
     }
 
     @Test
+    func splitsMossRequestsAtNaturalClauseBoundaries() {
+        let chunks = mossTTSClauseChunks(
+            for: "嘿，你好呀。我是你的智能助手，随时准备帮你解答问题或处理任务，咱们直接开始吧。"
+        ).map(mossTTSClosingClauseBoundary)
+        #expect(chunks == [
+            "嘿，你好呀。",
+            "我是你的智能助手。",
+            "随时准备帮你解答问题或处理任务。",
+            "咱们直接开始吧。",
+        ])
+        #expect(mossTTSInterChunkPauseSamples(sampleRate: 48_000) == 19_200)
+        #expect(mossTTSSeed(for: "那就好。", requestedSeed: 42) == 21)
+        #expect(mossTTSSeed(for: "嘿，你好呀。", requestedSeed: 42) == 21)
+        #expect(mossTTSSeed(for: "过得怎么样？", requestedSeed: 42) == 42)
+    }
+
+    @Test
     func trimsCodecTrailingSilenceWithNaturalPadding() {
         let samples = [Float](repeating: 0, count: 10)
             + [0.02]
             + [Float](repeating: 0, count: 1_000)
         let trimmed = trimTrailingSilence(samples, sampleRate: 1_000)
-        #expect(trimmed.count == 131)
+        #expect(trimmed.count == 51)
+        #expect(trimmed[10] == 0.02)
+        #expect(trimmed.last == 0)
         #expect(trimTrailingSilence([0, 0.001], sampleRate: 48_000).isEmpty)
+    }
+
+    @Test
+    func fadesFrameLimitedMossAudioWithoutAppendingSamples() {
+        let samples = [Float](repeating: 0.02, count: 100)
+        let trimmed = trimTrailingSilence(samples, sampleRate: 1_000)
+        #expect(trimmed.count == samples.count)
+        #expect(trimmed[69] == 0.02)
+        #expect(trimmed.last == 0)
     }
 
     @Test
@@ -107,5 +135,16 @@ struct ProtocolTests {
         )
         #expect(parts.first(where: { $0.name == "text" })?.body == Data("你好".utf8))
         #expect(parts.first(where: { $0.name == "prompt_audio" })?.body == binary)
+    }
+
+    @Test
+    func parsesMossSeedDeterministically() throws {
+        #expect(try parseMossSeed(nil) == mossDefaultSeed)
+        #expect(try parseMossSeed("") == mossDefaultSeed)
+        #expect(try parseMossSeed("0") == mossDefaultSeed)
+        #expect(try parseMossSeed(" 42 ") == 42)
+        #expect(throws: RuntimeServerError.self) {
+            try parseMossSeed("invalid")
+        }
     }
 }

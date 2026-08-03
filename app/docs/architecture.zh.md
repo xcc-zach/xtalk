@@ -90,10 +90,11 @@ timer 专用的 serving 修补。
 
 ## 本地语音管线
 
-WebView 通过公开 `xtalk-client` WebSocket 发送 16 kHz 单声道 PCM，前端 VAD 与
-增强器保持关闭。Tauri 解析随包的 `models/audio/silero_vad.onnx` 资源，sidecar
-再通过 XTalk 普通公开模型配置加载它。由服务端产生的语音开始、结束边界负责启动和
-结束配置中的远程 ASR 回合。
+WebView 请求浏览器原生回声消除、自动增益控制与降噪，然后通过公开
+`xtalk-client` WebSocket 发送 16 kHz 单声道 PCM；前端 VAD 与自定义
+FastEnhancer 保持关闭。Tauri 解析随包的 `models/audio/silero_vad.onnx` 资源，
+sidecar 再通过 XTalk 普通公开模型配置加载它。由服务端产生的语音开始、结束边界
+负责启动和结束配置中的远程 ASR 回合。
 
 模型的上游 commit 与 SHA-256 固定在
 `resources/manifests/audio-models.lock.json`。资源校验会拒绝缺失或被修改的文件；
@@ -216,6 +217,12 @@ App 侧 session 索引是
 归档 SDK thread，再在 App 索引中将其移出活动池；每个 session 的异步锁会串行化
 继续、改配置和归档操作。
 
+异步工具的运行进度不会再回灌到对话文本流。Agent 会把生命周期更新记录到工具历史，
+但只有终态更新会触发一次自然语言总结，因此长时间运行的 Codex turn 不会显示成多条
+被截断的 AI 消息。Tool UI broker 会保留每个仍在运行的状态以及有界的不可变 emit
+历史，并在 App WebSocket 绑定或重连时一起重放；即使工具执行早于 WebView 通道
+就绪，界面仍会显示 live 与 history 工具卡片。
+
 可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
 `window.xtalkToolUI.status(callback)` 和/或
 `window.xtalkToolUI.emit(callback)` 声明能力；没有注册某个 hook，就表示该工具没有
@@ -226,8 +233,9 @@ App 在注册表加载时仅包装原生 `AsyncTool` 类。包装层保持原生
 不变，只观察 `astatus()`，再通过受启动 token 保护的 App WebSocket 发布只读事件。
 live 事件跟随正在运行的调用；原工具的 initial emit 和每次 update emit 都会产生独立
 的 history 事件，其中保存当次 emit 消息和当时的 status。history 快照不会变化，
-每个会话最多保留 200 条，并按持久化 session ID 保存到 WebView AppData；live 状态
-只保存在内存中。
+每个会话最多保留 200 条，并按持久化 session ID 保存到 WebView AppData。broker 还会
+在当前进程内为每个会话保留最近 200 条 emit，在 App WebSocket 建立或重连时与 live
+状态一起重放；WebView 通过稳定的调用 ID 和序号去重。live 状态只保存在内存中。
 
 对话顶部不再重复显示 XTalk 产品名。没有支持 live UI 的工具运行时，顶部中心保持
 空白；有工具运行时显示一条默认收起的紧凑状态栏，其中包含运行数量和最新状态。
