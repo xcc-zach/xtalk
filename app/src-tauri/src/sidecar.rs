@@ -34,6 +34,7 @@ const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
 const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
 const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
 const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
+const DESKTOP_VAD_THRESHOLD: f64 = 0.7;
 const BUILTIN_TOOLS_RESOURCE: &str = "tools";
 const SIDECAR_RUNTIME_RESOURCE: &str = "app-backend-runtime";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -670,6 +671,7 @@ fn build_config_fallbacks(vad_model_path: &Path) -> Value {
             "type": "SileroVAD",
             "params": {
                 "model_path": vad_model_path,
+                "threshold": DESKTOP_VAD_THRESHOLD,
             },
         },
     })
@@ -930,7 +932,7 @@ mod tests {
     use super::{
         build_config_fallbacks, parse_http_response, validate_health_response,
         validate_model_config_path, validate_ready_line, BackendError, StartupMessage,
-        DESKTOP_ANONYMOUS_USER_ID, PROTOCOL_VERSION,
+        DESKTOP_ANONYMOUS_USER_ID, DESKTOP_VAD_THRESHOLD, PROTOCOL_VERSION,
     };
 
     fn temporary_model_config(name: &str, contents: &[u8]) -> PathBuf {
@@ -1024,6 +1026,7 @@ mod tests {
                 "type": "SileroVAD",
                 "params": {
                     "model_path": expected_model_path,
+                    "threshold": DESKTOP_VAD_THRESHOLD,
                 },
             })
         );

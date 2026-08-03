@@ -93,8 +93,9 @@ timer 专用的 serving 修补。
 WebView 请求浏览器原生回声消除、自动增益控制与降噪，然后通过公开
 `xtalk-client` WebSocket 发送 16 kHz 单声道 PCM；前端 VAD 与自定义
 FastEnhancer 保持关闭。Tauri 解析随包的 `models/audio/silero_vad.onnx` 资源，
-sidecar 再通过 XTalk 普通公开模型配置加载它。由服务端产生的语音开始、结束边界
-负责启动和结束配置中的远程 ASR 回合。
+sidecar 再通过 XTalk 普通公开模型配置加载它。桌面端回退配置使用 `0.7` 的语音
+概率阈值以减少环境噪声误触发；用户显式配置的 VAD 仍然优先。由服务端产生的语音
+开始、结束边界负责启动和结束配置中的远程 ASR 回合。
 
 模型的上游 commit 与 SHA-256 固定在
 `resources/manifests/audio-models.lock.json`。资源校验会拒绝缺失或被修改的文件；
@@ -220,8 +221,8 @@ App 侧 session 索引是
 异步工具的运行进度不会再回灌到对话文本流。Agent 会把生命周期更新记录到工具历史，
 但只有终态更新会触发一次自然语言总结，因此长时间运行的 Codex turn 不会显示成多条
 被截断的 AI 消息。Tool UI broker 会保留每个仍在运行的状态以及有界的不可变 emit
-历史，并在 App WebSocket 绑定或重连时一起重放；即使工具执行早于 WebView 通道
-就绪，界面仍会显示 live 与 history 工具卡片。
+历史，并通过受认证的 App HTTP 快照重放；即使工具执行早于 WebView 开始轮询，
+界面仍会显示 live 与 history 工具卡片。
 
 可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
 `window.xtalkToolUI.status(callback)` 和/或
@@ -230,24 +231,34 @@ App 侧 session 索引是
 `-1` 表示禁用周期轮询，其余取值范围为 0.1 到 3600 秒。
 
 App 在注册表加载时仅包装原生 `AsyncTool` 类。包装层保持原生命周期调用和返回值
-不变，只观察 `astatus()`，再通过受启动 token 保护的 App WebSocket 发布只读事件。
-live 事件跟随正在运行的调用；原工具的 initial emit 和每次 update emit 都会产生独立
-的 history 事件，其中保存当次 emit 消息和当时的 status。history 快照不会变化，
-每个会话最多保留 200 条，并按持久化 session ID 保存到 WebView AppData。broker 还会
-在当前进程内为每个会话保留最近 200 条 emit，在 App WebSocket 建立或重连时与 live
-状态一起重放；WebView 通过稳定的调用 ID 和序号去重。live 状态只保存在内存中。
+不变，只观察 `astatus()`，再通过受启动 token 保护的 loopback HTTP 快照发布只读
+事件。持久化聊天会话处于活动状态时，WebView 每 350 ms 轮询一次该端点；旧的 App
+WebSocket 端点继续保留，供兼容客户端使用。live 事件跟随正在运行的调用；原工具的
+initial emit 和每次 update emit 都会产生独立的 history 事件，其中保存当次 emit
+消息和当时的 status。history 快照不会变化，每个会话最多保留 200 条，并按持久化
+session ID 保存到 WebView AppData。broker 还会在当前进程内为每个会话保留最近
+200 条 emit 用于重连恢复；WebView 通过稳定的调用 ID 和序号去重。live 状态只保存
+在内存中；即使最终 status 观察被错过，终态 history 事件也会移除对应 live 卡片。
 
 对话顶部不再重复显示 XTalk 产品名。没有支持 live UI 的工具运行时，顶部中心保持
 空白；有工具运行时显示一条默认收起的紧凑状态栏，其中包含运行数量和最新状态。
 用户点击后可展开查看所有当前 live UI。live 卡片不再插入消息时间线，history 卡片
-仍固定在对应 emit 的历史位置。
+仍固定在对应 emit 的历史位置；同一次调用的终态 emit 会替换此前卡片，避免工具完成
+后残留 Running 卡片。live 面板和消息时间线都使用增量 DOM 协调，在状态更新期间
+保留 iframe 的浏览上下文，避免画面闪烁。
 
 每张卡片使用独立的 `sandbox="allow-scripts"` iframe。注入的 CSP 阻止外部资源和
 网络 API，bridge 还会拦截链接和表单行为；frame 的不透明 origin 不具备 Tauri
 权限。frame 只能接收 status/emit 数据并报告期望高度，不能调用、停止或以其他方式
-操作工具。为保留 App 顶层的严格 CSP，host 会把每个准备好的文档放在一个高熵、
-30 秒有效且只能使用一次的 loopback ticket 后面；启动 token 不会进入 iframe URL
-或文档。host 控制卡片完整可用宽度，并把 live 卡片高度限制在 120–420 px、
+操作工具。host 会等文档完成 capability 握手后再发送待处理数据，并保留事件直到
+frame 按 `callId` 和 `sequence` 确认接收；有限的短间隔重试可避免 WKWebView 初始
+的 `about:blank` load 或 ready 边界竞态提前消耗事件。为保留 App 顶层的严格
+CSP，host 会把
+每个准备好的文档放在一个
+仅在后端进程存活期间有效且可幂等读取的高熵 loopback ticket 后面，以兼容
+WKWebView 的内部重载；ticket 只保存在容量受限的内存中，启动 token 不会进入
+iframe URL 或文档。host 控制卡片完整可用宽度，并把 live
+卡片高度限制在 120–420 px、
 history 卡片限制在 80–600 px；两者还同时受窗口高度 60% 的上限约束。
 
 ## 关闭

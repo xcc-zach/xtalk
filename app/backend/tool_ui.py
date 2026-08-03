@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,7 +14,7 @@ from xtalk.models.agents.tools import AsyncTool, Finished, Running
 
 
 MAX_TOOL_UI_FRAME_BYTES = 2 * 1024 * 1024
-TOOL_UI_FRAME_TICKET_TTL_SECONDS = 30.0
+MAX_TOOL_UI_FRAME_TICKETS = 400
 MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS = 200
 
 
@@ -35,6 +34,13 @@ class ToolUIBinding:
     update_every_s: float
 
 
+@dataclass
+class _ToolUIFrameTicket:
+    """Runtime-scoped reload ticket for one sandboxed Tool UI document."""
+
+    source: str
+
+
 class ToolUIBroker:
     """Broadcast observed tool status and emit events to the trusted App UI."""
 
@@ -50,7 +56,7 @@ class ToolUIBroker:
         self._last_status: dict[str, tuple[str, bool]] = {}
         self._live_status_payloads: dict[str, dict[str, Any]] = {}
         self._history_payloads: dict[str | None, list[dict[str, Any]]] = {}
-        self._frame_tickets: dict[str, tuple[float, str]] = {}
+        self._frame_tickets: dict[str, _ToolUIFrameTicket] = {}
 
     async def serve(self, websocket: WebSocket) -> None:
         """Serve one authenticated read-only Tool UI WebSocket.
@@ -99,6 +105,40 @@ class ToolUIBroker:
                 self._clients = [
                     client for client in self._clients if client is not websocket
                 ]
+
+    async def snapshot(self, session_id: str) -> list[dict[str, Any]]:
+        """Return replayable history and live UI events for one App session.
+
+        Parameters
+        ----------
+        session_id : str
+            Persisted chat session currently displayed by the desktop App.
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            Immutable event copies safe to serialize through the authenticated
+            loopback HTTP endpoint.
+
+        Raises
+        ------
+        ValueError
+            If ``session_id`` is empty.
+        """
+
+        if not session_id:
+            raise ValueError("tool UI session ID must not be empty")
+        async with self._lock:
+            self._current_session_id = session_id
+            history_payloads = self._bind_history_payloads(session_id)
+            live_statuses = []
+            for call_id, status in self._live_status_payloads.items():
+                if status.get("sessionId") is None:
+                    status["sessionId"] = session_id
+                    self._call_sessions[call_id] = session_id
+                if status.get("sessionId") == session_id:
+                    live_statuses.append(dict(status))
+        return [*history_payloads, *live_statuses]
 
     async def publish_status(
         self,
@@ -184,7 +224,7 @@ class ToolUIBroker:
         self._live_status_payloads.pop(call_id, None)
 
     async def create_frame_ticket(self, source: str) -> str:
-        """Create a short-lived one-time ticket for a rendered UI document.
+        """Create a runtime-scoped reloadable ticket for a UI document.
 
         Parameters
         ----------
@@ -205,38 +245,38 @@ class ToolUIBroker:
         if len(source.encode("utf-8")) > MAX_TOOL_UI_FRAME_BYTES:
             raise ValueError("tool UI frame exceeds the two MiB size limit")
         ticket = secrets.token_urlsafe(32)
-        expires_at = time.monotonic() + TOOL_UI_FRAME_TICKET_TTL_SECONDS
         async with self._lock:
+            self._frame_tickets[ticket] = _ToolUIFrameTicket(
+                source=source,
+            )
             self._prune_frame_tickets()
-            self._frame_tickets[ticket] = (expires_at, source)
         return ticket
 
     async def consume_frame_ticket(self, ticket: str) -> str | None:
-        """Consume and return one unexpired sandbox frame document.
+        """Return one sandbox frame document retained by this runtime.
 
         Parameters
         ----------
         ticket : str
-            Opaque one-time ticket created by :meth:`create_frame_ticket`.
+            Opaque reloadable ticket created by
+            :meth:`create_frame_ticket`.
 
         Returns
         -------
         str | None
-            Frame HTML, or ``None`` when the ticket is invalid or expired.
+            Frame HTML, or ``None`` when the ticket is invalid or evicted.
         """
 
         async with self._lock:
-            self._prune_frame_tickets()
-            frame = self._frame_tickets.pop(ticket, None)
-        return None if frame is None else frame[1]
+            frame = self._frame_tickets.get(ticket)
+            if frame is None:
+                return None
+            return frame.source
 
     def _prune_frame_tickets(self) -> None:
-        now = time.monotonic()
-        self._frame_tickets = {
-            ticket: frame
-            for ticket, frame in self._frame_tickets.items()
-            if frame[0] > now
-        }
+        while len(self._frame_tickets) > MAX_TOOL_UI_FRAME_TICKETS:
+            oldest_ticket = next(iter(self._frame_tickets))
+            self._frame_tickets.pop(oldest_ticket, None)
 
     def _bind_history_payloads(
         self,

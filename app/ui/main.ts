@@ -246,23 +246,12 @@ interface ToolUIRow {
 const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
 const MAX_TOOL_UI_HISTORY_ITEMS = 200;
 const MESSAGE_COPY_CONFIRMATION_MS = 1_600;
-const IME_COMPOSITION_COMMIT_GUARD_MS = 250;
 const copiedMessageIds = new Set<string>();
 const copiedMessageTimers = new Map<string, number>();
 let messageInputCompositionActive = false;
-let messageInputCompositionCommitPending = false;
-let messageInputCompositionGuardTimer: number | null = null;
+let messageInputCompositionEnterHeld = false;
 
-/** Clear the one-key guard created when an IME composition is committed. */
-function clearMessageInputCompositionGuard(): void {
-  messageInputCompositionCommitPending = false;
-  if (messageInputCompositionGuardTimer !== null) {
-    window.clearTimeout(messageInputCompositionGuardTimer);
-    messageInputCompositionGuardTimer = null;
-  }
-}
-
-/** Return whether an Enter key belongs to an active or just-ended IME edit. */
+/** Return whether Enter is confirming an IME edit or is still the same held key. */
 function isMessageInputCompositionEnter(event: KeyboardEvent): boolean {
   if (event.key !== "Enter") {
     return false;
@@ -272,13 +261,10 @@ function isMessageInputCompositionEnter(event: KeyboardEvent): boolean {
     messageInputCompositionActive ||
     event.keyCode === 229
   ) {
+    messageInputCompositionEnterHeld = true;
     return true;
   }
-  if (messageInputCompositionCommitPending) {
-    clearMessageInputCompositionGuard();
-    return true;
-  }
-  return false;
+  return messageInputCompositionEnterHeld;
 }
 
 function requireElement<T extends HTMLElement>(id: string): T {
@@ -1006,6 +992,15 @@ function handleToolUIEvent(event: ToolUIEvent): void {
     return;
   }
   if (event.type === "tool_ui.emit") {
+    if (!event.running && sessionId === activeToolUISessionId) {
+      toolUILive.delete(event.callId);
+      removeToolUIRow(`live:${event.callId}`);
+      for (const historyItem of toolUIHistory) {
+        if (historyItem.event.callId === event.callId) {
+          removeToolUIRow(historyItem.id);
+        }
+      }
+    }
     const item: ToolUIHistoryItem = {
       kind: "history",
       id: `history:${event.callId}:${event.sequence}`,
@@ -1100,9 +1095,39 @@ function renderLiveToolPanel(): void {
     ),
   );
   elements.liveToolContent.hidden = !toolUILiveExpanded;
-  elements.liveToolContent.replaceChildren(
-    ...items.map((item) => getOrCreateToolUIRow(item).element),
+  reconcileStableChildren(
+    elements.liveToolContent,
+    items.map((item) => getOrCreateToolUIRow(item).element),
   );
+}
+
+/**
+ * Reconciles children without detaching unchanged iframes.
+ *
+ * WKWebView resets an iframe browsing context when `replaceChildren` removes
+ * and reinserts the same node, leaving an already-mounted live UI at
+ * `about:blank`. Incremental reconciliation preserves existing frame contexts
+ * and only inserts, moves, or removes changed rows.
+ *
+ * @param container Element whose children should match the requested order.
+ * @param desiredChildren Child elements in display order.
+ */
+function reconcileStableChildren(
+  container: HTMLElement,
+  desiredChildren: HTMLElement[],
+): void {
+  const desired = new Set(desiredChildren);
+  for (const child of [...container.children]) {
+    if (!desired.has(child as HTMLElement)) {
+      child.remove();
+    }
+  }
+  for (const [index, child] of desiredChildren.entries()) {
+    const current = container.children.item(index);
+    if (current !== child) {
+      container.insertBefore(child, current);
+    }
+  }
 }
 
 function getOrCreateToolUIRow(item: ToolUITimelineItem): ToolUIRow {
@@ -1193,7 +1218,6 @@ async function hydrateToolUIRow(
         });
         if (!capabilities[requiredCapability]) {
           row.element.hidden = true;
-          frame.destroy();
           if (item.kind === "live") {
             renderLiveToolPanel();
           }
@@ -1207,6 +1231,7 @@ async function hydrateToolUIRow(
     );
     row.frame = frame;
     fallback.replaceWith(frame.element);
+    frame.mount();
     if (item.kind === "live") {
       frame.status(item.event);
     } else {
@@ -1271,8 +1296,13 @@ function appendToolUIHistory(
   if (history.some((candidate) => candidate.id === item.id)) {
     return history;
   }
-  history.push(item);
-  let bounded = history
+  const converged = item.event.running
+    ? history
+    : history.filter(
+        (candidate) => candidate.event.callId !== item.event.callId,
+      );
+  converged.push(item);
+  let bounded = converged
     .sort((left, right) => left.order - right.order)
     .slice(-MAX_TOOL_UI_HISTORY_ITEMS);
   const key = `${TOOL_UI_HISTORY_PREFIX}${sessionId}`;
@@ -1403,7 +1433,7 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     }
   }
 
-  elements.messages.replaceChildren(...timelineElements);
+  reconcileStableChildren(elements.messages, timelineElements);
   if (timelineElements.length > 0) {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
@@ -2204,18 +2234,21 @@ elements.messageInput.addEventListener("input", () => {
   updateComposer(latestSnapshot);
 });
 elements.messageInput.addEventListener("compositionstart", () => {
-  clearMessageInputCompositionGuard();
   messageInputCompositionActive = true;
+  messageInputCompositionEnterHeld = false;
 });
 elements.messageInput.addEventListener("compositionend", () => {
   messageInputCompositionActive = false;
-  messageInputCompositionCommitPending = true;
-  messageInputCompositionGuardTimer = window.setTimeout(() => {
-    clearMessageInputCompositionGuard();
-  }, IME_COMPOSITION_COMMIT_GUARD_MS);
 });
 elements.messageInput.addEventListener("keydown", (event) => {
   if (isMessageInputCompositionEnter(event)) {
+    if (
+      !event.isComposing &&
+      !messageInputCompositionActive &&
+      event.keyCode !== 229
+    ) {
+      event.preventDefault();
+    }
     return;
   }
   if (event.key === "Enter" && !event.shiftKey) {
@@ -2227,12 +2260,12 @@ elements.messageInput.addEventListener("keydown", (event) => {
 });
 elements.messageInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
-    clearMessageInputCompositionGuard();
+    messageInputCompositionEnterHeld = false;
   }
 });
 elements.messageInput.addEventListener("blur", () => {
   messageInputCompositionActive = false;
-  clearMessageInputCompositionGuard();
+  messageInputCompositionEnterHeld = false;
 });
 elements.retryButton.addEventListener("click", () => {
   if (modelConfigPath === null) {

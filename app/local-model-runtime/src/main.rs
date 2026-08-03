@@ -3,6 +3,7 @@
 mod audio;
 mod manifest;
 mod moss;
+mod text;
 mod wav;
 
 use std::{
@@ -26,6 +27,7 @@ use clap::{Parser, ValueEnum};
 use moss::{MossEngine, SynthesisOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use text::normalize_for_speech;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use wav::{encode_pcm16_mono, encode_wav_pcm16_mono};
@@ -335,8 +337,9 @@ async fn generate(
     let engine = Arc::clone(&state.engine);
     let sample_rate = state.sample_rate;
     let reference_channels = state.reference_channels;
-    let response_text = text.clone();
-    let output = tokio::task::spawn_blocking(move || {
+    let response_text = normalize_for_speech(&text);
+    let response_text_for_task = response_text.clone();
+    let (output, text_chunks) = tokio::task::spawn_blocking(move || {
         let reference = decode_reference_audio(
             prompt_audio,
             prompt_filename.as_deref(),
@@ -347,13 +350,14 @@ async fn generate(
             .lock()
             .map_err(|_| anyhow::anyhow!("MOSS engine lock is poisoned"))?;
         let prompt_audio_codes = engine.encode_reference_audio(&reference)?;
-        engine.synthesize(SynthesisOptions {
-            text: &text,
-            voice: "",
-            prompt_audio_codes: Some(&prompt_audio_codes),
+        synthesize_chunks(
+            &mut engine,
+            &response_text_for_task,
+            "",
+            Some(&prompt_audio_codes),
             max_frames,
             seed,
-        })
+        )
     })
     .await
     .map_err(|error| ApiError::internal(format!("inference task failed: {error}")))?
@@ -373,10 +377,10 @@ async fn generate(
         prompt_audio_path: display_filename,
         warmup_status_text: "Ready.",
         text_normalization_status_text: "Text normalization is handled by the caller.",
-        text_chunks: vec![response_text.clone()],
+        text_chunks,
         normalized_text: response_text,
-        normalization_method: "caller",
-        text_normalization_language: "unknown",
+        normalization_method: "xtalk-mixed-text-v1",
+        text_normalization_language: "multilingual",
     }))
 }
 
@@ -384,7 +388,7 @@ async fn synthesize(
     State(state): State<AppState>,
     Json(request): Json<SpeechRequest>,
 ) -> Result<Response<Body>, ApiError> {
-    let input = request.input.trim().to_owned();
+    let input = normalize_for_speech(request.input.trim());
     let max_frames = request
         .max_frames
         .unwrap_or(state.max_new_frames)
@@ -395,17 +399,11 @@ async fn synthesize(
     let response_format = request.response_format;
     let seed = request.seed;
     let engine = Arc::clone(&state.engine);
-    let output = tokio::task::spawn_blocking(move || {
+    let (output, _) = tokio::task::spawn_blocking(move || {
         let mut engine = engine
             .lock()
             .map_err(|_| anyhow::anyhow!("MOSS engine lock is poisoned"))?;
-        engine.synthesize(SynthesisOptions {
-            text: &input,
-            voice: &voice,
-            prompt_audio_codes: None,
-            max_frames,
-            seed,
-        })
+        synthesize_chunks(&mut engine, &input, &voice, None, max_frames, seed)
     })
     .await
     .map_err(|error| ApiError::internal(format!("inference task failed: {error}")))?
@@ -456,6 +454,46 @@ fn validate_input(input: &str, max_frames: usize) -> Result<(), ApiError> {
         return Err(ApiError::bad_request("max_frames must be positive"));
     }
     Ok(())
+}
+
+/// Synthesize normalized text one stable chunk at a time and join it at 48 kHz.
+fn synthesize_chunks(
+    engine: &mut MossEngine,
+    text: &str,
+    voice: &str,
+    prompt_audio_codes: Option<&[Vec<i32>]>,
+    max_frames: usize,
+    seed: u64,
+) -> Result<(moss::SynthesisOutput, Vec<String>)> {
+    let chunks = engine.split_text_chunks(text)?;
+    let mut samples = Vec::new();
+    let mut generated_frames = 0;
+    let mut elapsed_ms = 0;
+    let sample_rate = engine.reference_sample_rate();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let output = engine.synthesize(SynthesisOptions {
+            text: chunk,
+            voice,
+            prompt_audio_codes,
+            max_frames,
+            seed,
+        })?;
+        generated_frames += output.generated_frames;
+        elapsed_ms += output.elapsed_ms;
+        samples.extend(output.samples);
+        if index + 1 < chunks.len() {
+            samples.extend(std::iter::repeat_n(0.0, sample_rate as usize * 400 / 1_000));
+        }
+    }
+    Ok((
+        moss::SynthesisOutput {
+            samples,
+            sample_rate,
+            generated_frames,
+            elapsed_ms,
+        },
+        chunks,
+    ))
 }
 
 fn default_voice() -> String {

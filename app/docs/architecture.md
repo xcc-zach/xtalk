@@ -120,7 +120,9 @@ The WebView requests browser-native echo cancellation, automatic gain control,
 and noise suppression, then sends 16 kHz mono PCM through the public
 `xtalk-client` WebSocket with frontend VAD and the custom FastEnhancer disabled.
 Tauri resolves the bundled `models/audio/silero_vad.onnx` resource, and the
-sidecar loads it through the ordinary public XTalk model configuration.
+sidecar loads it through the ordinary public XTalk model configuration. The
+desktop fallback uses a `0.7` speech-probability threshold to reduce ambient
+noise triggers; an explicitly configured VAD still takes precedence.
 Server-originated speech boundaries then start and finish the configured remote
 ASR turn.
 
@@ -282,9 +284,9 @@ The Agent records lifecycle updates in tool history, while only the terminal
 update triggers one final natural-language report. This prevents a long Codex
 turn from appearing as several truncated assistant messages. The Tool UI
 broker retains each running status plus a bounded immutable emit history and
-replays both when the App WebSocket binds or reconnects. Consequently live and
+replays both through an authenticated App HTTP snapshot. Consequently live and
 history cards remain visible even when execution started before the WebView
-channel was ready.
+began polling.
 
 The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
 separate from the Python entrypoint and declares capabilities by registering
@@ -296,28 +298,41 @@ and otherwise accepts 0.1 through 3600 seconds.
 
 The App wraps only native `AsyncTool` classes at registry load time. The wrapper
 delegates the original lifecycle unchanged, observes `astatus()`, and publishes
-read-only events over a launch-token-protected App WebSocket. Live events track
-the active call. Every original initial/update emit produces a separate history
-event containing the emitted message plus status at that moment. History
-snapshots are immutable, bounded to 200 items per session, and stored in WebView
-AppData under the persisted session ID. The broker also keeps the latest 200
-emits per active-process session for reconnect recovery; stable call/sequence
-IDs let the WebView deduplicate those replays. Live state is memory-only.
+read-only events through a launch-token-protected loopback HTTP snapshot. The
+WebView polls that endpoint every 350 ms while a persisted chat session is
+active; the legacy App WebSocket endpoint remains available for compatible
+clients. Live events track the active call. Every original initial/update emit
+produces a separate history event containing the emitted message plus status at
+that moment. History snapshots are immutable, bounded to 200 items per session,
+and stored in WebView AppData under the persisted session ID. The broker also
+keeps the latest 200 emits per active-process session for reconnect recovery;
+stable call/sequence IDs let the WebView deduplicate those replays. Live state
+is memory-only, and a terminal history event removes the corresponding live
+card even if its final status observation was missed.
 
 The conversation top bar does not repeat the XTalk product name. It remains
 empty when no live-capable tool is running. Active tools create one compact,
 collapsed status bar containing the latest status and running count; the user
 can expand it to inspect all current live UI cards. Live cards are not inserted
-into the message timeline. History cards remain anchored to their immutable
-emit positions.
+into the message timeline. History cards remain anchored to their emit
+positions, while a terminal emit replaces earlier cards from the same call so
+completed tools cannot leave a stale Running card. Both the live panel and the
+message timeline reconcile DOM children incrementally to preserve iframe
+browsing contexts during status updates.
 
 Each card uses a separate `sandbox="allow-scripts"` iframe. The injected CSP
 blocks external resources and network APIs, and the bridge suppresses link and
 form actions. The opaque frame origin has no Tauri capability. The frame can
 receive status/emit data and report desired height, but it cannot invoke, stop,
-or otherwise operate the tool. To keep the App's strict top-level CSP, the host
-publishes each prepared document behind a high-entropy, 30-second, one-time
-loopback ticket; the launch token never enters the iframe URL or document. The
+or otherwise operate the tool. The host waits for the document's capability
+handshake before delivering pending data, and retains each pending event until
+the frame acknowledges its `callId` and `sequence`. Bounded short retries keep
+WKWebView's initial `about:blank` load or ready-edge race from consuming an
+event. To keep the App's strict top-level CSP, the host
+publishes each prepared document behind a high-entropy, runtime-scoped loopback
+ticket that remains idempotently readable so WKWebView may perform internal
+reloads. Tickets live only in a capacity-bounded backend memory store; the
+launch token never enters the iframe URL or document. The
 host owns full available width and clamps height to 120–420 px for live cards
 and 80–600 px for history cards, with both also capped at 60% of the window
 height.

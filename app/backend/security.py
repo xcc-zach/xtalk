@@ -160,9 +160,10 @@ class SecurityPolicy:
                     )
                 return None
             if self._has_path_prefix(path, TOOL_UI_FRAME_PATH_PREFIX):
-                # The route consumes a high-entropy, short-lived one-time
-                # ticket. Keeping the launch token out of the iframe URL
-                # prevents untrusted display code from learning that token.
+                # The route reads a high-entropy, runtime-scoped ticket for
+                # WKWebView reloads. Keeping the launch token out
+                # of the iframe URL prevents untrusted display code from
+                # learning that token.
                 return None
             if self._has_path_prefix(path, "/app"):
                 if not self._has_startup_token(

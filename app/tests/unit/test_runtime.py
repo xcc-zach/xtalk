@@ -11,7 +11,7 @@ import httpx
 from backend.config import StartupConfig
 from backend.runtime import create_application
 from backend.security import STARTUP_TOKEN_HEADER
-from backend.tool_ui import ToolUIBroker
+from backend.tool_ui import ToolUIBinding, ToolUIBroker
 
 
 TOKEN = "t" * 32
@@ -235,10 +235,10 @@ def test_cors_preflight_requires_an_exact_origin_but_not_a_token(
     assert blocked.status_code == 403
 
 
-def test_tool_ui_frame_uses_authenticated_one_time_ticket(
+def test_tool_ui_frame_uses_authenticated_runtime_scoped_reload_ticket(
     tmp_path: Path,
 ) -> None:
-    """Serve sandbox HTML once without exposing the launch token to it."""
+    """Serve runtime-scoped reloads without exposing the launch token."""
 
     app = create_application(
         startup=_startup(tmp_path),
@@ -263,6 +263,11 @@ def test_tool_ui_frame_uses_authenticated_one_time_ticket(
     second = asyncio.run(
         _request(app, "GET", f"/tool-ui-frame/{ticket}")
     )
+    third = asyncio.run(_request(app, "GET", f"/tool-ui-frame/{ticket}"))
+    repeated = [
+        asyncio.run(_request(app, "GET", f"/tool-ui-frame/{ticket}"))
+        for _ in range(10)
+    ]
 
     assert created.status_code == 200
     assert first.status_code == 200
@@ -271,4 +276,66 @@ def test_tool_ui_frame_uses_authenticated_one_time_ticket(
     assert "script-src 'unsafe-inline'" in first.headers[
         "content-security-policy"
     ]
-    assert second.status_code == 404
+    assert second.text == source
+    assert third.text == source
+    assert all(response.status_code == 200 for response in repeated)
+    assert all(response.text == source for response in repeated)
+
+
+def test_tool_ui_event_snapshot_requires_token_and_replays_session_events(
+    tmp_path: Path,
+) -> None:
+    """Deliver Tool UI events over the WebKit-compatible HTTP channel."""
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response]:
+        broker = ToolUIBroker()
+        await broker.publish_status(
+            binding=ToolUIBinding(
+                tool_id="builtin:timer",
+                update_every_s=0.5,
+            ),
+            tool_name="timer",
+            call_id="timer-call",
+            status="5 of 10 seconds",
+            running=True,
+        )
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:timer",
+                update_every_s=0.5,
+            ),
+            tool_name="timer",
+            call_id="timer-call",
+            message="Timer started",
+            status="5 of 10 seconds",
+            running=True,
+        )
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+            tool_ui_broker=broker,
+        )
+        unauthorized = await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+        )
+        authorized = await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+        return unauthorized, authorized
+
+    unauthorized, authorized = asyncio.run(scenario())
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    events = authorized.json()["events"]
+    assert [event["type"] for event in events] == [
+        "tool_ui.emit",
+        "tool_ui.status",
+    ]
+    assert all(event["sessionId"] == "session-1" for event in events)
