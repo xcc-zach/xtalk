@@ -2,6 +2,7 @@ const APP_COMMANDS: &[&str] = &[
     "apply_tool_changes",
     "apply_model_config",
     "get_backend_connection",
+    "get_web_search_settings",
     "get_installed_tools",
     "get_model_config_selection",
     "install_tool_directory",

@@ -26,7 +26,6 @@ code.
 9. Tauri supplies the packaged Silero model as a top-level configuration
    fallback, so the Python sidecar produces speech boundaries when the selected
    configuration does not declare its own VAD.
-
 The sidecar disables HTTP access logs so the query capability used by the
 public SDK cannot appear in URL logs.
 
@@ -36,12 +35,13 @@ The WebView follows the layout and visual language of `examples/sample_app`
 without importing example implementation code. It provides a centered brand
 bar, Orb and conversation views, a bottom glass control dock, and a right-side
 settings-and-diagnostics drawer. The drawer shows the selected external model
-configuration and installed developer tools. It can replace the configuration,
-copy tool directories into AppData, update their enabled state, restart the
-sidecar, and rediscover the local service. Light, dark, and narrow-window
-layouts share the same desktop adapter and offline state model. The macOS
-bundle includes the microphone usage description and audio-input entitlement
-required when a user starts a voice conversation.
+configuration, built-in tools, and installed developer tools. It can replace
+the configuration, manage tool settings, copy tool directories into AppData,
+update their enabled state, restart the sidecar, and rediscover the local
+service. Light, dark, and narrow-window layouts share the same desktop adapter
+and offline state model. The macOS bundle includes the microphone usage
+description and audio-input entitlement required when a user starts a voice
+conversation.
 
 ## Authentication contract
 

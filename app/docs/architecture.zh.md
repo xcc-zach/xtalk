@@ -22,7 +22,6 @@ runtime builder 与工具 API，包括原生工具所需、文档已公开的
 8. UI 创建 `xtalk-client` Session，并关闭前端 VAD 与增强器。
 9. Tauri 将随包 Silero 模型作为顶层配置回退项传给 sidecar；当所选配置没有显式
    声明 VAD 时，由 Python sidecar 产生语音边界。
-
 sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出现在 URL
 日志中。
 
@@ -30,10 +29,10 @@ sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出
 
 WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
 界面包含居中品牌栏、Orb/对话双视图、底部玻璃控制坞和右侧“设置与诊断”抽屉。
-抽屉显示当前外部模型配置与已安装开发者工具，可重新选择配置、将工具目录复制到
-AppData、修改启用状态、重启 sidecar 并重新探测本地服务。浅色、深色与窄窗口布局
-共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话时所需的
-麦克风用途说明和 audio-input entitlement。
+抽屉显示当前外部模型配置、内置工具与已安装开发者工具，可重新选择配置、管理工具
+设置、将工具目录复制到 AppData、修改启用状态、重启 sidecar 并重新探测本地服务。
+浅色、深色与窄窗口布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户
+开始语音对话时所需的麦克风用途说明和 audio-input entitlement。
 
 ## 认证契约
 

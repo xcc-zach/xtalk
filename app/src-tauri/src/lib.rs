@@ -7,7 +7,10 @@ mod tools;
 
 use std::{path::PathBuf, sync::Arc};
 
-use sidecar::{BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection};
+use sidecar::{
+    BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection,
+    NativeWebSearchSettings,
+};
 use tauri::{Manager, State, WindowEvent};
 use tools::NativeToolDefinition;
 
@@ -20,6 +23,7 @@ pub fn run() {
             apply_tool_changes,
             apply_model_config,
             get_backend_connection,
+            get_web_search_settings,
             get_installed_tools,
             get_model_config_selection,
             install_tool_directory,
@@ -55,12 +59,29 @@ async fn get_model_config_selection(
     Ok(supervisor.selection().await)
 }
 
+#[tauri::command]
+async fn get_web_search_settings(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+) -> Result<NativeWebSearchSettings, String> {
+    supervisor
+        .web_search_settings(&app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn apply_model_config(
     app: tauri::AppHandle,
     supervisor: State<'_, Arc<BackendSupervisor>>,
     config_path: PathBuf,
+    web_search_enabled: bool,
+    web_search_api_key: Option<String>,
 ) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .configure_web_search(&app, web_search_enabled, web_search_api_key)
+        .await
+        .map_err(|error| error.to_string())?;
     supervisor
         .apply_model_config(&app, config_path)
         .await
@@ -94,11 +115,17 @@ fn remove_installed_tool(app: tauri::AppHandle, tool_id: String) -> Result<(), S
     tools::remove_installed_tool(&app, &tool_id)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 async fn apply_tool_changes(
     app: tauri::AppHandle,
     supervisor: State<'_, Arc<BackendSupervisor>>,
+    web_search_enabled: bool,
+    web_search_api_key: Option<String>,
 ) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .configure_web_search(&app, web_search_enabled, web_search_api_key)
+        .await
+        .map_err(|error| error.to_string())?;
     supervisor
         .restart(&app)
         .await

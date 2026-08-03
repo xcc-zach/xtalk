@@ -145,9 +145,10 @@ classes, or zero-argument tool factories accepted by
 already included in the frozen sidecar.
 
 Installing, enabling, disabling, or deleting a tool updates the AppData
-registry. Select **Apply and restart local service** to rebuild the configured
-Agent with the enabled tools. The bundled sample-compatible timer remains a
-fallback; an installed enabled tool named `timer` replaces that fallback.
+registry. Select **Apply tool configuration and restart local service** to
+rebuild the configured Agent with the enabled tools. The bundled
+sample-compatible timer remains a fallback; an installed enabled tool with the
+same name as a bundled tool replaces that bundled tool.
 
 ## Local interface
 

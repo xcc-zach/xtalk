@@ -999,6 +999,20 @@ summary,
   accent-color: var(--primary);
 }
 
+.developer-tool-key-button {
+  padding: 5px 7px;
+  cursor: pointer;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: var(--surface-solid);
+  font-size: 10px;
+}
+
+.developer-tool-key-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
 .developer-tool-remove {
   width: 28px;
   height: 28px;
@@ -1049,6 +1063,103 @@ summary,
 
 .drawer-action-button:hover:not(:disabled) {
   background: var(--surface-hover);
+}
+
+.settings-dialog {
+  max-width: none;
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+}
+
+.settings-dialog::backdrop {
+  background: var(--backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.settings-dialog-card {
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow);
+}
+
+.settings-dialog-card header {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-dialog-card h2,
+.settings-dialog-card p {
+  margin: 0;
+}
+
+.settings-dialog-card h2 {
+  font-size: 17px;
+}
+
+.settings-dialog-card p {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-dialog-field {
+  display: grid;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-dialog-field input {
+  min-width: 0;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface-muted);
+  font: inherit;
+}
+
+.settings-dialog-field input:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 12%, transparent);
+}
+
+.settings-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-dialog-button {
+  min-height: 38px;
+  padding: 0 14px;
+  cursor: pointer;
+  border-radius: 9px;
+  background: var(--surface-muted);
+  font-weight: 590;
+}
+
+.settings-dialog-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.settings-dialog-button-primary {
+  color: var(--primary-text);
+  background: var(--primary);
+}
+
+.settings-dialog-button-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--primary);
 }
 
 .toast-region {

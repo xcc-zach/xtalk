@@ -6,11 +6,13 @@ import {
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
   getNativeBackendConnection,
+  getNativeWebSearchSettings,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
   installNativeToolDirectory,
   removeNativeInstalledTool,
   setNativeToolEnabled,
+  type NativeWebSearchSettings,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
 } from "./adapters/native-capabilities";
@@ -53,6 +55,25 @@ const elements = {
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
   ),
+  webSearchEnabledToggle: requireElement<HTMLInputElement>(
+    "web-search-enabled-toggle",
+  ),
+  webSearchConfigureKeyButton: requireElement<HTMLButtonElement>(
+    "web-search-configure-key-button",
+  ),
+  webSearchApiKeyDialog: requireElement<HTMLDialogElement>(
+    "web-search-api-key-dialog",
+  ),
+  webSearchApiKeyForm: requireElement<HTMLFormElement>(
+    "web-search-api-key-form",
+  ),
+  webSearchApiKeyDialogInput: requireElement<HTMLInputElement>(
+    "web-search-api-key-dialog-input",
+  ),
+  webSearchApiKeyCancelButton: requireElement<HTMLButtonElement>(
+    "web-search-api-key-cancel-button",
+  ),
+  webSearchStatus: requireElement<HTMLElement>("web-search-status"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
   developerToolsStatus: requireElement<HTMLElement>(
     "developer-tools-status",
@@ -93,10 +114,14 @@ let sessionOperation = false;
 let sendingText = false;
 let modelConfigOperation = false;
 let toolOperation = false;
-let toolChangesPending = false;
+let webSearchChangesPending = false;
+let developerToolChangesPending = false;
 let diagnosticsOpen = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
+let webSearchSettings: NativeWebSearchSettings | null = null;
+let pendingWebSearchApiKey: string | null = null;
+let enableWebSearchAfterKeyDialog = false;
 let installedTools: NativeToolDefinition[] = [];
 let latestSnapshot = EMPTY_SNAPSHOT;
 
@@ -482,6 +507,22 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
   updateToolControls();
 }
 
+function renderWebSearchSettings(settings: NativeWebSearchSettings): void {
+  webSearchSettings = settings;
+  elements.webSearchEnabledToggle.checked = settings.enabled;
+  const canConfigureKey =
+    settings.keySource === "session" ||
+    pendingWebSearchApiKey !== null ||
+    (settings.keySource === "missing" && settings.enabled);
+  elements.webSearchConfigureKeyButton.hidden = !canConfigureKey;
+  elements.webSearchConfigureKeyButton.textContent =
+    settings.keySource === "session" || pendingWebSearchApiKey !== null
+      ? "修改本次 Key"
+      : "输入 Key";
+  updateWebSearchStatus();
+  updateToolControls();
+}
+
 function updateToolControls(): void {
   const busy =
     toolOperation ||
@@ -491,7 +532,14 @@ function updateToolControls(): void {
     sendingText;
   elements.installToolDirectoryButton.disabled = busy;
   elements.applyToolChangesButton.disabled =
-    busy || !toolChangesPending || modelConfigPath === null;
+    busy ||
+    (!webSearchChangesPending && !developerToolChangesPending) ||
+    modelConfigPath === null;
+  elements.webSearchEnabledToggle.disabled =
+    busy ||
+    webSearchSettings === null;
+  elements.webSearchConfigureKeyButton.disabled =
+    busy || webSearchSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
   >("input, button")) {
@@ -499,12 +547,58 @@ function updateToolControls(): void {
   }
 }
 
+function updateWebSearchStatus(message?: string): void {
+  if (message) {
+    elements.webSearchStatus.textContent = message;
+    return;
+  }
+  if (webSearchSettings === null) {
+    elements.webSearchStatus.textContent = "正在读取联网搜索配置";
+    return;
+  }
+  if (webSearchChangesPending) {
+    if (
+      webSearchSettings.enabled &&
+      webSearchSettings.keySource === "missing" &&
+      pendingWebSearchApiKey === null
+    ) {
+      elements.webSearchStatus.textContent =
+        "请输入本次 App 会话使用的 Serper API Key";
+      return;
+    }
+    if (pendingWebSearchApiKey !== null) {
+      elements.webSearchStatus.textContent = webSearchSettings.enabled
+        ? "已输入本次 App 使用的 Key；应用并重启本地服务后生效"
+        : "本次 App 使用的 Key 已修改；应用并重启本地服务后生效";
+      return;
+    }
+    elements.webSearchStatus.textContent =
+      "联网搜索配置已修改；应用并重启本地服务后生效";
+    return;
+  }
+  if (webSearchSettings.keySource === "missing") {
+    elements.webSearchStatus.textContent =
+      webSearchSettings.enabled
+        ? "联网搜索已选择；请输入本次 App 会话使用的 Serper API Key"
+        : "未检测到环境变量；启用联网搜索时会要求输入 Key";
+    return;
+  }
+  elements.webSearchStatus.textContent =
+    webSearchSettings.enabled
+      ? webSearchSettings.keySource === "environment"
+        ? "联网搜索已启用，正在使用环境变量中的 Serper Key"
+        : "联网搜索已启用，正在使用本次 App 会话的 Serper Key"
+      : webSearchSettings.keySource === "environment"
+        ? "联网搜索已关闭，环境变量中的 Serper Key 可用"
+        : "联网搜索已关闭，本次 App 会话的 Serper Key 可用";
+}
+
 function updateDeveloperToolsStatus(message?: string): void {
   if (message) {
     elements.developerToolsStatus.textContent = message;
     return;
   }
-  if (toolChangesPending) {
+  if (developerToolChangesPending) {
     elements.developerToolsStatus.textContent =
       "工具配置已修改；应用并重启本地服务后生效";
     return;
@@ -526,6 +620,12 @@ async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
   renderInstalledTools(tools);
   updateDeveloperToolsStatus();
   return tools;
+}
+
+async function refreshWebSearchSettings(): Promise<NativeWebSearchSettings> {
+  const settings = await getNativeWebSearchSettings();
+  renderWebSearchSettings(settings);
+  return settings;
 }
 
 async function detachCurrentAdapter(): Promise<void> {
@@ -615,9 +715,16 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
     elements.modelConfigStatus.textContent = "正在重启本地服务";
     setBackendStatus("loading", "正在应用模型配置");
     await detachCurrentAdapter();
-    await applyNativeModelConfig(selectedPath);
-    toolChangesPending = false;
+    await applyNativeModelConfig(
+      selectedPath,
+      webSearchSettings?.enabled ?? false,
+      pendingWebSearchApiKey,
+    );
+    pendingWebSearchApiKey = null;
+    webSearchChangesPending = false;
+    developerToolChangesPending = false;
     const selection = await refreshModelConfigSelection();
+    await refreshWebSearchSettings();
     updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
       ? "配置已应用，本地服务已重启"
@@ -659,7 +766,7 @@ async function chooseAndInstallToolDirectory(): Promise<void> {
 
     updateDeveloperToolsStatus("正在复制工具目录到 AppData");
     const installed = await installNativeToolDirectory(selectedPath);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       `${installed.displayName} 已安装；重启本地服务后生效`,
@@ -689,7 +796,7 @@ async function updateInstalledToolEnabled(
 
   try {
     const updated = await setNativeToolEnabled(toolId, enabled);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       `${updated.displayName} 已${updated.enabled ? "启用" : "禁用"}；重启本地服务后生效`,
@@ -717,7 +824,7 @@ async function removeInstalledTool(toolId: string): Promise<void> {
 
   try {
     await removeNativeInstalledTool(toolId);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       `${tool?.displayName ?? "工具"}已删除；重启本地服务后生效`,
@@ -732,8 +839,66 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   }
 }
 
-async function applyInstalledToolChanges(): Promise<void> {
-  if (toolOperation || !toolChangesPending) {
+function updateWebSearchEnabled(enabled: boolean): void {
+  if (webSearchSettings === null) {
+    return;
+  }
+  if (
+    enabled &&
+    webSearchSettings.keySource === "missing" &&
+    pendingWebSearchApiKey === null
+  ) {
+    openWebSearchApiKeyDialog(true);
+    return;
+  }
+  webSearchChangesPending = true;
+  renderWebSearchSettings({ ...webSearchSettings, enabled });
+}
+
+function openWebSearchApiKeyDialog(enableAfterSave: boolean): void {
+  enableWebSearchAfterKeyDialog = enableAfterSave;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+  elements.webSearchApiKeyDialog.showModal();
+  elements.webSearchApiKeyDialogInput.focus();
+}
+
+function cancelWebSearchApiKeyDialog(): void {
+  enableWebSearchAfterKeyDialog = false;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialog.close();
+  elements.webSearchEnabledToggle.checked =
+    webSearchSettings?.enabled ?? false;
+}
+
+function saveWebSearchApiKey(): void {
+  const apiKey = elements.webSearchApiKeyDialogInput.value.trim();
+  if (!apiKey) {
+    elements.webSearchApiKeyDialogInput.setCustomValidity(
+      "请输入 Serper API Key",
+    );
+    elements.webSearchApiKeyDialogInput.reportValidity();
+    return;
+  }
+
+  pendingWebSearchApiKey = apiKey;
+  webSearchChangesPending = true;
+  const enabled = enableWebSearchAfterKeyDialog
+    ? true
+    : (webSearchSettings?.enabled ?? false);
+  enableWebSearchAfterKeyDialog = false;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialog.close();
+  if (webSearchSettings !== null) {
+    renderWebSearchSettings({ ...webSearchSettings, enabled });
+  }
+}
+
+async function applyToolChanges(): Promise<void> {
+  if (
+    toolOperation ||
+    (!webSearchChangesPending && !developerToolChangesPending)
+  ) {
     return;
   }
   if (modelConfigPath === null) {
@@ -743,18 +908,26 @@ async function applyInstalledToolChanges(): Promise<void> {
 
   toolOperation = true;
   showError(null);
+  updateWebSearchStatus("正在重启本地服务并加载工具");
   updateDeveloperToolsStatus("正在重启本地服务并加载工具");
-  setBackendStatus("loading", "正在应用开发者工具");
+  setBackendStatus("loading", "正在应用工具配置");
   updateControls(latestSnapshot);
 
   try {
     await detachCurrentAdapter();
-    await applyNativeToolChanges();
-    toolChangesPending = false;
+    await applyNativeToolChanges(
+      webSearchSettings?.enabled ?? false,
+      pendingWebSearchApiKey,
+    );
+    pendingWebSearchApiKey = null;
+    webSearchChangesPending = false;
+    developerToolChangesPending = false;
+    await refreshWebSearchSettings();
     updateDeveloperToolsStatus("工具配置已应用，本地服务已重启");
     await discoverBackend();
   } catch (error) {
     const message = `工具配置应用失败：${formatError(error)}`;
+    updateWebSearchStatus("工具配置应用失败");
     updateDeveloperToolsStatus("工具配置应用失败");
     await discoverBackend();
     showError(message);
@@ -767,6 +940,7 @@ async function applyInstalledToolChanges(): Promise<void> {
 
 async function initializeApplication(): Promise<void> {
   try {
+    await refreshWebSearchSettings();
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
@@ -898,8 +1072,28 @@ elements.selectModelConfigButton.addEventListener("click", () => {
 elements.installToolDirectoryButton.addEventListener("click", () => {
   void chooseAndInstallToolDirectory();
 });
+elements.webSearchEnabledToggle.addEventListener("change", () => {
+  updateWebSearchEnabled(elements.webSearchEnabledToggle.checked);
+});
+elements.webSearchConfigureKeyButton.addEventListener("click", () => {
+  openWebSearchApiKeyDialog(false);
+});
+elements.webSearchApiKeyForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveWebSearchApiKey();
+});
+elements.webSearchApiKeyDialogInput.addEventListener("input", () => {
+  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+});
+elements.webSearchApiKeyCancelButton.addEventListener("click", () => {
+  cancelWebSearchApiKeyDialog();
+});
+elements.webSearchApiKeyDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelWebSearchApiKeyDialog();
+});
 elements.applyToolChangesButton.addEventListener("click", () => {
-  void applyInstalledToolChanges();
+  void applyToolChanges();
 });
 elements.textComposer.addEventListener("submit", (event) => {
   event.preventDefault();
