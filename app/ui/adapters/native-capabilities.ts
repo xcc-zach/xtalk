@@ -20,6 +20,22 @@ export interface NativeModelConfigSelection {
 }
 
 /**
+ * Web-search settings managed by the native desktop layer.
+ */
+export interface NativeWebSearchSettings {
+  /** Whether asynchronous web search is selected for the next restart. */
+  enabled: boolean;
+  /** Where the API key for the current App session comes from. */
+  keySource: NativeWebSearchApiKeySource;
+}
+
+/** Supported sources for the current Serper API key. */
+export type NativeWebSearchApiKeySource =
+  | "environment"
+  | "session"
+  | "missing";
+
+/**
  * One developer tool directory installed into application data.
  */
 export interface NativeToolDefinition {
@@ -36,6 +52,7 @@ export interface NativeToolDefinition {
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
 const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
+const WEB_SEARCH_SETTINGS_COMMAND = "get_web_search_settings";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
@@ -81,6 +98,17 @@ export async function getNativeModelConfigSelection(): Promise<NativeModelConfig
 }
 
 /**
+ * Reads persisted web-search selection and current availability.
+ *
+ * @returns Current web-search settings from the trusted native layer.
+ */
+export async function getNativeWebSearchSettings(): Promise<NativeWebSearchSettings> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(WEB_SEARCH_SETTINGS_COMMAND);
+  return parseNativeWebSearchSettings(payload);
+}
+
+/**
  * Opens the native JSON file picker for a model configuration.
  *
  * @returns Selected filesystem path, or `null` when the user cancels.
@@ -114,14 +142,20 @@ export async function chooseNativeModelConfigFile(): Promise<string | null> {
  * Persists a selected model configuration and restarts the native sidecar.
  *
  * @param configPath Absolute JSON configuration path selected by the user.
+ * @param webSearchEnabled Desired web-search state after restart.
+ * @param webSearchApiKey Optional memory-only Serper key for this App session.
  * @returns Validated connection details for the restarted sidecar.
  */
 export async function applyNativeModelConfig(
   configPath: string,
+  webSearchEnabled: boolean,
+  webSearchApiKey: string | null,
 ): Promise<NativeBackendConnection> {
   requireTauriRuntime();
   const payload = await invoke<unknown>(APPLY_MODEL_CONFIG_COMMAND, {
     configPath,
+    webSearchEnabled,
+    webSearchApiKey,
   });
   return parseNativeBackendConnection(payload);
 }
@@ -212,11 +246,19 @@ export async function removeNativeInstalledTool(toolId: string): Promise<void> {
 /**
  * Restarts the sidecar so persisted tool changes become active.
  *
+ * @param webSearchEnabled Desired web-search state after restart.
+ * @param webSearchApiKey Optional memory-only Serper key for this App session.
  * @returns Validated connection details for the restarted sidecar.
  */
-export async function applyNativeToolChanges(): Promise<NativeBackendConnection> {
+export async function applyNativeToolChanges(
+  webSearchEnabled: boolean,
+  webSearchApiKey: string | null,
+): Promise<NativeBackendConnection> {
   requireTauriRuntime();
-  const payload = await invoke<unknown>(APPLY_TOOL_CHANGES_COMMAND);
+  const payload = await invoke<unknown>(APPLY_TOOL_CHANGES_COMMAND, {
+    webSearchEnabled,
+    webSearchApiKey,
+  });
   return parseNativeBackendConnection(payload);
 }
 
@@ -272,6 +314,25 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
     entrypoint,
     enabled,
   };
+}
+
+function parseNativeWebSearchSettings(
+  payload: unknown,
+): NativeWebSearchSettings {
+  if (!isRecord(payload)) {
+    throw new Error("Tauri returned invalid web-search settings.");
+  }
+  const enabled = payload.enabled;
+  const keySource = payload.keySource;
+  if (
+    typeof enabled !== "boolean" ||
+    (keySource !== "environment" &&
+      keySource !== "session" &&
+      keySource !== "missing")
+  ) {
+    throw new Error("Web-search settings contain invalid fields.");
+  }
+  return { enabled, keySource };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

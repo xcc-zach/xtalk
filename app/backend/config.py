@@ -67,6 +67,8 @@ class StartupConfig:
         Writable per-user directory forced into ``service_config.data_dir``.
     origins : tuple[str, ...]
         Exact WebView origins permitted to call the loopback service.
+    web_search_enabled : bool
+        Whether the trusted desktop parent enabled asynchronous web search.
     config_overlay : dict[str, Any]
         Generic configuration overlay recursively merged over the base JSON.
     config_fallbacks : dict[str, Any], optional
@@ -79,6 +81,7 @@ class StartupConfig:
     config_path: Path
     data_dir: Path
     origins: tuple[str, ...]
+    web_search_enabled: bool
     config_overlay: dict[str, Any]
     config_fallbacks: dict[str, Any] = field(default_factory=dict)
 
@@ -138,6 +141,10 @@ class StartupConfig:
             if normalized not in normalized_origins:
                 normalized_origins.append(normalized)
 
+        web_search_enabled = payload.get("web_search_enabled", False)
+        if not isinstance(web_search_enabled, bool):
+            raise ValueError("web_search_enabled must be a boolean")
+
         overlay_value = payload.get("config_overlay", {})
         if not isinstance(overlay_value, dict):
             raise ValueError("config_overlay must be a JSON object")
@@ -152,6 +159,7 @@ class StartupConfig:
             config_path=Path(config_path_value).expanduser().resolve(),
             data_dir=Path(data_dir_value).expanduser().resolve(),
             origins=tuple(normalized_origins),
+            web_search_enabled=web_search_enabled,
             config_overlay=copy.deepcopy(overlay_value),
             config_fallbacks=copy.deepcopy(fallbacks_value),
         )

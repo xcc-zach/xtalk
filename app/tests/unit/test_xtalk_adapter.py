@@ -66,10 +66,22 @@ class _FakeXtalk:
         return cls.latest_builder
 
 
+class _FakeTimeTool:
+    """Stand in for the core time tool."""
+
+    name = "get_time"
+
+
+class _FakeWebSearchTool:
+    """Stand in for the core asynchronous web-search tool."""
+
+    name = "web_search"
+
+
 def test_adapter_builds_runtime_and_tools_through_public_apis(
     monkeypatch,
 ) -> None:
-    """Build the desktop runtime through the public builder and timer API."""
+    """Build the desktop runtime through public builder and tool APIs."""
 
     config = {
         "llm_agent": {
@@ -81,16 +93,21 @@ def test_adapter_builds_runtime_and_tools_through_public_apis(
     original_config = copy.deepcopy(config)
     _FakeXtalk.latest_builder = None
     monkeypatch.setattr(xtalk_adapter, "Xtalk", _FakeXtalk)
+    monkeypatch.setattr(
+        xtalk_adapter,
+        "build_time_tool",
+        lambda: _FakeTimeTool,
+    )
 
     runtime = xtalk_adapter.build_xtalk_runtime(config)
 
     assert config == original_config
     assert _FakeXtalk.latest_builder is not None
     assert _FakeXtalk.latest_builder.config is config
-    assert _FakeXtalk.latest_builder.tools == [TimerTool]
+    assert _FakeXtalk.latest_builder.tools == [TimerTool, _FakeTimeTool]
     assert _FakeXtalk.latest_builder.built
     assert runtime.config is config
-    assert runtime.tools == [TimerTool]
+    assert runtime.tools == [TimerTool, _FakeTimeTool]
 
 
 def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
@@ -109,16 +126,46 @@ def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
     assert runtime.tools == []
 
 
-def test_adapter_allows_installed_timer_to_replace_the_builtin(
+def test_adapter_registers_web_search_when_enabled(monkeypatch) -> None:
+    """Register asynchronous web search only when the desktop enables it."""
+
+    config = {"llm_agent": {"type": "DefaultAgent", "params": {}}}
+    _FakeXtalk.latest_builder = None
+    monkeypatch.setattr(xtalk_adapter, "Xtalk", _FakeXtalk)
+    monkeypatch.setattr(
+        xtalk_adapter,
+        "build_time_tool",
+        lambda: _FakeTimeTool,
+    )
+    monkeypatch.setattr(
+        xtalk_adapter,
+        "build_async_web_search_tool",
+        lambda: _FakeWebSearchTool,
+    )
+
+    runtime = xtalk_adapter.build_xtalk_runtime(
+        config,
+        web_search_enabled=True,
+    )
+
+    assert runtime.tools == [TimerTool, _FakeTimeTool, _FakeWebSearchTool]
+
+
+def test_adapter_allows_installed_tools_to_replace_bundled_tools(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Prefer an enabled developer timer over the bundled fallback."""
+    """Prefer enabled developer tools over bundled tools with the same name."""
 
     class DeveloperTimer:
         """Stand in for a developer-provided timer tool."""
 
         name = "timer"
+
+    class DeveloperTime:
+        """Stand in for a developer-provided time tool."""
+
+        name = "get_time"
 
     config = {"llm_agent": {"type": "DefaultAgent", "params": {}}}
     _FakeXtalk.latest_builder = None
@@ -126,7 +173,7 @@ def test_adapter_allows_installed_timer_to_replace_the_builtin(
     monkeypatch.setattr(
         xtalk_adapter,
         "load_enabled_tools",
-        lambda tools_root: [DeveloperTimer],
+        lambda tools_root: [DeveloperTimer, DeveloperTime],
     )
 
     runtime = xtalk_adapter.build_xtalk_runtime(
@@ -135,8 +182,8 @@ def test_adapter_allows_installed_timer_to_replace_the_builtin(
     )
 
     assert _FakeXtalk.latest_builder is not None
-    assert _FakeXtalk.latest_builder.tools == [DeveloperTimer]
-    assert runtime.tools == [DeveloperTimer]
+    assert _FakeXtalk.latest_builder.tools == [DeveloperTimer, DeveloperTime]
+    assert runtime.tools == [DeveloperTimer, DeveloperTime]
 
 
 def test_adapter_mounts_routes_through_the_runtime_public_method() -> None:

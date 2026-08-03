@@ -72,6 +72,55 @@
             </p>
           </section>
 
+          <section class="debug-section settings-section" aria-labelledby="builtin-tools-title">
+            <h3 id="builtin-tools-title">内置工具</h3>
+            <p>
+              当前时间始终可用。联网搜索优先读取桌面环境中的
+              <code>SERPER_API_KEY</code> 或 <code>GOOGLE_SERPER_API_KEY</code>；
+              没有环境变量时可输入仅供本次 App 运行使用的密钥。
+            </p>
+            <div class="developer-tools-list" aria-label="内置工具">
+              <article class="developer-tool-row">
+                <div class="developer-tool-copy">
+                  <strong>当前时间</strong>
+                  <code>get_time · 始终启用</code>
+                </div>
+              </article>
+              <article class="developer-tool-row">
+                <div class="developer-tool-copy">
+                  <strong>联网搜索</strong>
+                  <code>web_search · 异步 Serper 搜索</code>
+                </div>
+                <div class="developer-tool-actions">
+                  <button
+                    id="web-search-configure-key-button"
+                    class="developer-tool-key-button"
+                    type="button"
+                    hidden
+                  >
+                    配置 Key
+                  </button>
+                  <label class="developer-tool-toggle">
+                    <input
+                      id="web-search-enabled-toggle"
+                      type="checkbox"
+                      aria-label="启用联网搜索工具"
+                    />
+                    <span>启用</span>
+                  </label>
+                </div>
+              </article>
+            </div>
+            <p
+              id="web-search-status"
+              class="settings-status"
+              role="status"
+              aria-live="polite"
+            >
+              正在读取联网搜索配置
+            </p>
+          </section>
+
           <section class="debug-section settings-section" aria-labelledby="developer-tools-title">
             <h3 id="developer-tools-title">开发者工具</h3>
             <p>
@@ -97,7 +146,7 @@
                 type="button"
                 disabled
               >
-                应用并重启本地服务
+                应用工具配置并重启本地服务
               </button>
             </div>
             <p
@@ -317,6 +366,47 @@
       <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true">
         <div id="error-banner" class="toast toast-error" role="alert" hidden></div>
       </div>
+
+      <dialog
+        id="web-search-api-key-dialog"
+        class="settings-dialog"
+        aria-labelledby="web-search-api-key-dialog-title"
+      >
+        <form id="web-search-api-key-form" class="settings-dialog-card">
+          <header>
+            <h2 id="web-search-api-key-dialog-title">配置联网搜索 Key</h2>
+            <p>
+              Key 只在本次 App 运行期间保存在内存中，关闭 App 后失效，不会写入本地文件。
+            </p>
+          </header>
+          <label class="settings-dialog-field" for="web-search-api-key-dialog-input">
+            <span>Serper API Key</span>
+            <input
+              id="web-search-api-key-dialog-input"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="输入 Serper API Key"
+              required
+            />
+          </label>
+          <div class="settings-dialog-actions">
+            <button
+              id="web-search-api-key-cancel-button"
+              class="settings-dialog-button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              class="settings-dialog-button settings-dialog-button-primary"
+              type="submit"
+            >
+              使用此 Key
+            </button>
+          </div>
+        </form>
+      </dialog>
     </div>
 
     <script type="module" src="/main.ts"></script>

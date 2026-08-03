@@ -128,6 +128,7 @@ def build_application(
     xtalk_runtime = build_xtalk_runtime(
         effective_config,
         tools_root=startup.data_dir / "tools",
+        web_search_enabled=startup.web_search_enabled,
     )
     return create_application(
         startup=startup,
