@@ -1,4 +1,5 @@
 .build/
+.swiftpm/
 .pytest_cache/
 .venv/
 __pycache__/
@@ -10,5 +11,13 @@ resources/artifacts/
 resources/manifests/core-artifacts.lock.json
 src-tauri/binaries/app-backend-*
 src-tauri/binaries/app-backend-runtime/
+src-tauri/binaries/local-model-runtime-*
+src-tauri/binaries/mlx-model-runtime-*
+src-tauri/binaries/sherpa-onnx-offline-websocket-server-*
+resources/managed-runtime/ort-tts/*
+resources/managed-runtime/mlx-swift_Cmlx.bundle/
+resources/managed-runtime/sherpa/*
+!resources/managed-runtime/ort-tts/README.md
+!resources/managed-runtime/sherpa/README.md
 src-tauri/gen/
 src-tauri/target/

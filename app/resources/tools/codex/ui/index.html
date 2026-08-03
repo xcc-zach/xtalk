@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        color: CanvasText;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 6px; background: transparent; }
+      .card {
+        display: grid;
+        grid-template-columns: 56px minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: center;
+        padding: 16px 18px;
+        border: 1px solid rgb(127 127 127 / 22%);
+        border-radius: 18px;
+        background: rgb(255 255 255 / 4%);
+      }
+      .icon {
+        display: grid;
+        width: 56px;
+        height: 56px;
+        place-items: center;
+        border-radius: 15px;
+        color: #111827;
+        background: rgb(127 127 127 / 7%);
+      }
+      @media (prefers-color-scheme: dark) { .icon { color: #f5f5f5; } }
+      .icon svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2; }
+      .copy { min-width: 0; }
+      h1 { margin: 0; font-size: 17px; letter-spacing: -0.02em; }
+      .status, .message, .meta { overflow-wrap: anywhere; color: rgb(127 127 127); }
+      .status { margin-top: 4px; font-size: 13px; }
+      .message { margin-top: 6px; max-height: 120px; overflow: hidden; font-size: 12px; white-space: pre-wrap; }
+      .message:empty, .meta:empty { display: none; }
+      .meta { margin-top: 5px; font-size: 11px; }
+      .badge {
+        padding: 8px 12px;
+        border: 1px solid rgb(127 127 127 / 20%);
+        border-radius: 12px;
+        color: rgb(127 127 127);
+        font-size: 12px;
+        font-weight: 620;
+      }
+      .badge.complete { color: #16855b; }
+      .badge.failed { color: #c2414b; }
+      @media (max-width: 520px) {
+        .card { grid-template-columns: 48px minmax(0, 1fr); padding: 14px; }
+        .icon { width: 48px; height: 48px; }
+        .badge { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="icon" aria-hidden="true">
+        <svg viewBox="0 0 40 40">
+          <path d="M20 4.5a15.5 15.5 0 1 0 15.5 15.5A15.5 15.5 0 0 0 20 4.5Z"></path>
+          <path d="M20 10v20M10 20h20M13 13l14 14M27 13 13 27"></path>
+        </svg>
+      </div>
+      <div class="copy">
+        <h1 id="title">Codex</h1>
+        <div id="status" class="status">Preparing…</div>
+        <div id="message" class="message"></div>
+        <div id="meta" class="meta"></div>
+      </div>
+      <span id="badge" class="badge">Running</span>
+    </main>
+    <script>
+      const byId = (id) => document.getElementById(id);
+      const labels = {
+        codex_session_search: "Search session",
+        codex_session_create: "New session",
+        codex_session_continue: "Continue session",
+        codex_session_set_model: "Change model",
+        codex_session_delete: "Archive session",
+      };
+      const render = (event, message = "") => {
+        const failed = /failed|error/i.test(event.status || "");
+        let displayMessage = message;
+        let details = labels[event.toolName] || String(event.toolName || "").replaceAll("_", " ");
+        if (message.startsWith("{")) {
+          try {
+            const output = JSON.parse(message);
+            displayMessage = output.message || message;
+            const settings = [output.model, output.effort].filter(Boolean).join(" · ");
+            details = [details, settings].filter(Boolean).join(" · ");
+          } catch (_) {
+            displayMessage = message;
+          }
+        }
+        byId("title").textContent = "Codex";
+        byId("status").textContent = event.status || (event.running ? "Running" : "Complete");
+        byId("message").textContent = displayMessage;
+        byId("meta").textContent = details;
+        byId("badge").textContent = failed ? "Failed" : event.running ? "Running" : "Complete";
+        byId("badge").classList.toggle("complete", !event.running && !failed);
+        byId("badge").classList.toggle("failed", failed);
+      };
+      window.xtalkToolUI.status((event) => render(event));
+      window.xtalkToolUI.emit((event) => render(event, event.message));
+    </script>
+  </body>
+</html>

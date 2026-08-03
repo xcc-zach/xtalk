@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        color: CanvasText;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 6px; background: transparent; }
+      .card {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr) auto;
+        gap: 20px;
+        align-items: center;
+        padding: 20px 22px;
+        border: 1px solid rgb(127 127 127 / 22%);
+        border-radius: 20px;
+        background: rgb(255 255 255 / 4%);
+      }
+      .icon {
+        display: grid;
+        width: 64px;
+        height: 64px;
+        place-items: center;
+        border-radius: 17px;
+        color: #35c6f4;
+        background: rgb(127 127 127 / 7%);
+      }
+      .icon svg {
+        width: 37px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2.4;
+      }
+      .copy { min-width: 0; }
+      h1 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+      .status, .message, .meta {
+        color: rgb(127 127 127);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .status { margin-top: 5px; font-size: 13px; }
+      .message { margin-top: 5px; }
+      .message:empty { display: none; }
+      .progress {
+        height: 4px;
+        margin-top: 12px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgb(127 127 127 / 16%);
+      }
+      .progress span {
+        display: block;
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: #35c6f4;
+        transition: width 180ms ease;
+      }
+      .meta {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 6px;
+        font-size: 11px;
+      }
+      .badge {
+        min-width: 92px;
+        padding: 10px 14px;
+        border: 1px solid rgb(127 127 127 / 20%);
+        border-radius: 14px;
+        font-size: 14px;
+        font-weight: 620;
+        text-align: center;
+      }
+      .badge.complete { color: #16855b; }
+      @media (max-width: 520px) {
+        .card { grid-template-columns: 52px minmax(0, 1fr); padding: 16px; }
+        .icon { width: 52px; height: 52px; border-radius: 14px; }
+        .badge { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="icon" aria-hidden="true">
+        <svg viewBox="0 0 40 40">
+          <circle cx="20" cy="22" r="13"></circle>
+          <path d="M20 22V14M20 22l6 4M15 4h10M20 4v5"></path>
+        </svg>
+      </div>
+      <div class="copy">
+        <h1 id="title">Timer</h1>
+        <div id="status" class="status">Preparing…</div>
+        <div id="message" class="message"></div>
+        <div class="progress" aria-hidden="true"><span id="progress"></span></div>
+        <div class="meta"><span id="elapsed">0 s</span><span id="total">-- s</span></div>
+      </div>
+      <span id="badge" class="badge">Running</span>
+    </main>
+    <script>
+      const byId = (id) => document.getElementById(id);
+      const numbers = (value) =>
+        Array.from(String(value).matchAll(/\d+(?:\.\d+)?/g), (match) => Number(match[0]));
+      const render = (event, message = "") => {
+        const [used = 0, duration = Math.max(used, 1)] = numbers(event.status);
+        byId("title").textContent = String(event.toolName || "Timer").replaceAll("_", " ");
+        byId("status").textContent = event.status || (event.running ? "Running" : "Complete");
+        byId("message").textContent = message;
+        byId("progress").style.width =
+          `${Math.min(100, Math.max(0, (used / Math.max(duration, 1)) * 100))}%`;
+        byId("elapsed").textContent = `${used} s`;
+        byId("total").textContent = `${duration} s`;
+        byId("badge").textContent = event.running ? "Running" : "Complete";
+        byId("badge").classList.toggle("complete", !event.running);
+      };
+      window.xtalkToolUI.status((event) => render(event));
+      window.xtalkToolUI.emit((event) => render(event, event.message));
+    </script>
+  </body>
+</html>

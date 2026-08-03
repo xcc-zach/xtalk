@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -13,13 +13,79 @@
     <title>XTalk Desktop</title>
   </head>
   <body>
-    <div class="app">
+    <div id="app" class="app">
+      <button
+        id="sidebar-backdrop"
+        class="sidebar-backdrop"
+        type="button"
+        tabindex="-1"
+        aria-label="关闭聊天侧栏"
+        data-i18n-aria-label="sidebar.close"
+      ></button>
+
+      <aside
+        id="chat-sidebar"
+        class="chat-sidebar"
+        aria-hidden="true"
+        aria-labelledby="chat-sidebar-title"
+      >
+        <div class="chat-sidebar-header">
+          <strong id="chat-sidebar-title">XTalk</strong>
+        </div>
+        <div class="chat-sidebar-content">
+          <div class="sidebar-primary-actions">
+            <button id="new-chat-button" class="new-chat-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path
+                  d="M18.375 2.625a2.121 2.121 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852Z"
+                />
+              </svg>
+              <span data-i18n="sidebar.newChat">新聊天</span>
+            </button>
+
+            <button
+              id="open-tools-button"
+              class="new-chat-button"
+              type="button"
+              aria-controls="tools-dialog"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M14.7 6.3a4 4 0 0 0-5.2-5.1l2.4 2.4-2.8 2.8-2.4-2.4a4 4 0 0 0 5.1 5.2l7.1 7.1a2 2 0 0 0 2.8-2.8Z" />
+              </svg>
+              <span data-i18n="tools.title">工具</span>
+            </button>
+          </div>
+
+          <section class="chat-session-section" aria-labelledby="chat-session-list-title">
+            <h2 id="chat-session-list-title" data-i18n="sidebar.chats">聊天</h2>
+            <div
+              id="chat-session-list"
+              class="chat-session-list"
+              aria-label="聊天会话"
+              data-i18n-aria-label="sidebar.sessions"
+            ></div>
+            <p
+              id="chat-session-list-status"
+              class="chat-session-list-status"
+              role="status"
+              data-i18n="sidebar.loading"
+            >
+              正在读取聊天记录
+            </p>
+          </section>
+        </div>
+      </aside>
+
       <button
         id="drawer-backdrop"
         class="drawer-backdrop"
         type="button"
         tabindex="-1"
         aria-label="关闭设置与诊断"
+        data-i18n-aria-label="settings.close"
       ></button>
 
       <aside
@@ -29,15 +95,19 @@
         aria-labelledby="debug-title"
       >
         <div class="drawer-header">
-          <div>
-            <div class="drawer-eyebrow">Desktop settings</div>
-            <h2 id="debug-title">设置与诊断</h2>
+          <div class="drawer-heading">
+            <h2 id="debug-title" data-i18n="settings.title">设置与诊断</h2>
+            <div class="drawer-backend-status" role="status" aria-live="polite">
+              <span id="backend-status-dot" class="status-dot" data-state="loading"></span>
+              <span id="backend-status-label">正在启动</span>
+            </div>
           </div>
           <button
             id="close-debug-button"
             class="icon-button icon-button-quiet"
             type="button"
             aria-label="关闭设置与诊断"
+            data-i18n-aria-label="settings.close"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M6 6l12 12M18 6 6 18" />
@@ -46,50 +116,174 @@
         </div>
 
         <div class="debug-scroll">
-          <section class="debug-section settings-section" aria-labelledby="model-config-title">
-            <h3 id="model-config-title">模型配置</h3>
-            <p>
-              release 包不内置默认模型配置。选择 JSON 配置后，应用会重启并重新探测本地服务。
-            </p>
-            <div class="settings-path">
-              <span>当前配置</span>
-              <code id="model-config-detail">未选择</code>
+          <details class="settings-accordion">
+            <summary>
+              <span data-i18n="language.title">语言</span>
+              <span id="language-summary" class="summary-value">Automatic</span>
+            </summary>
+            <div class="settings-accordion-content settings-section">
+              <label class="language-setting">
+                <span data-i18n="language.label">界面语言</span>
+                <select id="language-select">
+                  <option value="auto" data-i18n="language.auto">自动（跟随系统）</option>
+                  <option value="zh-CN" data-i18n="language.zhCN">简体中文</option>
+                  <option value="en" data-i18n="language.en">English</option>
+                </select>
+              </label>
             </div>
-            <button
-              id="select-model-config-button"
-              class="drawer-action-button"
-              type="button"
-            >
-              选择模型配置文件
-            </button>
-            <p
-              id="model-config-status"
-              class="settings-status"
-              role="status"
-              aria-live="polite"
-            >
-              尚未选择模型配置
-            </p>
-          </section>
+          </details>
 
-          <section class="debug-section settings-section" aria-labelledby="builtin-tools-title">
-            <h3 id="builtin-tools-title">内置工具</h3>
-            <p>
-              当前时间始终可用。联网搜索优先读取桌面环境中的
-              <code>SERPER_API_KEY</code> 或 <code>GOOGLE_SERPER_API_KEY</code>；
-              没有环境变量时可输入仅供本次 App 运行使用的密钥。
-            </p>
-            <div class="developer-tools-list" aria-label="内置工具">
+          <details class="settings-accordion">
+            <summary>
+              <span id="model-config-title" data-i18n="model.title">模型配置</span>
+            </summary>
+            <div class="settings-accordion-content settings-section">
+              <div class="settings-path">
+                <span data-i18n="model.current">当前配置</span>
+                <code id="model-config-detail">未选择</code>
+              </div>
+              <button
+                id="select-model-config-button"
+                class="drawer-action-button"
+                type="button"
+                data-i18n="model.choose"
+              >
+                选择模型配置文件
+              </button>
+              <p
+                id="model-config-status"
+                class="settings-status"
+                role="status"
+                aria-live="polite"
+              >
+                尚未选择模型配置
+              </p>
+            </div>
+          </details>
+
+          <details class="settings-accordion">
+            <summary>
+              <span id="runtime-title" data-i18n="runtime.title">运行状态</span>
+            </summary>
+            <div class="settings-accordion-content">
+              <dl class="runtime-grid">
+                <div>
+                  <dt data-i18n="runtime.connection">Connection</dt>
+                  <dd id="connection-state-detail">disconnected</dd>
+                </div>
+                <div>
+                  <dt data-i18n="runtime.stream">Stream</dt>
+                  <dd id="stream-state-detail">idle</dd>
+                </div>
+                <div>
+                  <dt data-i18n="runtime.muted">Muted</dt>
+                  <dd id="muted-state-detail">false</dd>
+                </div>
+                <div>
+                  <dt data-i18n="runtime.network">Network</dt>
+                  <dd id="network-detail">checking</dd>
+                </div>
+                <div class="runtime-wide">
+                  <dt data-i18n="runtime.session">Session</dt>
+                  <dd id="session-detail">--</dd>
+                </div>
+                <div class="runtime-wide">
+                  <dt data-i18n="runtime.user">User</dt>
+                  <dd id="user-detail">--</dd>
+                </div>
+              </dl>
+            </div>
+          </details>
+
+          <details class="settings-accordion">
+            <summary>
+              <span data-i18n="service.title">本地服务</span>
+              <span id="backend-summary" class="summary-value">loading</span>
+            </summary>
+            <div class="settings-accordion-content">
+              <dl class="endpoint-list">
+                <div>
+                  <dt>Origin</dt>
+                  <dd id="backend-detail">等待 Tauri 提供 endpoint</dd>
+                </div>
+                <div>
+                  <dt>WebSocket</dt>
+                  <dd id="websocket-detail">未配置</dd>
+                </div>
+              </dl>
+            </div>
+          </details>
+
+          <details class="settings-accordion">
+            <summary>
+              <span id="recovery-title" data-i18n="recovery.title">恢复</span>
+            </summary>
+            <div class="settings-accordion-content">
+              <button
+                id="retry-button"
+                class="drawer-action-button"
+                type="button"
+                data-i18n="recovery.retry"
+              >
+                重新探测本地服务
+              </button>
+            </div>
+          </details>
+        </div>
+      </aside>
+
+      <button
+        id="tools-dialog-backdrop"
+        class="tools-dialog-backdrop"
+        type="button"
+        tabindex="-1"
+        aria-label="关闭工具"
+        data-i18n-aria-label="tools.close"
+      ></button>
+
+      <section
+        id="tools-dialog"
+        class="tools-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="tools-dialog-title"
+      >
+        <div class="tools-dialog-header">
+          <h2 id="tools-dialog-title" data-i18n="tools.title">工具</h2>
+          <button
+            id="close-tools-button"
+            class="icon-button icon-button-quiet"
+            type="button"
+            aria-label="关闭工具"
+            data-i18n-aria-label="tools.close"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+        <div class="tools-dialog-content settings-section">
+          <p data-i18n="tools.description">
+            内置工具与用户工具使用相同的 xtalk_tool.json 协议。
+          </p>
+          <div
+            class="developer-tools-list"
+            aria-label="核心工具"
+            data-i18n-aria-label="webSearch.coreTools"
+          >
+            <section class="developer-tool-section">
+              <h3 data-i18n="webSearch.coreTools">核心工具</h3>
               <article class="developer-tool-row">
                 <div class="developer-tool-copy">
-                  <strong>当前时间</strong>
-                  <code>get_time · 始终启用</code>
+                  <strong data-i18n="webSearch.timeName">当前时间</strong>
+                  <code data-i18n="webSearch.timeDetail">get_time · 始终启用</code>
                 </div>
               </article>
               <article class="developer-tool-row">
                 <div class="developer-tool-copy">
-                  <strong>联网搜索</strong>
-                  <code>web_search · 异步 Serper 搜索</code>
+                  <strong data-i18n="webSearch.name">联网搜索</strong>
+                  <code data-i18n="webSearch.detail">web_search · 异步 Serper 搜索</code>
                 </div>
                 <div class="developer-tool-actions">
                   <button
@@ -97,6 +291,7 @@
                     class="developer-tool-key-button"
                     type="button"
                     hidden
+                    data-i18n="webSearch.enterKey"
                   >
                     配置 Key
                   </button>
@@ -105,141 +300,178 @@
                       id="web-search-enabled-toggle"
                       type="checkbox"
                       aria-label="启用联网搜索工具"
+                      data-i18n-aria-label="webSearch.enableLabel"
                     />
-                    <span>启用</span>
+                    <span data-i18n="tools.enabled">启用</span>
                   </label>
                 </div>
               </article>
-            </div>
-            <p
-              id="web-search-status"
-              class="settings-status"
-              role="status"
-              aria-live="polite"
+            </section>
+          </div>
+          <p
+            id="web-search-status"
+            class="settings-status"
+            role="status"
+            aria-live="polite"
+          >
+            正在读取联网搜索配置
+          </p>
+          <div
+            id="developer-tools-list"
+            class="developer-tools-list"
+            aria-label="可用工具"
+            data-i18n-aria-label="tools.installedList"
+          ></div>
+          <div class="settings-action-stack">
+            <button
+              id="install-tool-directory-button"
+              class="drawer-action-button"
+              type="button"
+              data-i18n="tools.install"
             >
-              正在读取联网搜索配置
-            </p>
-          </section>
-
-          <section class="debug-section settings-section" aria-labelledby="developer-tools-title">
-            <h3 id="developer-tools-title">开发者工具</h3>
-            <p>
-              选择包含 <code>xtalk_tool.json</code> 的 Python 工具目录。应用会将目录复制到
-              AppData，工具变更在重启本地服务后生效。
-            </p>
-            <div
-              id="developer-tools-list"
-              class="developer-tools-list"
-              aria-label="已安装开发者工具"
-            ></div>
-            <div class="settings-action-stack">
-              <button
-                id="install-tool-directory-button"
-                class="drawer-action-button"
-                type="button"
-              >
-                从目录安装工具
-              </button>
-              <button
-                id="apply-tool-changes-button"
-                class="drawer-action-button drawer-action-button-primary"
-                type="button"
-                disabled
-              >
-                应用工具配置并重启本地服务
-              </button>
-            </div>
-            <p
-              id="developer-tools-status"
-              class="settings-status"
-              role="status"
-              aria-live="polite"
-            >
-              正在读取已安装工具
-            </p>
-          </section>
-
-          <section class="debug-section" aria-labelledby="runtime-title">
-            <h3 id="runtime-title">Runtime</h3>
-            <dl class="runtime-grid">
-              <div>
-                <dt>Connection</dt>
-                <dd id="connection-state-detail">disconnected</dd>
-              </div>
-              <div>
-                <dt>Stream</dt>
-                <dd id="stream-state-detail">idle</dd>
-              </div>
-              <div>
-                <dt>Muted</dt>
-                <dd id="muted-state-detail">false</dd>
-              </div>
-              <div>
-                <dt>Network</dt>
-                <dd id="network-detail">checking</dd>
-              </div>
-              <div class="runtime-wide">
-                <dt>Session</dt>
-                <dd id="session-detail">--</dd>
-              </div>
-              <div class="runtime-wide">
-                <dt>User</dt>
-                <dd id="user-detail">--</dd>
-              </div>
-            </dl>
-          </section>
-
-          <details class="debug-details" open>
-            <summary>
-              <span>Local sidecar</span>
-              <span id="backend-summary" class="summary-value">loading</span>
-            </summary>
-            <dl class="endpoint-list">
-              <div>
-                <dt>Origin</dt>
-                <dd id="backend-detail">等待 Tauri 提供 endpoint</dd>
-              </div>
-              <div>
-                <dt>WebSocket</dt>
-                <dd id="websocket-detail">未配置</dd>
-              </div>
-              <div>
-                <dt>Launch credential</dt>
-                <dd id="token-detail">未获取</dd>
-              </div>
-            </dl>
-          </details>
-
-          <section class="debug-section debug-actions" aria-labelledby="recovery-title">
-            <h3 id="recovery-title">Recovery</h3>
-            <p>本地服务不可用时，主界面仍保持可访问。可重新选择配置或再次探测。</p>
-            <button id="retry-button" class="drawer-action-button" type="button">
-              重新探测本地服务
+              从目录安装工具
             </button>
-          </section>
+            <button
+              id="apply-tool-changes-button"
+              class="drawer-action-button drawer-action-button-primary"
+              type="button"
+              disabled
+              data-i18n="tools.apply"
+            >
+              应用并重启本地服务
+            </button>
+          </div>
+          <p
+            id="developer-tools-status"
+            class="settings-status"
+            role="status"
+            aria-live="polite"
+          >
+            正在读取已安装工具
+          </p>
         </div>
-      </aside>
+      </section>
+
+      <div
+        id="managed-progress-backdrop"
+        class="managed-progress-backdrop"
+        aria-hidden="true"
+      ></div>
+
+      <section
+        id="managed-progress-dialog"
+        class="managed-progress-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="managed-progress-title"
+        aria-describedby="managed-progress-message"
+        tabindex="-1"
+      >
+        <div class="managed-progress-heading">
+          <span class="managed-progress-spinner" aria-hidden="true"></span>
+          <div>
+            <h2 id="managed-progress-title" data-i18n="managed.title">
+              准备本地模型
+            </h2>
+            <p
+              id="managed-progress-message"
+              role="status"
+              aria-live="polite"
+              data-i18n="managed.preparing"
+            >
+              正在检查模型文件
+            </p>
+          </div>
+        </div>
+        <progress
+          id="managed-progress-bar"
+          class="managed-progress-bar"
+          max="100"
+          aria-label="本地模型准备进度"
+          data-i18n-aria-label="managed.progress"
+        ></progress>
+        <div class="managed-progress-meta">
+          <span id="managed-progress-detail"></span>
+          <span id="managed-progress-percent"></span>
+        </div>
+        <ol
+          id="managed-progress-services"
+          class="managed-progress-services"
+          aria-label="本地模型服务"
+          data-i18n-aria-label="managed.services"
+        ></ol>
+        <p
+          id="managed-progress-error"
+          class="managed-progress-error"
+          role="alert"
+          hidden
+        ></p>
+        <button
+          id="close-managed-progress-button"
+          class="drawer-action-button"
+          type="button"
+          hidden
+          data-i18n="managed.close"
+        >
+          关闭
+        </button>
+      </section>
 
       <header class="topbar">
         <button
-          id="backend-status-button"
-          class="topbar-status"
+          id="toggle-sidebar-button"
+          class="icon-button sidebar-toggle-button"
           type="button"
-          aria-label="打开设置与诊断"
-          aria-controls="debug-drawer"
+          aria-label="展开聊天侧栏"
+          data-i18n-aria-label="sidebar.expand"
+          aria-controls="chat-sidebar"
           aria-expanded="false"
         >
-          <span id="backend-status-dot" class="status-dot" data-state="loading"></span>
-          <span id="backend-status-label">正在启动</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
         </button>
 
-        <div class="brand">XTalk</div>
+        <div id="live-tool-panel" class="live-tool-panel" hidden>
+          <button
+            id="live-tool-status-toggle"
+            class="live-tool-status-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="live-tool-content"
+          >
+            <span class="live-tool-status-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="7"></circle>
+                <path d="M12 13V9M12 13l3 2M9 3h6M12 3v3"></path>
+              </svg>
+            </span>
+            <span class="live-tool-status-copy">
+              <strong id="live-tool-status-title"></strong>
+              <span id="live-tool-status-summary"></span>
+            </span>
+            <svg
+              class="live-tool-status-chevron"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="m7 10 5 5 5-5"></path>
+            </svg>
+          </button>
+          <div
+            id="live-tool-content"
+            class="live-tool-content"
+            hidden
+          ></div>
+        </div>
 
         <button
           id="toggle-debug-button"
           class="icon-button"
           type="button"
           aria-label="打开设置与诊断"
+          data-i18n-aria-label="settings.open"
           aria-controls="debug-drawer"
           aria-expanded="false"
         >
@@ -251,9 +483,14 @@
 
       <main class="workspace">
         <section id="orb-view" class="view-panel orb-view" aria-hidden="false">
-          <button id="show-chat-button" class="orb-button" type="button" aria-label="显示聊天记录">
+          <button
+            id="show-chat-button"
+            class="orb-button"
+            type="button"
+            aria-label="显示聊天记录"
+            data-i18n-aria-label="orb.showChat"
+          >
             <span class="orb-surface" aria-hidden="true"></span>
-            <span class="orb-core" aria-hidden="true"></span>
           </button>
           <div class="orb-copy" aria-live="polite">
             <strong id="orb-title">本地服务启动中</strong>
@@ -266,6 +503,7 @@
           class="view-panel chat-view is-hidden"
           aria-hidden="true"
           aria-label="对话记录"
+          data-i18n-aria-label="chat.history"
         >
           <div id="messages" aria-live="polite"></div>
           <div class="chat-composer-shell">
@@ -275,6 +513,8 @@
               type="button"
               aria-label="返回语音圆球模式"
               title="返回语音圆球模式"
+              data-i18n-aria-label="chat.backToOrb"
+              data-i18n-title="chat.backToOrb"
             >
               <span aria-hidden="true"></span>
             </button>
@@ -283,14 +523,20 @@
               id="text-composer"
               class="text-composer"
               aria-label="发送文本消息"
+              data-i18n-aria-label="composer.form"
               novalidate
             >
-              <label class="visually-hidden" for="message-input">文本消息</label>
+              <label
+                class="visually-hidden"
+                for="message-input"
+                data-i18n="composer.label"
+              >文本消息</label>
               <textarea
                 id="message-input"
                 rows="1"
                 maxlength="2048"
                 placeholder="连接对话后可发送文字"
+                data-i18n-placeholder="composer.connectFirstShort"
                 autocomplete="off"
                 enterkeyhint="send"
                 aria-describedby="composer-hint composer-status"
@@ -302,6 +548,8 @@
                 type="submit"
                 aria-label="发送消息"
                 title="发送消息"
+                data-i18n-aria-label="composer.send"
+                data-i18n-title="composer.send"
                 disabled
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -309,7 +557,11 @@
                 </svg>
                 <span class="composer-spinner" aria-hidden="true"></span>
               </button>
-              <span id="composer-hint" class="visually-hidden">
+              <span
+                id="composer-hint"
+                class="visually-hidden"
+                data-i18n="composer.enterHint"
+              >
                 按 Enter 发送，按 Shift+Enter 换行
               </span>
               <span
@@ -317,6 +569,7 @@
                 class="visually-hidden"
                 role="status"
                 aria-live="polite"
+                data-i18n="composer.connectFirst"
               >
                 连接对话后可发送文本消息
               </span>
@@ -325,7 +578,11 @@
         </section>
       </main>
 
-      <div class="control-dock" aria-label="语音控制">
+      <div
+        class="control-dock"
+        aria-label="语音控制"
+        data-i18n-aria-label="voice.controls"
+      >
         <button
           id="mute-button"
           class="control-button control-button-secondary"
@@ -333,6 +590,8 @@
           aria-label="关闭麦克风"
           aria-pressed="false"
           title="关闭麦克风"
+          data-i18n-aria-label="voice.mute"
+          data-i18n-title="voice.mute"
           disabled
         >
           <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true">
@@ -351,6 +610,8 @@
           data-action="start"
           aria-label="开始对话"
           title="开始对话"
+          data-i18n-aria-label="voice.start"
+          data-i18n-title="voice.start"
           disabled
         >
           <svg class="icon-wave" viewBox="0 0 24 24" aria-hidden="true">
@@ -374,19 +635,22 @@
       >
         <form id="web-search-api-key-form" class="settings-dialog-card">
           <header>
-            <h2 id="web-search-api-key-dialog-title">配置联网搜索 Key</h2>
-            <p>
+            <h2 id="web-search-api-key-dialog-title" data-i18n="webSearch.dialogTitle">
+              配置联网搜索 Key
+            </h2>
+            <p data-i18n="webSearch.dialogDescription">
               Key 只在本次 App 运行期间保存在内存中，关闭 App 后失效，不会写入本地文件。
             </p>
           </header>
           <label class="settings-dialog-field" for="web-search-api-key-dialog-input">
-            <span>Serper API Key</span>
+            <span data-i18n="webSearch.keyLabel">Serper API Key</span>
             <input
               id="web-search-api-key-dialog-input"
               type="password"
               autocomplete="off"
               spellcheck="false"
               placeholder="输入 Serper API Key"
+              data-i18n-placeholder="webSearch.keyPlaceholder"
               required
             />
           </label>
@@ -395,12 +659,14 @@
               id="web-search-api-key-cancel-button"
               class="settings-dialog-button"
               type="button"
+              data-i18n="webSearch.cancel"
             >
               取消
             </button>
             <button
               class="settings-dialog-button settings-dialog-button-primary"
               type="submit"
+              data-i18n="webSearch.useKey"
             >
               使用此 Key
             </button>

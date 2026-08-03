@@ -1,4 +1,11 @@
 {
-  "display_name": "计时器",
-  "entrypoint": "timer_tool:create_tools"
+  "display_name": {
+    "zh": "计时器",
+    "en": "Timer"
+  },
+  "entrypoint": "timer_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 0.5
+  }
 }

@@ -56,6 +56,16 @@ export interface DesktopSessionSnapshot {
 }
 
 /**
+ * Persisted conversation metadata displayed by the desktop session sidebar.
+ */
+export interface DesktopSessionSummary {
+  /** Backend identifier stored in the application-data conversation database. */
+  id: string;
+  /** Human-readable title derived from the conversation, when available. */
+  title: string | null;
+}
+
+/**
  * Redacted endpoint information suitable for the diagnostics UI.
  */
 export interface XtalkEndpointDiagnostics {
@@ -199,6 +209,31 @@ export class XtalkClientAdapter {
    */
   async sendText(text: string): Promise<void> {
     await this.#session.sendText(text);
+  }
+
+  /**
+   * Lists conversations persisted by the sidecar in the application data directory.
+   *
+   * @returns Persisted conversations in backend activity order.
+   */
+  async getSessions(): Promise<DesktopSessionSummary[]> {
+    const sessions = await this.#session.getSessions();
+    return sessions.map((session) => ({
+      id: session.session_id,
+      title: session.title,
+    }));
+  }
+
+  /**
+   * Selects a persisted conversation or resets the client for a new one.
+   *
+   * Switching closes the active realtime connection. The caller can reconnect
+   * through {@link connect} when the user is ready to continue the conversation.
+   *
+   * @param sessionId Persisted session identifier, or `null` for a new chat.
+   */
+  async switchSession(sessionId: string | null): Promise<void> {
+    await this.#session.switchSession(sessionId);
   }
 
   #notify(): void {
