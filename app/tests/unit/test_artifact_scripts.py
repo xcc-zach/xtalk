@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import plistlib
 import sys
 import zipfile
 from pathlib import Path
@@ -161,6 +162,59 @@ def test_macos_packager_links_framework_metadata_to_resources(
     assert (frameworks / metadata_name / "METADATA").read_text(
         encoding="utf-8"
     ) == "canonical"
+
+
+def test_macos_packager_signs_both_codex_hosts_with_v8_entitlements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve V8 executable-memory rights in both runtime layouts."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    relative_host = Path("codex_cli_bin/bin/codex-code-mode-host")
+    hosts = [
+        app / "Contents" / "Frameworks" / relative_host,
+        app
+        / "Contents"
+        / "Resources"
+        / "app-backend-runtime"
+        / relative_host,
+    ]
+    for host in hosts:
+        host.parent.mkdir(parents=True, exist_ok=True)
+        host.write_bytes(b"host")
+    backend = app / "Contents" / "MacOS" / "app-backend"
+    backend.parent.mkdir(parents=True)
+    backend.write_bytes(b"backend")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module, "run", commands.append)
+
+    module.sign_app(app, "-")
+
+    codex_commands = [
+        command
+        for command in commands
+        if str(module.CODEX_HOST_ENTITLEMENTS) in command
+    ]
+    assert [Path(command[-1]) for command in codex_commands] == hosts
+    assert all(
+        "--options" in command and "runtime" in command
+        for command in codex_commands
+    )
+
+
+def test_codex_host_entitlements_allow_v8_executable_memory() -> None:
+    """Keep every hardened-runtime entitlement required by the V8 host."""
+
+    payload = plistlib.loads(
+        (APP_ROOT / "src-tauri" / "CodexHostEntitlements.plist").read_bytes()
+    )
+    assert payload == {
+        "com.apple.security.cs.allow-jit": True,
+        "com.apple.security.cs.allow-unsigned-executable-memory": True,
+        "com.apple.security.cs.disable-library-validation": True,
+    }
 
 
 def test_managed_runtime_uses_target_specific_binary_names() -> None:

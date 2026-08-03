@@ -38,7 +38,14 @@ class _FakeBuilder:
 
         self.config = config
         self.tools: list[Any] = []
+        self.model_class: type[Any] | None = None
         self.built = False
+
+    def set_model(self, model_class: type[Any]) -> "_FakeBuilder":
+        """Record the desktop-only Agent selected by the adapter."""
+
+        self.model_class = model_class
+        return self
 
     def add_agent_tools(self, tools: list[Any]) -> "_FakeBuilder":
         """Record standard tools added to the configured Agent."""
@@ -87,6 +94,7 @@ def test_adapter_builds_runtime_and_tools_through_public_apis(
     assert config == original_config
     assert _FakeXtalk.latest_builder is not None
     assert _FakeXtalk.latest_builder.config is config
+    assert _FakeXtalk.latest_builder.model_class is xtalk_adapter.DesktopDefaultAgent
     assert _FakeXtalk.latest_builder.tools == []
     assert _FakeXtalk.latest_builder.built
     assert runtime.config is config
@@ -104,6 +112,7 @@ def test_adapter_keeps_provider_free_config_usable(monkeypatch) -> None:
 
     assert _FakeXtalk.latest_builder is not None
     assert _FakeXtalk.latest_builder.tools == []
+    assert _FakeXtalk.latest_builder.model_class is None
     assert _FakeXtalk.latest_builder.built
     assert runtime.config is config
     assert runtime.tools == []
