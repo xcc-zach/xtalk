@@ -8,14 +8,19 @@
   "permissions": [
     "allow-apply-tool-changes",
     "allow-apply-model-config",
+    "allow-ensure-backend-started",
     "allow-get-backend-connection",
     "allow-get-web-search-settings",
     "allow-get-installed-tools",
+    "allow-get-managed-model-plan",
+    "allow-get-tool-ui-source",
     "allow-get-model-config-selection",
     "allow-install-tool-directory",
     "allow-remove-installed-tool",
     "allow-set-tool-enabled",
     "allow-shutdown-backend",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "dialog:allow-open"
   ]
 }

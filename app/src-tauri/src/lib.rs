@@ -2,14 +2,15 @@
 
 #![warn(missing_docs)]
 
+mod managed;
 mod sidecar;
 mod tools;
 
 use std::{path::PathBuf, sync::Arc};
 
 use sidecar::{
-    BackendSupervisor, NativeBackendConnection, NativeModelConfigSelection,
-    NativeWebSearchSettings,
+    inspect_managed_model_config, BackendSupervisor, NativeBackendConnection,
+    NativeModelConfigSelection, NativeWebSearchSettings,
 };
 use tauri::{Manager, State, WindowEvent};
 use tools::NativeToolDefinition;
@@ -22,10 +23,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apply_tool_changes,
             apply_model_config,
+            ensure_backend_started,
             get_backend_connection,
             get_web_search_settings,
             get_installed_tools,
+            get_managed_model_plan,
             get_model_config_selection,
+            get_tool_ui_source,
             install_tool_directory,
             remove_installed_tool,
             set_tool_enabled,
@@ -50,6 +54,22 @@ async fn get_backend_connection(
         .connection()
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn ensure_backend_started(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<BackendSupervisor>>,
+) -> Result<NativeBackendConnection, String> {
+    supervisor
+        .ensure_started(&app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_managed_model_plan(config_path: PathBuf) -> Result<managed::ManagedModelPlan, String> {
+    inspect_managed_model_config(&config_path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -91,6 +111,14 @@ async fn apply_model_config(
 #[tauri::command]
 fn get_installed_tools(app: tauri::AppHandle) -> Result<Vec<NativeToolDefinition>, String> {
     tools::list_installed_tools(&app)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_tool_ui_source(
+    app: tauri::AppHandle,
+    tool_id: String,
+) -> Result<tools::NativeToolUiSource, String> {
+    tools::read_tool_ui_source(&app, &tool_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]

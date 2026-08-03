@@ -11,3 +11,10 @@ SHA-256 of both the XTalk wheel and the `xtalk-client` package.
 upstream revision, download URL, package-relative filename, license, and
 SHA-256 for each local audio model that must be available without a runtime
 download.
+
+`managed-models.lock.json` is also checked in, but its files are not bundled.
+It pins every path, byte size, SHA-256, and immutable HTTPS URL needed by the
+optional SenseVoice and MOSS services. Tauri validates this manifest and
+installs only services selected through a supported `managed://` URL. CPU and
+CUDA use the pinned ONNX snapshots; Apple Silicon MLX uses separately pinned
+safetensor snapshots selected with `?backend=mlx`.

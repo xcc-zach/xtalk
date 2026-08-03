@@ -54,6 +54,7 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
         "token": TOKEN,
         "config_path": str(tmp_path / "base.json"),
         "data_dir": str(tmp_path / "data"),
+        "builtin_tools_root": str(tmp_path / "resources" / "tools"),
         "origins": [
             "TAURI://LOCALHOST/",
             "tauri://localhost",
@@ -61,6 +62,7 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
         ],
         "web_search_enabled": True,
         "config_overlay": {"arbitrary_section": {"enabled": True}},
+        "anonymous_user_id": " desktop-user ",
     }
     stream = io.StringIO(json.dumps(payload) + "\nignored second line\n")
 
@@ -74,6 +76,10 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
     )
     assert startup.web_search_enabled
     assert startup.config_overlay == payload["config_overlay"]
+    assert startup.builtin_tools_root == (
+        tmp_path / "resources" / "tools"
+    ).resolve()
+    assert startup.anonymous_user_id == "desktop-user"
     assert startup.config_fallbacks == {}
     assert stream.readline() == "ignored second line\n"
 
@@ -151,6 +157,24 @@ def test_read_startup_config_rejects_non_object_fallbacks(
     }
 
     with pytest.raises(ValueError, match="config_fallbacks"):
+        read_startup_config(io.StringIO(json.dumps(payload) + "\n"))
+
+
+@pytest.mark.parametrize("anonymous_user_id", ["", "   ", 42, False])
+def test_read_startup_config_rejects_invalid_anonymous_user_id(
+    tmp_path: Path,
+    anonymous_user_id: object,
+) -> None:
+    """Require a non-empty string when the app supplies a stable identity."""
+
+    payload = {
+        "token": TOKEN,
+        "config_path": str(tmp_path / "base.json"),
+        "data_dir": str(tmp_path / "data"),
+        "anonymous_user_id": anonymous_user_id,
+    }
+
+    with pytest.raises(ValueError, match="anonymous_user_id"):
         read_startup_config(io.StringIO(json.dumps(payload) + "\n"))
 
 
@@ -325,8 +349,8 @@ def test_build_effective_config_applies_overlay_after_fallbacks(
 def test_build_effective_config_loads_repository_sample(tmp_path: Path) -> None:
     """Use the repository's requested model configuration as the base fixture."""
 
-    repository_root = Path(__file__).resolve().parents[3]
-    sample_path = repository_root / "server_configs" / "sample.json"
+    app_root = Path(__file__).resolve().parents[2]
+    sample_path = app_root / "examples" / "local_models.json"
     startup = StartupConfig.from_mapping(
         {
             "protocol_version": 1,

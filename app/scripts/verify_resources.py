@@ -13,6 +13,15 @@ AUDIO_MODEL_MANIFEST_PATH = (
     APP_ROOT / "resources" / "manifests" / "audio-models.lock.json"
 )
 REQUIRED_AUDIO_MODEL_IDS = {"silero-vad"}
+MANAGED_MODEL_MANIFEST_PATH = (
+    APP_ROOT / "resources" / "manifests" / "managed-models.lock.json"
+)
+REQUIRED_MANAGED_MODEL_IDS = {
+    "sensevoice-small",
+    "sensevoice-small-mlx",
+    "moss-tts-nano",
+    "moss-tts-nano-mlx",
+}
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, object]:
@@ -168,6 +177,92 @@ def verify_audio_model_manifest(
         )
 
 
+def verify_managed_model_manifest(
+    path: Path = MANAGED_MODEL_MANIFEST_PATH,
+) -> None:
+    """Validate optional runtime-download records without downloading weights.
+
+    Parameters
+    ----------
+    path : pathlib.Path, optional
+        Managed-model lock manifest path.
+
+    Raises
+    ------
+    ValueError
+        Raised when the schema, identifiers, file paths, or integrity metadata
+        is invalid.
+    """
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("unsupported managed-model manifest schema")
+    services = payload.get("services")
+    if not isinstance(services, list):
+        raise ValueError("managed model services must be an array")
+
+    seen: set[str] = set()
+    for raw_service in services:
+        if not isinstance(raw_service, dict):
+            raise ValueError("managed service record must be an object")
+        service_id = raw_service.get("id")
+        version = raw_service.get("version")
+        files = raw_service.get("files")
+        if (
+            not isinstance(service_id, str)
+            or not service_id
+            or not isinstance(version, str)
+            or not version
+            or not isinstance(files, list)
+            or not files
+        ):
+            raise ValueError(
+                "managed service records require id, version, and files"
+            )
+        if service_id in seen:
+            raise ValueError(f"duplicate managed service: {service_id}")
+        seen.add(service_id)
+        service_paths: set[str] = set()
+        for raw_file in files:
+            if not isinstance(raw_file, dict):
+                raise ValueError("managed model file record must be an object")
+            relative_path = raw_file.get("path")
+            source = raw_file.get("url")
+            expected_hash = raw_file.get("sha256")
+            size = raw_file.get("size")
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or Path(relative_path).is_absolute()
+                or ".." in Path(relative_path).parts
+            ):
+                raise ValueError("managed model file path is unsafe")
+            if relative_path in service_paths:
+                raise ValueError(
+                    f"duplicate managed model file path: {relative_path}"
+                )
+            service_paths.add(relative_path)
+            if not isinstance(source, str) or not source.startswith("https://"):
+                raise ValueError("managed model sources must use HTTPS")
+            if (
+                not isinstance(expected_hash, str)
+                or len(expected_hash) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in expected_hash
+                )
+            ):
+                raise ValueError("managed model SHA-256 is invalid")
+            if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+                raise ValueError("managed model file size is invalid")
+
+    missing = REQUIRED_MANAGED_MODEL_IDS - seen
+    if missing:
+        raise ValueError(
+            f"missing managed models: {', '.join(sorted(missing))}"
+        )
+
+
 def verify_no_bundled_default_config() -> None:
     """Reject a release bundle that contains a default model configuration."""
 
@@ -200,6 +295,7 @@ def main() -> int:
     verify_no_bundled_default_config()
     verify_manifest(load_manifest())
     verify_audio_model_manifest()
+    verify_managed_model_manifest()
     print("resource verification passed")
     return 0
 

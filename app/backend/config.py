@@ -65,12 +65,16 @@ class StartupConfig:
         Path to the base XTalk JSON configuration.
     data_dir : pathlib.Path
         Writable per-user directory forced into ``service_config.data_dir``.
+    builtin_tools_root : pathlib.Path | None
+        Read-only bundled directory containing the App's built-in tool catalog.
     origins : tuple[str, ...]
         Exact WebView origins permitted to call the loopback service.
     web_search_enabled : bool
         Whether the trusted desktop parent enabled asynchronous web search.
     config_overlay : dict[str, Any]
         Generic configuration overlay recursively merged over the base JSON.
+    anonymous_user_id : str | None, optional
+        Runtime-only stable identity for the built-in anonymous login.
     config_fallbacks : dict[str, Any], optional
         Top-level fallback values used only when a key is absent from the base
         configuration.
@@ -80,9 +84,11 @@ class StartupConfig:
     token: str = field(repr=False)
     config_path: Path
     data_dir: Path
+    builtin_tools_root: Path | None
     origins: tuple[str, ...]
     web_search_enabled: bool
     config_overlay: dict[str, Any]
+    anonymous_user_id: str | None = None
     config_fallbacks: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -128,6 +134,15 @@ class StartupConfig:
         if not isinstance(data_dir_value, str) or not data_dir_value.strip():
             raise ValueError("data_dir must be a non-empty string")
 
+        builtin_tools_root_value = payload.get("builtin_tools_root")
+        if builtin_tools_root_value is not None and (
+            not isinstance(builtin_tools_root_value, str)
+            or not builtin_tools_root_value.strip()
+        ):
+            raise ValueError(
+                "builtin_tools_root must be a non-empty string when provided"
+            )
+
         origins_value = payload.get("origins", [])
         if isinstance(origins_value, (str, bytes)) or not isinstance(
             origins_value, list
@@ -149,6 +164,15 @@ class StartupConfig:
         if not isinstance(overlay_value, dict):
             raise ValueError("config_overlay must be a JSON object")
 
+        anonymous_user_id = payload.get("anonymous_user_id")
+        if anonymous_user_id is not None:
+            if (
+                not isinstance(anonymous_user_id, str)
+                or not anonymous_user_id.strip()
+            ):
+                raise ValueError("anonymous_user_id must be a non-empty string")
+            anonymous_user_id = anonymous_user_id.strip()
+
         fallbacks_value = payload.get("config_fallbacks", {})
         if not isinstance(fallbacks_value, dict):
             raise ValueError("config_fallbacks must be a JSON object")
@@ -158,9 +182,15 @@ class StartupConfig:
             token=token,
             config_path=Path(config_path_value).expanduser().resolve(),
             data_dir=Path(data_dir_value).expanduser().resolve(),
+            builtin_tools_root=(
+                Path(builtin_tools_root_value).expanduser().resolve()
+                if builtin_tools_root_value is not None
+                else None
+            ),
             origins=tuple(normalized_origins),
             web_search_enabled=web_search_enabled,
             config_overlay=copy.deepcopy(overlay_value),
+            anonymous_user_id=anonymous_user_id,
             config_fallbacks=copy.deepcopy(fallbacks_value),
         )
 

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "id": "timer",
+      "path": "timer",
+      "enabled_by_default": true
+    },
+    {
+      "id": "codex",
+      "path": "codex",
+      "enabled_by_default": false
+    }
+  ]
+}

@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+
+import { t } from "../i18n";
 
 /**
  * Connection bootstrap data returned by the trusted Tauri layer.
@@ -36,28 +39,81 @@ export type NativeWebSearchApiKeySource =
   | "missing";
 
 /**
- * One developer tool directory installed into application data.
+ * Managed services referenced by one selected model configuration.
+ */
+export interface NativeManagedModelPlan {
+  /** Stable managed service identifiers in startup order. */
+  services: string[];
+}
+
+/**
+ * Progress emitted while managed model files and services are prepared.
+ */
+export interface NativeManagedModelProgress {
+  /** Current native preparation phase. */
+  phase: "checking" | "downloading" | "starting" | "ready" | "complete";
+  /** Stable service identifier, or `null` while finalizing the backend. */
+  serviceId: string | null;
+  /** One-based index of the active service. */
+  serviceIndex: number;
+  /** Number of managed services requested by the configuration. */
+  serviceCount: number;
+  /** Verified download bytes for the active service. */
+  completedBytes: number;
+  /** Total download bytes for the active service. */
+  totalBytes: number;
+  /** Current manifest-relative file path, when downloading. */
+  filePath: string | null;
+}
+
+/**
+ * One built-in or user-installed tool exposed by the native shell.
  */
 export interface NativeToolDefinition {
-  /** App-generated stable identifier for this installed copy. */
+  /** Stable identifier assigned by the App. */
   id: string;
+  /** App-owned source classification, never supplied by the tool manifest. */
+  origin: "builtin" | "user";
+  /** Whether the native layer permits deleting this tool directory. */
+  canDelete: boolean;
   /** Human-readable name declared by the developer tool. */
-  displayName: string;
+  displayName: string | Record<string, string>;
   /** Python `module:factory` entrypoint declared by the tool. */
   entrypoint: string;
+  /** Optional read-only custom UI configuration. */
+  ui: {
+    /** Self-contained HTML entrypoint relative to the installed tool. */
+    entrypoint: string;
+    /** Live status polling interval, or `-1` when polling is disabled. */
+    updateEveryS: number;
+  } | null;
   /** Whether the sidecar loads this tool during its next restart. */
   enabled: boolean;
+}
+
+/**
+ * Self-contained HTML returned for one installed tool UI.
+ */
+export interface NativeToolUiSource {
+  /** Installed tool identifier owning the source. */
+  toolId: string;
+  /** Untrusted self-contained HTML loaded only inside a sandbox iframe. */
+  source: string;
 }
 
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
 const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
 const WEB_SEARCH_SETTINGS_COMMAND = "get_web_search_settings";
+const ENSURE_BACKEND_STARTED_COMMAND = "ensure_backend_started";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
+const MANAGED_MODEL_PLAN_COMMAND = "get_managed_model_plan";
+const MANAGED_MODEL_PROGRESS_EVENT = "managed-model-progress";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
 const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
 const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
+const TOOL_UI_SOURCE_COMMAND = "get_tool_ui_source";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
 
 /**
@@ -68,10 +124,21 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
  */
 export async function getNativeBackendConnection(): Promise<NativeBackendConnection> {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
-    throw new Error("桌面运行时不可用；当前界面已进入离线模式。");
+    throw new Error(t("native.runtimeUnavailable"));
   }
 
   const payload = await invoke<unknown>(BACKEND_CONNECTION_COMMAND);
+  return parseNativeBackendConnection(payload);
+}
+
+/**
+ * Starts the selected backend and managed services unless they are healthy.
+ *
+ * @returns Validated bootstrap data for the running local backend.
+ */
+export async function ensureNativeBackendStarted(): Promise<NativeBackendConnection> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(ENSURE_BACKEND_STARTED_COMMAND);
   return parseNativeBackendConnection(payload);
 }
 
@@ -118,10 +185,10 @@ export async function chooseNativeModelConfigFile(): Promise<string | null> {
   const selection = await open({
     directory: false,
     multiple: false,
-    title: "选择 XTalk 模型配置",
+    title: t("model.dialogTitle"),
     filters: [
       {
-        name: "JSON 配置",
+        name: t("model.dialogFilter"),
         extensions: ["json"],
       },
     ],
@@ -161,6 +228,44 @@ export async function applyNativeModelConfig(
 }
 
 /**
+ * Inspects a selected configuration for managed model services.
+ *
+ * @param configPath Absolute JSON configuration path selected by the user.
+ * @returns Managed services in native startup order.
+ */
+export async function getNativeManagedModelPlan(
+  configPath: string,
+): Promise<NativeManagedModelPlan> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(MANAGED_MODEL_PLAN_COMMAND, {
+    configPath,
+  });
+  if (!isRecord(payload) || !Array.isArray(payload.services)) {
+    throw new Error("Tauri returned an invalid managed model plan.");
+  }
+  const services = payload.services;
+  if (!services.every((service) => typeof service === "string" && service)) {
+    throw new Error("Managed model plan contains an invalid service identifier.");
+  }
+  return { services };
+}
+
+/**
+ * Subscribes to native managed-model preparation progress.
+ *
+ * @param listener Callback invoked for each validated progress update.
+ * @returns Function that removes the native event subscription.
+ */
+export async function listenNativeManagedModelProgress(
+  listener: (progress: NativeManagedModelProgress) => void,
+): Promise<UnlistenFn> {
+  requireTauriRuntime();
+  return listen<unknown>(MANAGED_MODEL_PROGRESS_EVENT, (event) => {
+    listener(parseManagedModelProgress(event.payload));
+  });
+}
+
+/**
  * Opens the native directory picker for a developer tool.
  *
  * @returns Selected directory path, or `null` when the user cancels.
@@ -170,7 +275,7 @@ export async function chooseNativeToolDirectory(): Promise<string | null> {
   const selection = await open({
     directory: true,
     multiple: false,
-    title: "选择 XTalk 工具目录",
+    title: t("tools.dialogTitle"),
   });
   if (selection === null) {
     return null;
@@ -185,9 +290,9 @@ export async function chooseNativeToolDirectory(): Promise<string | null> {
 }
 
 /**
- * Lists developer tools copied into application data.
+ * Lists built-in and user-installed tools known to the native shell.
  *
- * @returns Installed tool definitions sorted by display name.
+ * @returns Unified tool definitions sorted by display name.
  */
 export async function getNativeInstalledTools(): Promise<NativeToolDefinition[]> {
   requireTauriRuntime();
@@ -215,9 +320,9 @@ export async function installNativeToolDirectory(
 }
 
 /**
- * Persists whether one installed tool should load at sidecar startup.
+ * Persists whether one built-in or user tool should load at sidecar startup.
  *
- * @param toolId App-generated installed tool identifier.
+ * @param toolId Stable identifier returned by the native shell.
  * @param enabled Desired enabled state.
  * @returns Updated tool definition.
  */
@@ -234,9 +339,9 @@ export async function setNativeToolEnabled(
 }
 
 /**
- * Deletes one copied developer tool directory from application data.
+ * Deletes one copied user tool directory from application data.
  *
- * @param toolId App-generated installed tool identifier.
+ * @param toolId User-tool identifier returned by the native shell.
  */
 export async function removeNativeInstalledTool(toolId: string): Promise<void> {
   requireTauriRuntime();
@@ -262,9 +367,33 @@ export async function applyNativeToolChanges(
   return parseNativeBackendConnection(payload);
 }
 
+/**
+ * Reads one built-in or user tool's self-contained UI entrypoint.
+ *
+ * @param toolId Tool identifier returned by Tauri.
+ * @returns Untrusted HTML source for sandboxed rendering.
+ */
+export async function getNativeToolUiSource(
+  toolId: string,
+): Promise<NativeToolUiSource> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(TOOL_UI_SOURCE_COMMAND, { toolId });
+  if (
+    !isRecord(payload) ||
+    payload.toolId !== toolId ||
+    typeof payload.source !== "string"
+  ) {
+    throw new Error("Tauri returned an invalid tool UI source.");
+  }
+  return {
+    toolId,
+    source: payload.source,
+  };
+}
+
 function requireTauriRuntime(): void {
   if (!("__TAURI_INTERNALS__" in globalThis)) {
-    throw new Error("桌面运行时不可用；当前界面已进入离线模式。");
+    throw new Error(t("native.runtimeUnavailable"));
   }
 }
 
@@ -289,6 +418,44 @@ function parseNativeBackendConnection(
   return { origin, launchToken: normalizedToken };
 }
 
+function parseManagedModelProgress(
+  payload: unknown,
+): NativeManagedModelProgress {
+  if (!isRecord(payload)) {
+    throw new Error("Tauri returned invalid managed model progress.");
+  }
+  const phase = payload.phase;
+  const serviceId = payload.serviceId;
+  const filePath = payload.filePath;
+  const numericFields = [
+    payload.serviceIndex,
+    payload.serviceCount,
+    payload.completedBytes,
+    payload.totalBytes,
+  ];
+  if (
+    !["checking", "downloading", "starting", "ready", "complete"].includes(
+      String(phase),
+    ) ||
+    (serviceId !== null && typeof serviceId !== "string") ||
+    (filePath !== null && typeof filePath !== "string") ||
+    !numericFields.every(
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+    )
+  ) {
+    throw new Error("Tauri returned malformed managed model progress.");
+  }
+  return {
+    phase: phase as NativeManagedModelProgress["phase"],
+    serviceId,
+    serviceIndex: payload.serviceIndex as number,
+    serviceCount: payload.serviceCount as number,
+    completedBytes: payload.completedBytes as number,
+    totalBytes: payload.totalBytes as number,
+    filePath,
+  };
+}
+
 function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   if (!isRecord(payload)) {
     throw new Error("Tauri returned an invalid tool definition.");
@@ -296,22 +463,44 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   const id = payload.id;
   const displayName = payload.displayName;
   const entrypoint = payload.entrypoint;
+  const ui = payload.ui;
   const enabled = payload.enabled;
+  const origin = payload.origin;
+  const canDelete = payload.canDelete;
   if (
     typeof id !== "string" ||
-    typeof displayName !== "string" ||
+    !isDisplayName(displayName) ||
     typeof entrypoint !== "string" ||
     typeof enabled !== "boolean" ||
+    (origin !== "builtin" && origin !== "user") ||
+    typeof canDelete !== "boolean" ||
+    canDelete !== (origin === "user") ||
     !id.trim() ||
-    !displayName.trim() ||
-    !entrypoint.trim()
+    !entrypoint.trim() ||
+    !isToolUiConfig(ui)
   ) {
     throw new Error("Tool definition contains invalid fields.");
   }
+  const normalizedUi =
+    ui === null
+      ? null
+      : (ui as {
+          entrypoint: string;
+          update_every_s: number;
+        });
   return {
     id,
+    origin,
+    canDelete,
     displayName,
     entrypoint,
+    ui:
+      normalizedUi === null
+        ? null
+        : {
+            entrypoint: normalizedUi.entrypoint,
+            updateEveryS: normalizedUi.update_every_s,
+          },
     enabled,
   };
 }
@@ -333,6 +522,37 @@ function parseNativeWebSearchSettings(
     throw new Error("Web-search settings contain invalid fields.");
   }
   return { enabled, keySource };
+}
+
+function isDisplayName(value: unknown): value is string | Record<string, string> {
+  if (typeof value === "string") {
+    return Boolean(value.trim());
+  }
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    return false;
+  }
+  return Object.entries(value).every(
+    ([language, name]) =>
+      Boolean(language.trim()) && typeof name === "string" && Boolean(name.trim()),
+  );
+}
+
+function isToolUiConfig(value: unknown): boolean {
+  if (value === null) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const entrypoint = value.entrypoint;
+  const updateEveryS = value.update_every_s;
+  return (
+    typeof entrypoint === "string" &&
+    Boolean(entrypoint.trim()) &&
+    typeof updateEveryS === "number" &&
+    Number.isFinite(updateEveryS) &&
+    (updateEveryS === -1 || (updateEveryS >= 0.1 && updateEveryS <= 3600))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

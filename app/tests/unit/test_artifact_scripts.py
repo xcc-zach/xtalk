@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -68,6 +70,14 @@ def test_checked_in_audio_model_manifest_matches_packaged_model() -> None:
     module.verify_audio_model_manifest()
 
 
+def test_managed_model_manifest_pins_optional_downloads() -> None:
+    """Validate managed model URLs, sizes, and SHA-256 records."""
+
+    module = load_script("verify_resources")
+
+    module.verify_managed_model_manifest()
+
+
 def test_release_has_no_bundled_default_model_config() -> None:
     """Keep provider configuration external to the release bundle."""
 
@@ -84,7 +94,7 @@ def test_wheel_requirement_adds_sorted_unique_extras() -> None:
         Path("/tmp/xtalk.whl"),
         ["ali", "testing", "ali"],
     )
-    assert requirement == "/tmp/xtalk.whl[ali,testing]"
+    assert requirement == f"{Path('/tmp/xtalk.whl')}[ali,testing]"
 
 
 def test_wheel_requirement_rejects_invalid_extra() -> None:
@@ -103,3 +113,130 @@ def test_backend_build_requires_silero_vad_dependencies() -> None:
     with pytest.raises(ValueError, match="silero-vad"):
         module.validate_required_extras(["ali"])
     module.validate_required_extras(["silero-vad", "ali"])
+
+
+def test_backend_build_requires_managed_model_client_modules(
+    tmp_path: Path,
+) -> None:
+    """Reject a stale wheel that omits a managed-model client adapter."""
+
+    module = load_script("build_backend")
+    wheel = tmp_path / "xtalk.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("xtalk/models/asr/sherpa_onnx_asr.py", "")
+
+    with pytest.raises(ValueError, match="moss_tts_nano"):
+        module.validate_required_wheel_modules(wheel)
+
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("xtalk/models/tts/moss_tts_nano.py", "")
+    module.validate_required_wheel_modules(wheel)
+
+
+def test_macos_packager_links_framework_metadata_to_resources(
+    tmp_path: Path,
+) -> None:
+    """Keep Python package metadata available without nested signing bundles."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    frameworks = app / "Contents" / "Frameworks"
+    resources = app / "Contents" / "Resources" / "app-backend-runtime"
+    metadata_name = "example-1.0.dist-info"
+    (frameworks / metadata_name).mkdir(parents=True)
+    (resources / metadata_name).mkdir(parents=True)
+    (frameworks / metadata_name / "METADATA").write_text(
+        "duplicate",
+        encoding="utf-8",
+    )
+    (resources / metadata_name / "METADATA").write_text(
+        "canonical",
+        encoding="utf-8",
+    )
+
+    linked = module.link_python_metadata_to_resources(app)
+
+    assert linked == [frameworks / metadata_name]
+    assert (frameworks / metadata_name).is_symlink()
+    assert (frameworks / metadata_name / "METADATA").read_text(
+        encoding="utf-8"
+    ) == "canonical"
+
+
+def test_managed_runtime_uses_target_specific_binary_names() -> None:
+    """Name managed sidecars according to Tauri external-bin conventions."""
+
+    module = load_script("prepare_managed_runtime")
+
+    assert module.executable_name("runtime", "aarch64-apple-darwin") == "runtime"
+    assert (
+        module.executable_name("runtime", "x86_64-pc-windows-msvc")
+        == "runtime.exe"
+    )
+    assert module.target_supports_mlx("aarch64-apple-darwin")
+    assert not module.target_supports_mlx("x86_64-unknown-linux-gnu")
+
+
+def test_managed_runtime_stages_only_onnx_cuda_provider_files(
+    tmp_path: Path,
+) -> None:
+    """Stage the CUDA and shared providers without copying unrelated files."""
+
+    module = load_script("prepare_managed_runtime")
+    source = tmp_path / "gpu"
+    destination = tmp_path / "staged"
+    source.mkdir()
+    (source / "libonnxruntime_providers_cuda.so").write_bytes(b"cuda")
+    (source / "libonnxruntime_providers_shared.so").write_bytes(b"shared")
+    (source / "unrelated.txt").write_text("skip", encoding="utf-8")
+
+    module.copy_cuda_runtime(source, destination)
+
+    assert (destination / "libonnxruntime_providers_cuda.so").is_file()
+    assert (destination / "libonnxruntime_providers_shared.so").is_file()
+    assert not (destination / "unrelated.txt").exists()
+
+
+def test_local_models_example_uses_managed_speech_and_shared_llm() -> None:
+    """Keep managed examples aligned on their shared LLM configuration."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    mlx_example = json.loads(
+        (APP_ROOT / "examples" / "local_models_mlx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        example["asr"]["params"]["base_url"]
+        == "managed://sensevoice-small"
+    )
+    assert (
+        example["tts"]["params"]["base_url"]
+        == "managed://moss-tts-nano"
+    )
+    assert example["llm_agent"] == mlx_example["llm_agent"]
+
+
+def test_mlx_local_models_example_selects_native_managed_engine() -> None:
+    """Keep the Apple Silicon MLX example on the same client protocols."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_mlx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        example["asr"]["params"]["base_url"]
+        == "managed://sensevoice-small?backend=mlx"
+    )
+    assert (
+        example["tts"]["params"]["base_url"]
+        == "managed://moss-tts-nano?backend=mlx"
+    )
+    assert example["tts"]["params"]["voices"][0]["path"].startswith(
+        "managed://moss-tts-nano/"
+    )

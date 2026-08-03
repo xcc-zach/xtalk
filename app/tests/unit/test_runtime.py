@@ -11,6 +11,7 @@ import httpx
 from backend.config import StartupConfig
 from backend.runtime import create_application
 from backend.security import STARTUP_TOKEN_HEADER
+from backend.tool_ui import ToolUIBroker
 
 
 TOKEN = "t" * 32
@@ -232,3 +233,42 @@ def test_cors_preflight_requires_an_exact_origin_but_not_a_token(
     assert allowed.status_code == 200
     assert allowed.headers["access-control-allow-origin"] == ORIGIN
     assert blocked.status_code == 403
+
+
+def test_tool_ui_frame_uses_authenticated_one_time_ticket(
+    tmp_path: Path,
+) -> None:
+    """Serve sandbox HTML once without exposing the launch token to it."""
+
+    app = create_application(
+        startup=_startup(tmp_path),
+        xtalk_runtime=_FakeRuntime(),
+        shutdown_callback=lambda: None,
+        tool_ui_broker=ToolUIBroker(),
+    )
+    source = "<!doctype html><script>document.body.textContent='ok'</script>"
+    created = asyncio.run(
+        _request(
+            app,
+            "POST",
+            "/app/api/tool-ui/frames",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+            json_body={"source": source},
+        )
+    )
+    ticket = created.json()["ticket"]
+    first = asyncio.run(
+        _request(app, "GET", f"/tool-ui-frame/{ticket}")
+    )
+    second = asyncio.run(
+        _request(app, "GET", f"/tool-ui-frame/{ticket}")
+    )
+
+    assert created.status_code == 200
+    assert first.status_code == 200
+    assert first.text == source
+    assert first.headers["cache-control"] == "no-store"
+    assert "script-src 'unsafe-inline'" in first.headers[
+        "content-security-policy"
+    ]
+    assert second.status_code == 404

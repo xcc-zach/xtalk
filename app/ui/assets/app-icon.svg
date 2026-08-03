@@ -19,24 +19,26 @@
       </feMerge>
     </filter>
   </defs>
-  <rect width="512" height="512" rx="124" fill="url(#surface)"/>
-  <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#C9C1FF" stroke-opacity=".14" stroke-width="2"/>
-  <circle cx="401" cy="108" r="54" fill="#45D9C5" fill-opacity=".08"/>
-  <circle cx="112" cy="410" r="72" fill="#8B7CFF" fill-opacity=".1"/>
-  <path
-    d="M155 139 357 373M357 139 155 373"
-    fill="none"
-    stroke="url(#stroke)"
-    stroke-linecap="round"
-    stroke-width="58"
-    filter="url(#glow)"
-  />
-  <path
-    d="M155 139 357 373M357 139 155 373"
-    fill="none"
-    stroke="#F8F7FF"
-    stroke-linecap="round"
-    stroke-opacity=".5"
-    stroke-width="7"
-  />
+  <g transform="translate(51.2 51.2) scale(.8)">
+    <rect width="512" height="512" rx="124" fill="url(#surface)"/>
+    <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#C9C1FF" stroke-opacity=".14" stroke-width="2"/>
+    <circle cx="401" cy="108" r="54" fill="#45D9C5" fill-opacity=".08"/>
+    <circle cx="112" cy="410" r="72" fill="#8B7CFF" fill-opacity=".1"/>
+    <path
+      d="M155 139 357 373M357 139 155 373"
+      fill="none"
+      stroke="url(#stroke)"
+      stroke-linecap="round"
+      stroke-width="58"
+      filter="url(#glow)"
+    />
+    <path
+      d="M155 139 357 373M357 139 155 373"
+      fill="none"
+      stroke="#F8F7FF"
+      stroke-linecap="round"
+      stroke-opacity=".5"
+      stroke-width="7"
+    />
+  </g>
 </svg>
