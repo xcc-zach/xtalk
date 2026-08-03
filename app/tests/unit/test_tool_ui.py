@@ -19,7 +19,12 @@ from xtalk.models.agents.tools import (
     ToolState,
 )
 
-from backend.tool_ui import ToolUIBinding, ToolUIBroker, wrap_tools_with_ui
+from backend.tool_ui import (
+    MAX_TOOL_UI_FRAME_TICKETS,
+    ToolUIBinding,
+    ToolUIBroker,
+    wrap_tools_with_ui,
+)
 
 
 class _Input(ToolInput):
@@ -173,23 +178,40 @@ def test_wrapper_preserves_results_and_observes_each_emit() -> None:
     ]
 
 
-async def _consume_one_time_frame() -> tuple[str | None, str | None]:
-    """Create and consume one frame ticket twice."""
+async def _read_reloadable_frame() -> list[str | None]:
+    """Read one frame ticket through repeated WKWebView reloads."""
 
     broker = ToolUIBroker()
     ticket = await broker.create_frame_ticket("<!doctype html><p>frame</p>")
-    first = await broker.consume_frame_ticket(ticket)
-    second = await broker.consume_frame_ticket(ticket)
-    return first, second
+    return [await broker.consume_frame_ticket(ticket) for _ in range(12)]
 
 
-def test_frame_ticket_is_one_time() -> None:
-    """Expose prepared HTML without putting the launch token in the frame URL."""
+def test_frame_ticket_allows_repeated_webkit_reloads_during_runtime() -> None:
+    """Permit every internal reload while the backend runtime is alive."""
 
-    first, second = asyncio.run(_consume_one_time_frame())
+    reads = asyncio.run(_read_reloadable_frame())
 
-    assert first == "<!doctype html><p>frame</p>"
-    assert second is None
+    assert reads == ["<!doctype html><p>frame</p>"] * 12
+
+
+def test_frame_ticket_store_evicts_the_oldest_document() -> None:
+    """Bound retained runtime documents while keeping recent frames readable."""
+
+    async def scenario() -> tuple[str | None, str | None]:
+        broker = ToolUIBroker()
+        tickets = [
+            await broker.create_frame_ticket(f"<p>{index}</p>")
+            for index in range(MAX_TOOL_UI_FRAME_TICKETS + 1)
+        ]
+        return (
+            await broker.consume_frame_ticket(tickets[0]),
+            await broker.consume_frame_ticket(tickets[-1]),
+        )
+
+    oldest, newest = asyncio.run(scenario())
+
+    assert oldest is None
+    assert newest == f"<p>{MAX_TOOL_UI_FRAME_TICKETS}</p>"
 
 
 class _ReplayWebSocket:
@@ -321,3 +343,99 @@ def test_chat_topbar_uses_collapsible_live_tool_status() -> None:
     assert "renderLiveToolPanel" in logic
     assert "timelineItems = [...toolUIHistory]" in logic
     assert "...toolUILive.values()" in logic
+    live_render = logic.split(
+        "function renderLiveToolPanel()", maxsplit=1
+    )[1].split("function getOrCreateToolUIRow", maxsplit=1)[0]
+    assert "reconcileStableChildren" in live_render
+    assert "...items.map((item) => getOrCreateToolUIRow" not in live_render
+    assert "container.insertBefore(child, current)" in logic
+    assert "reconcileStableChildren(elements.messages, timelineElements)" in logic
+    assert "elements.messages.replaceChildren(...timelineElements)" not in logic
+
+
+def test_tool_ui_capabilities_settle_and_can_recover() -> None:
+    """Do not destroy a frame on an intermediate hook-registration report."""
+
+    app_root = Path(__file__).parents[2]
+    frame_logic = (app_root / "ui" / "tool-ui-frame.ts").read_text(
+        encoding="utf-8"
+    )
+    app_logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+
+    assert "let capabilitiesReady = false" in frame_logic
+    assert "let capabilitiesQueued = false" in frame_logic
+    assert "capabilitiesReady = true" in frame_logic
+    assert "queueMicrotask" in frame_logic
+    capability_branch = frame_logic.split(
+        'if (event.data.type === "tool_ui.capabilities") {', maxsplit=1
+    )[1].split("return;", maxsplit=1)[0]
+    assert "this.#loaded = true" in capability_branch
+    assert "this.#flush();" in capability_branch
+    host_constructor = frame_logic.split(
+        "constructor(", maxsplit=1
+    )[1].split("/** Loads the runtime-scoped frame URL", maxsplit=1)[0]
+    assert 'this.element.addEventListener("load"' not in host_constructor
+    assert 'event.data.type === "tool_ui.received"' in frame_logic
+    assert 'type: "tool_ui.received"' in frame_logic
+    assert "event.data.callId === pending.callId" in frame_logic
+    assert "event.data.sequence === pending.sequence" in frame_logic
+    assert "this.#retryAttempts < 20" in frame_logic
+    assert "}, 100);" in frame_logic
+    unsupported_branch = app_logic.split(
+        "if (!capabilities[requiredCapability]) {",
+        maxsplit=1,
+    )[1].split("return;", maxsplit=1)[0]
+    assert "row.element.hidden = true" in unsupported_branch
+    assert "frame.destroy()" not in unsupported_branch
+
+
+def test_tool_ui_iframe_loads_only_after_entering_the_document() -> None:
+    """Avoid unnecessary WebKit reads before the frame enters the document."""
+
+    app_root = Path(__file__).parents[2]
+    frame_logic = (app_root / "ui" / "tool-ui-frame.ts").read_text(
+        encoding="utf-8"
+    )
+    app_logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+
+    constructor = frame_logic.split("constructor(", maxsplit=1)[1].split(
+        "/** Loads the runtime-scoped frame URL",
+        maxsplit=1,
+    )[0]
+    assert "this.element.src = frameUrl" not in constructor
+    assert "mount(): void" in frame_logic
+    assert "!this.element.isConnected" in frame_logic
+    assert "this.element.src = this.#frameUrl" in frame_logic
+    assert "fallback.replaceWith(frame.element);\n    frame.mount();" in app_logic
+
+
+def test_desktop_adapter_polls_authenticated_tool_ui_snapshots() -> None:
+    """Avoid the failing custom-scheme WebKit WebSocket handshake."""
+
+    app_root = Path(__file__).parents[2]
+    adapter = (
+        app_root / "ui" / "adapters" / "tool-ui-adapter.ts"
+    ).read_text(encoding="utf-8")
+
+    assert 'new URL("/app/api/tool-ui/events", this.#origin)' in adapter
+    assert '"X-XTalk-App-Token": this.#launchToken' in adapter
+    assert "parseToolUIEvents" in adapter
+    assert "new WebSocket" not in adapter
+
+
+def test_terminal_history_emit_removes_matching_live_card() -> None:
+    """Do not leave a completed tool pinned in the top live status area."""
+
+    app_root = Path(__file__).parents[2]
+    logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+    emit_branch = logic.split(
+        'if (event.type === "tool_ui.emit") {',
+        maxsplit=1,
+    )[1].split("const item:", maxsplit=1)[0]
+
+    assert "if (!event.running" in emit_branch
+    assert "toolUILive.delete(event.callId)" in emit_branch
+    assert "removeToolUIRow(`live:${event.callId}`)" in emit_branch
+    assert "historyItem.event.callId === event.callId" in emit_branch
+    assert "removeToolUIRow(historyItem.id)" in emit_branch
+    assert "candidate.event.callId !== item.event.callId" in logic

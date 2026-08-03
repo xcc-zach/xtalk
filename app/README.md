@@ -326,11 +326,15 @@ chat-history UI. If the entrypoint never registers one hook, the App does not
 render that mode. `update_every_s` defaults to one second, accepts `-1` to
 disable periodic live refresh, and is otherwise bounded from 0.1 to 3600
 seconds. Each original tool emit captures its message and current status for a
-history card. The HTML runs in a script-only opaque-origin sandbox; its CSP
+history card. A terminal emit replaces earlier history cards from the same
+tool call, so completed tools do not leave stale Running cards behind. The HTML
+runs in a script-only opaque-origin sandbox; its CSP
 blocks external resources and network APIs, link and form actions are
 suppressed, and it has no App command capability. It cannot operate the tool.
-Prepared documents use high-entropy, short-lived, one-time loopback URLs so the
-App launch token never enters the frame. The App owns card width and clamps
+Prepared documents use high-entropy, runtime-scoped loopback URLs that remain
+idempotently readable for WKWebView reloads. The capacity-bounded in-memory
+store disappears with the backend process, and the App launch token never
+enters the frame. The App owns card width and clamps
 reported height to 120–420 px for live cards and 80–600 px for history cards,
 additionally capped at 60% of the window height. See
 [`examples/tools/timer`](examples/tools/timer) for a complete example.

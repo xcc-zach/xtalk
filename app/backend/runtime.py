@@ -107,7 +107,7 @@ def create_application(
 
         @app.post("/app/api/tool-ui/frames")
         async def _create_tool_ui_frame(payload: dict[str, Any]) -> dict[str, str]:
-            """Create one short-lived sandbox-frame document ticket."""
+            """Create one runtime-scoped sandbox-frame document ticket."""
 
             if set(payload) != {"source"} or not isinstance(
                 payload["source"],
@@ -124,6 +124,16 @@ def create_application(
             except ValueError as exc:
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
             return {"ticket": ticket}
+
+        @app.get("/app/api/tool-ui/events")
+        async def _tool_ui_events(session_id: str) -> dict[str, Any]:
+            """Return replayable Tool UI events for the active App session."""
+
+            try:
+                events = await tool_ui_broker.snapshot(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"events": events}
 
         @app.get("/tool-ui-frame/{ticket}")
         async def _tool_ui_frame(ticket: str) -> HTMLResponse:
