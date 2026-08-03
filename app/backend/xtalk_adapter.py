@@ -11,6 +11,7 @@ from xtalk.models.agents.tools import (
     build_time_tool,
 )
 
+from .desktop_agent import DesktopDefaultAgent
 from .tool_registry import load_enabled_tools
 from .tool_ui import ToolUIBroker
 
@@ -49,6 +50,7 @@ def build_xtalk_runtime(
 
     builder = Xtalk.configure(config)
     if config.get("llm_agent") is not None:
+        builder.set_model(DesktopDefaultAgent)
         if tools_root is None and builtin_tools_root is None:
             tools = []
         else:

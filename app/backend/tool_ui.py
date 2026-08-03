@@ -16,6 +16,7 @@ from xtalk.models.agents.tools import AsyncTool, Finished, Running
 
 MAX_TOOL_UI_FRAME_BYTES = 2 * 1024 * 1024
 TOOL_UI_FRAME_TICKET_TTL_SECONDS = 30.0
+MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS = 200
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,8 @@ class ToolUIBroker:
         self._status_sequences: dict[str, int] = {}
         self._emit_sequences: dict[str, int] = {}
         self._last_status: dict[str, tuple[str, bool]] = {}
+        self._live_status_payloads: dict[str, dict[str, Any]] = {}
+        self._history_payloads: dict[str | None, list[dict[str, Any]]] = {}
         self._frame_tickets: dict[str, tuple[float, str]] = {}
 
     async def serve(self, websocket: WebSocket) -> None:
@@ -76,6 +79,19 @@ class ToolUIBroker:
                     continue
                 async with self._lock:
                     self._current_session_id = session_id
+                    history_payloads = self._bind_history_payloads(session_id)
+                    live_statuses = []
+                    for call_id, status in self._live_status_payloads.items():
+                        if (
+                            status.get("sessionId") is None
+                            and session_id is not None
+                        ):
+                            status["sessionId"] = session_id
+                            self._call_sessions[call_id] = session_id
+                        if status.get("sessionId") == session_id:
+                            live_statuses.append(dict(status))
+                for replay in [*history_payloads, *live_statuses]:
+                    await websocket.send_json(replay)
         except WebSocketDisconnect:
             pass
         finally:
@@ -102,7 +118,7 @@ class ToolUIBroker:
         self._last_status[call_id] = latest
         sequence = self._status_sequences.get(call_id, 0) + 1
         self._status_sequences[call_id] = sequence
-        await self._broadcast(
+        payload = (
             self._event_base(
                 event_type="tool_ui.status",
                 binding=binding,
@@ -116,6 +132,11 @@ class ToolUIBroker:
                 "updatedAt": _utc_now(),
             }
         )
+        if running:
+            self._live_status_payloads[call_id] = payload
+        else:
+            self._live_status_payloads.pop(call_id, None)
+        await self._broadcast(payload)
         if not running:
             self._last_status.pop(call_id, None)
 
@@ -133,7 +154,7 @@ class ToolUIBroker:
 
         sequence = self._emit_sequences.get(call_id, 0) + 1
         self._emit_sequences[call_id] = sequence
-        await self._broadcast(
+        payload = (
             self._event_base(
                 event_type="tool_ui.emit",
                 binding=binding,
@@ -148,6 +169,8 @@ class ToolUIBroker:
                 "emittedAt": _utc_now(),
             }
         )
+        self._retain_history_payload(payload)
+        await self._broadcast(payload)
         if not running:
             self.finish_call(call_id)
 
@@ -158,6 +181,7 @@ class ToolUIBroker:
         self._status_sequences.pop(call_id, None)
         self._emit_sequences.pop(call_id, None)
         self._last_status.pop(call_id, None)
+        self._live_status_payloads.pop(call_id, None)
 
     async def create_frame_ticket(self, source: str) -> str:
         """Create a short-lived one-time ticket for a rendered UI document.
@@ -213,6 +237,49 @@ class ToolUIBroker:
             for ticket, frame in self._frame_tickets.items()
             if frame[0] > now
         }
+
+    def _bind_history_payloads(
+        self,
+        session_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """Bind pending history events and return replay copies for a session."""
+
+        if session_id is None:
+            return []
+        pending = self._history_payloads.pop(None, [])
+        if pending:
+            for payload in pending:
+                payload["sessionId"] = session_id
+                call_id = str(payload["callId"])
+                if self._call_sessions.get(call_id) is None:
+                    self._call_sessions[call_id] = session_id
+            existing = self._history_payloads.get(session_id, [])
+            known_ids = {
+                (payload["callId"], payload["sequence"])
+                for payload in existing
+            }
+            existing.extend(
+                payload
+                for payload in pending
+                if (payload["callId"], payload["sequence"]) not in known_ids
+            )
+            self._history_payloads[session_id] = existing[
+                -MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS:
+            ]
+        return [
+            dict(payload)
+            for payload in self._history_payloads.get(session_id, [])
+        ]
+
+    def _retain_history_payload(self, payload: dict[str, Any]) -> None:
+        """Retain one bounded immutable emit for reconnect recovery."""
+
+        session_id = payload.get("sessionId")
+        if session_id is not None and not isinstance(session_id, str):
+            return
+        history = self._history_payloads.setdefault(session_id, [])
+        history.append(dict(payload))
+        del history[:-MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS]
 
     def _event_base(
         self,

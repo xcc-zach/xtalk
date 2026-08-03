@@ -115,11 +115,13 @@ microphone permission even when the user subsequently types.
 
 ## Local voice pipeline
 
-The WebView sends 16 kHz mono PCM through the public `xtalk-client` WebSocket
-with frontend VAD and enhancement disabled. Tauri resolves the bundled
-`models/audio/silero_vad.onnx` resource, and the sidecar loads it through the
-ordinary public XTalk model configuration. Server-originated speech boundaries
-then start and finish the configured remote ASR turn.
+The WebView requests browser-native echo cancellation, automatic gain control,
+and noise suppression, then sends 16 kHz mono PCM through the public
+`xtalk-client` WebSocket with frontend VAD and the custom FastEnhancer disabled.
+Tauri resolves the bundled `models/audio/silero_vad.onnx` resource, and the
+sidecar loads it through the ordinary public XTalk model configuration.
+Server-originated speech boundaries then start and finish the configured remote
+ASR turn.
 
 The model is pinned by upstream commit and SHA-256 in
 `resources/manifests/audio-models.lock.json`. The resource verifier rejects a
@@ -274,6 +276,15 @@ IDs must be a subset of the snapshot. Delete archives the SDK thread before
 marking it inactive in the App index, and per-session async locks serialize
 continue, reconfigure, and archive operations.
 
+Asynchronous tool progress is not fed back into the conversational stream.
+The Agent records lifecycle updates in tool history, while only the terminal
+update triggers one final natural-language report. This prevents a long Codex
+turn from appearing as several truncated assistant messages. The Tool UI
+broker retains each running status plus a bounded immutable emit history and
+replays both when the App WebSocket binds or reconnects. Consequently live and
+history cards remain visible even when execution started before the WebView
+channel was ready.
+
 The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
 separate from the Python entrypoint and declares capabilities by registering
 `window.xtalkToolUI.status(callback)` and/or
@@ -288,7 +299,9 @@ read-only events over a launch-token-protected App WebSocket. Live events track
 the active call. Every original initial/update emit produces a separate history
 event containing the emitted message plus status at that moment. History
 snapshots are immutable, bounded to 200 items per session, and stored in WebView
-AppData under the persisted session ID; live state is memory-only.
+AppData under the persisted session ID. The broker also keeps the latest 200
+emits per active-process session for reconnect recovery; stable call/sequence
+IDs let the WebView deduplicate those replays. Live state is memory-only.
 
 The conversation top bar does not repeat the XTalk product name. It remains
 empty when no live-capable tool is running. Active tools create one compact,

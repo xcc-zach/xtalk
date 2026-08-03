@@ -100,12 +100,13 @@ func downmixInterleavedAudio(
     }
 }
 
-/// Remove codec-generated trailing silence while retaining a short natural tail.
+/// Remove codec padding and fade the low-energy tail to suppress end artifacts.
 func trimTrailingSilence(
     _ samples: [Float],
     sampleRate: Int,
     amplitudeThreshold: Float = 0.009,
-    tailMilliseconds: Int = 120
+    tailMilliseconds: Int = 40,
+    fadeMilliseconds: Int = 30
 ) -> [Float] {
     guard !samples.isEmpty, sampleRate > 0 else {
         return []
@@ -117,7 +118,29 @@ func trimTrailingSilence(
     }
     let tailSamples = sampleRate * max(0, tailMilliseconds) / 1_000
     let endIndex = min(samples.count, lastAudibleIndex + 1 + tailSamples)
-    return Array(samples[..<endIndex])
+    var result = Array(samples[..<endIndex])
+    let fadeSamples = sampleRate * max(0, fadeMilliseconds) / 1_000
+    guard fadeSamples > 0, !result.isEmpty else {
+        return result
+    }
+
+    // Normal EOS has a quiet codec tail after the last audible sample. Fade
+    // only that tail so the final phoneme keeps its full level. If generation
+    // hits its frame budget while still audible, fade the bounded output itself
+    // to avoid an abrupt click without inventing additional silence.
+    let quietTailStart = min(lastAudibleIndex + 1, result.count)
+    let fadeStart = quietTailStart < result.count
+        ? quietTailStart
+        : max(0, result.count - fadeSamples)
+    let fadeLength = result.count - fadeStart
+    guard fadeLength > 0 else {
+        return result
+    }
+    for offset in 0 ..< fadeLength {
+        let gain = Float(fadeLength - offset - 1) / Float(fadeLength)
+        result[fadeStart + offset] *= gain
+    }
+    return result
 }
 
 extension Data {
