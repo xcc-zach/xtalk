@@ -325,7 +325,7 @@ read-only display hooks:
     document.body.textContent = event.status;
   });
   window.xtalkToolUI.emit((event) => {
-    document.body.textContent = `${event.message}\n${event.status}`;
+    document.body.textContent = `${event.outcome}\n${event.message}\n${event.status}`;
   });
 </script>
 ```
@@ -354,8 +354,10 @@ render that mode. `update_every_s` defaults to one second, accepts `-1` to
 disable periodic live refresh, and is otherwise bounded from 0.1 to 3600
 seconds. Each original tool emit captures its message and current status for a
 history card. A terminal emit replaces earlier history cards from the same
-tool call, so completed tools do not leave stale Running cards behind. The HTML
-runs in a script-only opaque-origin sandbox; its CSP
+tool call, so completed or cancelled tools do not leave stale Running cards
+behind. Emit events include `outcome` as `running`, `complete`, or `cancelled`;
+cancelled calls receive one final history emit and are removed from live UI.
+The HTML runs in a script-only opaque-origin sandbox; its CSP
 blocks external resources and network APIs, link and form actions are
 suppressed, and it has no App command capability. It cannot operate the tool.
 Prepared documents use high-entropy, runtime-scoped loopback URLs that remain
@@ -377,8 +379,11 @@ takes precedence.
 The optional **Codex** built-in is one atomic bundle and is disabled by
 default. Its single toggle enables or disables
 `codex_session_search`, `codex_session_create`,
-`codex_session_continue`, `codex_session_set_model`, and
-`codex_session_delete` together. The first real task creates a persistent
+`codex_session_continue`, `codex_models_list`,
+`codex_session_set_model`, and `codex_session_delete` together. The model-list
+operation queries the authenticated SDK catalog at call time and returns each
+visible model's supported reasoning efforts; model changes must use an ID from
+that current result and are validated against the SDK again. The first real task creates a persistent
 official Codex SDK thread; later turns always reapply the session's saved
 model, reasoning effort, working directory, and `Sandbox.full_access`. It also
 uses the SDK's no-prompt approval mode, so arbitrary existing local directories

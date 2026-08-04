@@ -28,6 +28,8 @@ export interface ToolUIEmitEvent {
   message: string;
   status: string;
   running: boolean;
+  /** Explicit lifecycle outcome; absent only in legacy persisted events. */
+  outcome?: "running" | "complete" | "cancelled";
   emittedAt: string;
 }
 
@@ -251,7 +253,11 @@ function parseToolUIEvent(payload: unknown): ToolUIEvent {
   if (
     payload.type === "tool_ui.emit" &&
     typeof payload.message === "string" &&
-    typeof payload.emittedAt === "string"
+    typeof payload.emittedAt === "string" &&
+    (payload.outcome === undefined ||
+      payload.outcome === "running" ||
+      payload.outcome === "complete" ||
+      payload.outcome === "cancelled")
   ) {
     return payload as unknown as ToolUIEmitEvent;
   }

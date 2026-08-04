@@ -66,6 +66,12 @@ def _compact_text(value: str, limit: int) -> str:
     return compact[: limit - 1].rstrip() + "…"
 
 
+def _markdown_table_cell(value: str) -> str:
+    """Escape one plain-text value for a compact Markdown table cell."""
+
+    return " ".join(value.split()).replace("\\", "\\\\").replace("|", "\\|")
+
+
 def _resolve_working_directory(value: str) -> Path:
     """Resolve and validate an unrestricted local working directory."""
 
@@ -476,6 +482,28 @@ class OpenAICodexAdapter:
             )
         return selected.model
 
+    async def list_models(self) -> list[CodexModelInfo]:
+        """Return the current account's visible Codex model catalog."""
+
+        response = await self._client.models(include_hidden=False)
+        return [
+            CodexModelInfo(
+                id=candidate.id,
+                model=candidate.model,
+                display_name=candidate.display_name,
+                description=candidate.description,
+                is_default=candidate.is_default,
+                default_reasoning_effort=(
+                    candidate.default_reasoning_effort.value
+                ),
+                supported_reasoning_efforts=[
+                    option.reasoning_effort.value
+                    for option in candidate.supported_reasoning_efforts
+                ],
+            )
+            for candidate in response.data
+        ]
+
     async def archive_thread(self, session_id: str) -> None:
         """Archive one SDK thread."""
 
@@ -526,6 +554,10 @@ class CodexContinueInput(ToolInput):
     )
 
 
+class CodexModelsInput(ToolInput):
+    """Empty input for querying the current Codex model catalog."""
+
+
 class CodexSetModelInput(ToolInput):
     """Input for changing settings used by future session turns."""
 
@@ -533,7 +565,10 @@ class CodexSetModelInput(ToolInput):
         min_length=1,
         description="Exact persistent Codex session ID.",
     )
-    model: str = Field(min_length=1, description="Codex model ID for future turns.")
+    model: str = Field(
+        min_length=1,
+        description="Exact Codex model ID returned by codex_models_list.",
+    )
     effort: str | None = Field(
         default=None,
         min_length=1,
@@ -548,6 +583,18 @@ class CodexDeleteInput(ToolInput):
         min_length=1,
         description="Exact persistent Codex session ID.",
     )
+
+
+class CodexModelInfo(ToolOutput):
+    """One currently visible model returned by the Codex SDK catalog."""
+
+    id: str
+    model: str
+    display_name: str
+    description: str
+    is_default: bool
+    default_reasoning_effort: str
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -570,6 +617,7 @@ class CodexOutput(ToolOutput):
     sessions: list[dict[str, Any]] = Field(default_factory=list)
     model: str | None = None
     effort: str | None = None
+    models: list[CodexModelInfo] = Field(default_factory=list)
 
 
 _TOOL_DATA_DIRECTORY = Path(
@@ -891,8 +939,59 @@ class CodexSessionContinueTool(_CodexTool):
         )
 
 
+class CodexModelsListTool(_CodexTool):
+    """Fetch the currently available Codex models and their supported reasoning efforts. Call this immediately before codex_session_set_model so model IDs are never guessed or taken from a stale list."""
+
+    name = "codex_models_list"
+    initial_status = "Loading Codex models"
+    input_type = CodexModelsInput
+
+    @classmethod
+    async def execute(
+        cls,
+        tool_input: CodexModelsInput,
+        tool_state: CodexToolState,
+    ) -> CodexOutput:
+        """Query the authenticated SDK model catalog without hidden entries."""
+
+        del tool_input
+        async with _adapter_factory() as adapter:
+            models = await adapter.list_models()
+        tool_state.status_text = "Codex models loaded"
+        rows = [
+            "| Model ID | Display name | Default effort | Supported efforts |",
+            "|---|---|---|---|",
+        ]
+        rows.extend(
+            "| "
+            + " | ".join(
+                (
+                    _markdown_table_cell(model.id),
+                    _markdown_table_cell(model.display_name),
+                    _markdown_table_cell(model.default_reasoning_effort),
+                    _markdown_table_cell(
+                        ", ".join(model.supported_reasoning_efforts) or "—"
+                    ),
+                )
+            )
+            + " |"
+            for model in models
+        )
+        message = (
+            "No visible Codex models are available for the current account."
+            if not models
+            else "Current Codex models:\n\n" + "\n".join(rows)
+        )
+        return CodexOutput(
+            action=cls.name,
+            success=True,
+            message=message,
+            models=models,
+        )
+
+
 class CodexSessionSetModelTool(_CodexTool):
-    """Change the model and reasoning effort used by future turns in an existing Codex session. Use only when the user explicitly requests a model or effort change."""
+    """Change the model and reasoning effort used by future turns in an existing Codex session. Call codex_models_list immediately before this tool and use an exact returned model ID; never guess or rely on a stale model list. Use only when the user explicitly requests a model or effort change."""
 
     name = "codex_session_set_model"
     initial_status = "Updating Codex model"
@@ -977,6 +1076,7 @@ def create_tools() -> list[type[AsyncTool]]:
         CodexSessionSearchTool,
         CodexSessionCreateTool,
         CodexSessionContinueTool,
+        CodexModelsListTool,
         CodexSessionSetModelTool,
         CodexSessionDeleteTool,
     ]

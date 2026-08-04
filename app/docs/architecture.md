@@ -104,11 +104,13 @@ builder. The bundled asynchronous `timer`, matching
 An enabled user tool with the same exported name takes precedence. Unit tests
 cover `Running`, progress,
 `Finished`, stop behavior, developer entrypoint loading, and the public
-`ToolEngine` final update. The model smoke independently sends a text request,
-observes `tool_called` for `timer`, and acknowledges a real assistant/TTS turn.
-It does not require a second proactive LLM report because that model-driven
-report can overlap the first response; no timer-specific serving workaround is
-added for that timing.
+`ToolEngine` update path. `DesktopDefaultAgent` is only a registration wrapper;
+the full turn loop and asynchronous update policy are inherited directly from
+`xtalk.models.agents.default.DefaultAgent`. Consequently every subscribed tool
+progress update wakes the ordinary asynchronous Agent report loop after the
+user has finished speaking. While the user is speaking, intermediate progress
+is ignored and only a final update is deferred, exactly as in the default
+Agent. Tool UI rendering remains an independent observer of those updates.
 
 Text input targets an already-open XTalk session. Since the public SDK's
 `open()` still initializes microphone capture, starting that session requires
@@ -286,14 +288,14 @@ IDs must be a subset of the snapshot. Delete archives the SDK thread before
 marking it inactive in the App index, and per-session async locks serialize
 continue, reconfigure, and archive operations.
 
-Asynchronous tool progress is not fed back into the conversational stream.
-The Agent records lifecycle updates in tool history, while only the terminal
-update triggers one final natural-language report. This prevents a long Codex
-turn from appearing as several truncated assistant messages. The Tool UI
-broker retains each running status plus a bounded immutable emit history and
-replays both through an authenticated App HTTP snapshot. Consequently live and
-history cards remain visible even when execution started before the WebView
-began polling.
+Subscribed asynchronous tool progress follows the default Agent conversation
+loop. After the user has finished speaking, every subscribed update wakes a
+natural-language report; while the user is speaking, intermediate updates are
+ignored and only the final result is deferred. The Tool UI broker independently
+retains each running status plus a bounded immutable emit history and replays
+both through an authenticated App HTTP snapshot. Consequently live and history
+cards remain visible even when execution started before the WebView began
+polling.
 
 The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
 separate from the Python entrypoint and declares capabilities by registering
@@ -314,8 +316,9 @@ that moment. History snapshots are immutable, bounded to 200 items per session,
 and stored in WebView AppData under the persisted session ID. The broker also
 keeps the latest 200 emits per active-process session for reconnect recovery;
 stable call/sequence IDs let the WebView deduplicate those replays. Live state
-is memory-only, and a terminal history event removes the corresponding live
-card even if its final status observation was missed.
+is memory-only. Completion and cancellation both publish a terminal history
+event; cancellation uses `outcome="cancelled"`. Either terminal event removes
+the corresponding live card even if its final status observation was missed.
 
 The conversation top bar does not repeat the XTalk product name. It remains
 empty when no live-capable tool is running. Active tools create one compact,
@@ -323,9 +326,9 @@ collapsed status bar containing the latest status and running count; the user
 can expand it to inspect all current live UI cards. Live cards are not inserted
 into the message timeline. History cards remain anchored to their emit
 positions, while a terminal emit replaces earlier cards from the same call so
-completed tools cannot leave a stale Running card. Both the live panel and the
-message timeline reconcile DOM children incrementally to preserve iframe
-browsing contexts during status updates.
+completed or cancelled tools cannot leave a stale Running card. Both the live
+panel and the message timeline reconcile DOM children incrementally to preserve
+iframe browsing contexts during status updates.
 
 Each card uses a separate `sandbox="allow-scripts"` iframe. The injected CSP
 blocks external resources and network APIs, and the bridge suppresses link and

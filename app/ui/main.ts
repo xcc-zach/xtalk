@@ -21,6 +21,7 @@ import {
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
+  type DesktopMessage,
   type DesktopSessionSnapshot,
   type DesktopSessionSummary,
 } from "./adapters/xtalk-client-adapter";
@@ -995,6 +996,10 @@ function handleToolUIEvent(event: ToolUIEvent): void {
   if (sessionId === null || !toolHasUI(event.toolId)) {
     return;
   }
+  const anchorMessageIndex =
+    sessionId === latestSnapshot.sessionId
+      ? findToolUIAnchorMessageIndex(latestSnapshot.messages)
+      : Number.MAX_SAFE_INTEGER;
   if (event.type === "tool_ui.emit") {
     if (!event.running && sessionId === activeToolUISessionId) {
       toolUILive.delete(event.callId);
@@ -1008,10 +1013,7 @@ function handleToolUIEvent(event: ToolUIEvent): void {
     const item: ToolUIHistoryItem = {
       kind: "history",
       id: `history:${event.callId}:${event.sequence}`,
-      anchorMessageIndex:
-        sessionId === latestSnapshot.sessionId
-          ? latestSnapshot.messages.length
-          : Number.MAX_SAFE_INTEGER,
+      anchorMessageIndex,
       order: ++toolUIOrder,
       event: { ...event, sessionId },
     };
@@ -1027,7 +1029,7 @@ function handleToolUIEvent(event: ToolUIEvent): void {
         kind: "live",
         id,
         anchorMessageIndex:
-          existing?.anchorMessageIndex ?? latestSnapshot.messages.length,
+          existing?.anchorMessageIndex ?? anchorMessageIndex,
         order: existing?.order ?? ++toolUIOrder,
         event: { ...event, sessionId },
       });
@@ -1039,6 +1041,34 @@ function handleToolUIEvent(event: ToolUIEvent): void {
     }
   }
   renderSnapshot(latestSnapshot);
+}
+
+/**
+ * Finds the timeline boundary before the current turn's first AI reply.
+ *
+ * Tool UI observations arrive on an independent polling channel and may be
+ * delivered after the assistant response they preceded. Anchoring to the
+ * current message count would therefore place completed tool UI after that
+ * response. The latest user message identifies the current turn, and the
+ * first following assistant message is the stable insertion boundary.
+ *
+ * @param messages Conversation messages in display order.
+ * @returns Message index at which history UI should be inserted.
+ */
+function findToolUIAnchorMessageIndex(messages: DesktopMessage[]): number {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  for (let index = latestUserIndex + 1; index < messages.length; index += 1) {
+    if (messages[index]?.role === "assistant") {
+      return index;
+    }
+  }
+  return messages.length;
 }
 
 function switchToolUISession(sessionId: string | null): void {
@@ -1319,6 +1349,15 @@ function appendToolUIHistory(
   if (history.some((candidate) => candidate.id === item.id)) {
     return history;
   }
+  const callHistory = history.filter(
+    (candidate) => candidate.event.callId === item.event.callId,
+  );
+  if (callHistory.length > 0) {
+    item.anchorMessageIndex = Math.min(
+      item.anchorMessageIndex,
+      ...callHistory.map((candidate) => candidate.anchorMessageIndex),
+    );
+  }
   const converged = item.event.running
     ? history
     : history.filter(
@@ -1384,6 +1423,10 @@ function isStoredToolUIHistoryItem(
     typeof event.message === "string" &&
     typeof event.status === "string" &&
     typeof event.running === "boolean" &&
+    (event.outcome === undefined ||
+      event.outcome === "running" ||
+      event.outcome === "complete" ||
+      event.outcome === "cancelled") &&
     typeof event.emittedAt === "string"
   );
 }

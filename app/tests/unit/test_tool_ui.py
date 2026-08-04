@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -97,6 +97,50 @@ class _ObservedTool(AsyncTool):
         return f"progress={tool_state.progress}"
 
 
+class _CancelledTool(AsyncTool):
+    """Asynchronous tool that remains active until its task is cancelled."""
+
+    name = "cancelled"
+
+    @classmethod
+    def emit_initial(
+        cls,
+        tool_call_id: str,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> Running:
+        """Return the initial running result."""
+
+        del cls, tool_call_id, tool_input, tool_state, global_state
+        return Running("initial")
+
+    @classmethod
+    async def aemit_updates(
+        cls,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> AsyncIterator[ToolResult[_Output]]:
+        """Wait indefinitely so the test can cancel the update task."""
+
+        del cls, tool_input, tool_state, global_state
+        await asyncio.Event().wait()
+        yield Running("unreachable")
+
+    @classmethod
+    def status(
+        cls,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> str:
+        """Return the status retained in the cancellation history emit."""
+
+        del cls, tool_input, tool_state, global_state
+        return "Tool stopped"
+
+
 class _RecordingBroker:
     """Capture published observations without opening a WebSocket."""
 
@@ -176,6 +220,55 @@ def test_wrapper_preserves_results_and_observes_each_emit() -> None:
         "progress=0",
         "progress=2",
     ]
+
+
+def test_wrapper_publishes_terminal_history_emit_when_cancelled() -> None:
+    """Represent cancellation as history UI instead of only clearing live UI."""
+
+    async def scenario() -> _RecordingBroker:
+        broker = _RecordingBroker()
+        wrapped = wrap_tools_with_ui(
+            [_CancelledTool],
+            binding=ToolUIBinding(tool_id="tool-1", update_every_s=-1),
+            broker=broker,  # type: ignore[arg-type]
+        )[0]
+        tool_input = _Input(value="input")
+        tool_state = _State(call_id="cancelled-call")
+        await wrapped.aemit_initial(
+            "cancelled-call",
+            tool_input,
+            tool_state,
+            object(),
+        )
+
+        async def consume() -> None:
+            async for _ in wrapped.aemit_updates(
+                tool_input,
+                tool_state,
+                object(),
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return broker
+
+    broker = asyncio.run(scenario())
+
+    assert broker.emits[-1] == {
+        "binding": ToolUIBinding(tool_id="tool-1", update_every_s=-1),
+        "tool_name": "cancelled",
+        "call_id": "cancelled-call",
+        "message": "Tool stopped",
+        "status": "Tool stopped",
+        "running": False,
+        "outcome": "cancelled",
+    }
 
 
 async def _read_reloadable_frame() -> list[str | None]:
@@ -307,9 +400,43 @@ def test_broker_replays_history_emit_after_app_channel_connects() -> None:
             "message": "Codex completed",
             "status": "Complete",
             "running": False,
+            "outcome": "complete",
             "emittedAt": websocket.messages[0]["emittedAt"],
         }
     ]
+
+
+def test_cancelled_emit_replaces_live_status_in_broker_snapshot() -> None:
+    """Keep the cancellation history card and remove the matching live card."""
+
+    async def scenario() -> list[dict[str, Any]]:
+        broker = ToolUIBroker()
+        binding = ToolUIBinding(tool_id="builtin:timer", update_every_s=0.5)
+        await broker.publish_status(
+            binding=binding,
+            tool_name="timer",
+            call_id="timer-call",
+            status="10 of 60 seconds",
+            running=True,
+        )
+        await broker.publish_emit(
+            binding=binding,
+            tool_name="timer",
+            call_id="timer-call",
+            message="Timer stopped after 10 seconds out of 60 seconds.",
+            status="Timer stopped after 10 seconds out of 60 seconds.",
+            running=False,
+            outcome="cancelled",
+        )
+        return await broker.snapshot("session-1")
+
+    events = asyncio.run(scenario())
+
+    assert len(events) == 1
+    assert events[0]["type"] == "tool_ui.emit"
+    assert events[0]["callId"] == "timer-call"
+    assert events[0]["running"] is False
+    assert events[0]["outcome"] == "cancelled"
 
 
 def test_timer_example_uses_unlabeled_live_and_history_ui() -> None:
@@ -335,6 +462,8 @@ def test_timer_example_uses_unlabeled_live_and_history_ui() -> None:
         assert 'title: "计时器"' in source
         assert 'running: "运行中"' in source
         assert 'complete: "已完成"' in source
+        assert 'cancelled: "已取消"' in source
+        assert '=== "cancelled"' in source
         assert 'seconds: "秒"' in source
         assert "copy.seconds" in source
         assert "History UI" not in source
@@ -382,6 +511,33 @@ def test_codex_tool_ui_localizes_actions_and_runtime_status() -> None:
     assert '"Codex is working": "Codex 正在处理"' in source
     assert '"Codex completed": "Codex 已完成"' in source
     assert 'failed: "失败"' in source
+    assert 'cancelled: "已取消"' in source
+    assert 'outcome === "cancelled"' in source
+    assert "const isInternalAsyncNotice" in source
+    assert "The final result will be delivered asynchronously" in source
+    assert 'isInternalAsyncNotice(message) ? "" : message' in source
+
+
+def test_codex_tool_ui_renders_safe_offline_markdown() -> None:
+    """Render common Markdown and GFM tables without injecting raw HTML."""
+
+    source = (
+        Path(__file__).parents[2]
+        / "resources"
+        / "tools"
+        / "codex"
+        / "ui"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert "const renderMarkdown" in source
+    assert "const appendInlineMarkdown" in source
+    assert "const tableAlignment" in source
+    assert 'document.createElement("table")' in source
+    assert 'document.createElement("pre")' in source
+    assert 'renderMarkdown(byId("message"), displayMessage)' in source
+    assert "container.replaceChildren(fragment)" in source
+    assert "innerHTML" not in source
 
 
 def test_chat_topbar_uses_collapsible_live_tool_status() -> None:
@@ -405,6 +561,23 @@ def test_chat_topbar_uses_collapsible_live_tool_status() -> None:
     assert "container.insertBefore(child, current)" in logic
     assert "reconcileStableChildren(elements.messages, timelineElements)" in logic
     assert "elements.messages.replaceChildren(...timelineElements)" not in logic
+
+
+def test_history_tool_ui_is_anchored_before_the_current_assistant_reply() -> None:
+    """Keep delayed tool observations ahead of the reply they produced."""
+
+    logic = (
+        Path(__file__).parents[2] / "ui" / "main.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "findToolUIAnchorMessageIndex(latestSnapshot.messages)" in logic
+    anchor_logic = logic.split(
+        "function findToolUIAnchorMessageIndex", maxsplit=1
+    )[1].split("function switchToolUISession", maxsplit=1)[0]
+    assert 'messages[index]?.role === "user"' in anchor_logic
+    assert 'messages[index]?.role === "assistant"' in anchor_logic
+    assert "return index;" in anchor_logic
+    assert "item.anchorMessageIndex = Math.min(" in logic
 
 
 def test_tool_ui_capabilities_settle_and_can_recover() -> None:
@@ -461,6 +634,27 @@ def test_tool_ui_iframe_loads_only_after_entering_the_document() -> None:
     assert "!this.element.isConnected" in frame_logic
     assert "this.element.src = this.#frameUrl" in frame_logic
     assert "fallback.replaceWith(frame.element);\n    frame.mount();" in app_logic
+
+
+def test_tool_ui_frame_measures_content_without_viewport_feedback() -> None:
+    """Size history cards to body content instead of the iframe viewport."""
+
+    app_root = Path(__file__).parents[2]
+    frame_logic = (app_root / "ui" / "tool-ui-frame.ts").read_text(
+        encoding="utf-8"
+    )
+    styles = (app_root / "ui" / "styles.css").read_text(encoding="utf-8")
+
+    assert "measuredElement.getBoundingClientRect().height" in frame_logic
+    assert (
+        "new ResizeObserver(reportHeight).observe(measuredElement)"
+        in frame_logic
+    )
+    assert "document.documentElement.scrollHeight" not in frame_logic
+    assert "#messages > .tool-ui-row + .tool-ui-row" in styles
+    assert "#messages > .tool-ui-row + .message-row" in styles
+    assert "#messages > .message-row + .tool-ui-row" in styles
+    assert "margin-top: -6px" in styles
 
 
 def test_desktop_adapter_polls_authenticated_tool_ui_snapshots() -> None:
