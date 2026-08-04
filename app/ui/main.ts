@@ -8,6 +8,7 @@ import {
   ensureNativeBackendStarted,
   getNativeManagedModelPlan,
   getNativeBackendConnection,
+  getNativeWebSearchSettings,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
   getNativeToolUiSource,
@@ -18,6 +19,7 @@ import {
   type NativeManagedModelProgress,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
+  type NativeWebSearchSettings,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
@@ -86,6 +88,25 @@ const elements = {
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
   ),
+  webSearchEnabledToggle: requireElement<HTMLInputElement>(
+    "web-search-enabled-toggle",
+  ),
+  webSearchConfigureKeyButton: requireElement<HTMLButtonElement>(
+    "web-search-configure-key-button",
+  ),
+  webSearchApiKeyDialog: requireElement<HTMLDialogElement>(
+    "web-search-api-key-dialog",
+  ),
+  webSearchApiKeyForm: requireElement<HTMLFormElement>(
+    "web-search-api-key-form",
+  ),
+  webSearchApiKeyDialogInput: requireElement<HTMLInputElement>(
+    "web-search-api-key-dialog-input",
+  ),
+  webSearchApiKeyCancelButton: requireElement<HTMLButtonElement>(
+    "web-search-api-key-cancel-button",
+  ),
+  webSearchStatus: requireElement<HTMLElement>("web-search-status"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
   developerToolsStatus: requireElement<HTMLElement>(
     "developer-tools-status",
@@ -184,7 +205,8 @@ let sessionOperation = false;
 let sendingText = false;
 let modelConfigOperation = false;
 let toolOperation = false;
-let toolChangesPending = false;
+let webSearchChangesPending = false;
+let developerToolChangesPending = false;
 let diagnosticsOpen = false;
 let toolsDialogOpen = false;
 let managedProgressState: "closed" | "running" | "failed" = "closed";
@@ -195,6 +217,9 @@ let sidebarOpen = false;
 let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
+let webSearchSettings: NativeWebSearchSettings | null = null;
+let pendingWebSearchApiKey: string | null = null;
+let enableWebSearchAfterKeyDialog = false;
 let installedTools: NativeToolDefinition[] = [];
 let activeToolUISessionId: string | null = null;
 let toolUIOrder = 0;
@@ -350,6 +375,9 @@ function applyUiLanguage(): void {
   updateNetworkStatus();
   renderModelConfigSelection({ configPath: modelConfigPath });
   renderInstalledTools(installedTools);
+  if (webSearchSettings !== null) {
+    renderWebSearchSettings(webSearchSettings);
+  }
   updateDeveloperToolsStatus();
   renderSnapshot(latestSnapshot);
   renderManagedProgress();
@@ -1767,6 +1795,22 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
   updateToolControls();
 }
 
+function renderWebSearchSettings(settings: NativeWebSearchSettings): void {
+  webSearchSettings = settings;
+  elements.webSearchEnabledToggle.checked = settings.enabled;
+  const canConfigureKey =
+    settings.keySource === "session" ||
+    pendingWebSearchApiKey !== null ||
+    (settings.keySource === "missing" && settings.enabled);
+  elements.webSearchConfigureKeyButton.hidden = !canConfigureKey;
+  elements.webSearchConfigureKeyButton.textContent =
+    settings.keySource === "session" || pendingWebSearchApiKey !== null
+      ? t("webSearch.modifyKey")
+      : t("webSearch.enterKey");
+  updateWebSearchStatus();
+  updateToolControls();
+}
+
 function updateToolControls(): void {
   const busy =
     toolOperation ||
@@ -1776,7 +1820,14 @@ function updateToolControls(): void {
     sendingText;
   elements.installToolDirectoryButton.disabled = busy;
   elements.applyToolChangesButton.disabled =
-    busy || !toolChangesPending || modelConfigPath === null;
+    busy ||
+    (!webSearchChangesPending && !developerToolChangesPending) ||
+    modelConfigPath === null;
+  elements.webSearchEnabledToggle.disabled =
+    busy ||
+    webSearchSettings === null;
+  elements.webSearchConfigureKeyButton.disabled =
+    busy || webSearchSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
   >("input, button")) {
@@ -1784,12 +1835,57 @@ function updateToolControls(): void {
   }
 }
 
+function updateWebSearchStatus(message?: string): void {
+  if (message) {
+    elements.webSearchStatus.textContent = message;
+    return;
+  }
+  if (webSearchSettings === null) {
+    elements.webSearchStatus.textContent = t("webSearch.loading");
+    return;
+  }
+  if (webSearchChangesPending) {
+    if (
+      webSearchSettings.enabled &&
+      webSearchSettings.keySource === "missing" &&
+      pendingWebSearchApiKey === null
+    ) {
+      elements.webSearchStatus.textContent =
+        t("webSearch.keyRequired");
+      return;
+    }
+    if (pendingWebSearchApiKey !== null) {
+      elements.webSearchStatus.textContent = webSearchSettings.enabled
+        ? t("webSearch.keyPendingEnabled")
+        : t("webSearch.keyPendingDisabled");
+      return;
+    }
+    elements.webSearchStatus.textContent = t("webSearch.pending");
+    return;
+  }
+  if (webSearchSettings.keySource === "missing") {
+    elements.webSearchStatus.textContent =
+      webSearchSettings.enabled
+        ? t("webSearch.keyRequired")
+        : t("webSearch.missingDisabled");
+    return;
+  }
+  elements.webSearchStatus.textContent =
+    webSearchSettings.enabled
+      ? webSearchSettings.keySource === "environment"
+        ? t("webSearch.enabledEnvironment")
+        : t("webSearch.enabledSession")
+      : webSearchSettings.keySource === "environment"
+        ? t("webSearch.disabledEnvironment")
+        : t("webSearch.disabledSession");
+}
+
 function updateDeveloperToolsStatus(message?: string): void {
   if (message) {
     elements.developerToolsStatus.textContent = message;
     return;
   }
-  if (toolChangesPending) {
+  if (developerToolChangesPending) {
     elements.developerToolsStatus.textContent = t("tools.pending");
     return;
   }
@@ -1810,6 +1906,12 @@ async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
   renderInstalledTools(tools);
   updateDeveloperToolsStatus();
   return tools;
+}
+
+async function refreshWebSearchSettings(): Promise<NativeWebSearchSettings> {
+  const settings = await getNativeWebSearchSettings();
+  renderWebSearchSettings(settings);
+  return settings;
 }
 
 async function detachCurrentAdapter(): Promise<void> {
@@ -1891,9 +1993,16 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     elements.modelConfigStatus.textContent = t("model.restarting");
     setBackendStatus("loading", "service.applyingConfig");
     await detachCurrentAdapter();
-    await applyNativeModelConfig(selectedPath);
-    toolChangesPending = false;
+    await applyNativeModelConfig(
+      selectedPath,
+      webSearchSettings?.enabled ?? false,
+      pendingWebSearchApiKey,
+    );
+    pendingWebSearchApiKey = null;
+    webSearchChangesPending = false;
+    developerToolChangesPending = false;
     const selection = await refreshModelConfigSelection();
+    await refreshWebSearchSettings();
     updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
       ? t("model.appliedRestarted")
@@ -1987,7 +2096,7 @@ async function chooseAndInstallToolDirectory(): Promise<void> {
 
     updateDeveloperToolsStatus(t("tools.copying"));
     const installed = await installNativeToolDirectory(selectedPath);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       t("tools.installed", {
@@ -2019,7 +2128,7 @@ async function updateInstalledToolEnabled(
 
   try {
     const updated = await setNativeToolEnabled(toolId, enabled);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       t("tools.updated", {
@@ -2056,7 +2165,7 @@ async function removeInstalledTool(toolId: string): Promise<void> {
 
   try {
     await removeNativeInstalledTool(toolId);
-    toolChangesPending = true;
+    developerToolChangesPending = true;
     await refreshInstalledTools();
     updateDeveloperToolsStatus(
       t("tools.removed", {
@@ -2076,8 +2185,66 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   }
 }
 
-async function applyInstalledToolChanges(): Promise<void> {
-  if (toolOperation || !toolChangesPending) {
+function updateWebSearchEnabled(enabled: boolean): void {
+  if (webSearchSettings === null) {
+    return;
+  }
+  if (
+    enabled &&
+    webSearchSettings.keySource === "missing" &&
+    pendingWebSearchApiKey === null
+  ) {
+    openWebSearchApiKeyDialog(true);
+    return;
+  }
+  webSearchChangesPending = true;
+  renderWebSearchSettings({ ...webSearchSettings, enabled });
+}
+
+function openWebSearchApiKeyDialog(enableAfterSave: boolean): void {
+  enableWebSearchAfterKeyDialog = enableAfterSave;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+  elements.webSearchApiKeyDialog.showModal();
+  elements.webSearchApiKeyDialogInput.focus();
+}
+
+function cancelWebSearchApiKeyDialog(): void {
+  enableWebSearchAfterKeyDialog = false;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialog.close();
+  elements.webSearchEnabledToggle.checked =
+    webSearchSettings?.enabled ?? false;
+}
+
+function saveWebSearchApiKey(): void {
+  const apiKey = elements.webSearchApiKeyDialogInput.value.trim();
+  if (!apiKey) {
+    elements.webSearchApiKeyDialogInput.setCustomValidity(
+      t("webSearch.keyValidation"),
+    );
+    elements.webSearchApiKeyDialogInput.reportValidity();
+    return;
+  }
+
+  pendingWebSearchApiKey = apiKey;
+  webSearchChangesPending = true;
+  const enabled = enableWebSearchAfterKeyDialog
+    ? true
+    : (webSearchSettings?.enabled ?? false);
+  enableWebSearchAfterKeyDialog = false;
+  elements.webSearchApiKeyDialogInput.value = "";
+  elements.webSearchApiKeyDialog.close();
+  if (webSearchSettings !== null) {
+    renderWebSearchSettings({ ...webSearchSettings, enabled });
+  }
+}
+
+async function applyToolChanges(): Promise<void> {
+  if (
+    toolOperation ||
+    (!webSearchChangesPending && !developerToolChangesPending)
+  ) {
     return;
   }
   if (modelConfigPath === null) {
@@ -2087,17 +2254,25 @@ async function applyInstalledToolChanges(): Promise<void> {
 
   toolOperation = true;
   showError(null);
+  updateWebSearchStatus(t("tools.restarting"));
   updateDeveloperToolsStatus(t("tools.restarting"));
   setBackendStatus("loading", "tools.applying");
   updateControls(latestSnapshot);
 
   try {
     await detachCurrentAdapter();
-    await applyNativeToolChanges();
-    toolChangesPending = false;
+    await applyNativeToolChanges(
+      webSearchSettings?.enabled ?? false,
+      pendingWebSearchApiKey,
+    );
+    pendingWebSearchApiKey = null;
+    webSearchChangesPending = false;
+    developerToolChangesPending = false;
+    await refreshWebSearchSettings();
     updateDeveloperToolsStatus(t("tools.applied"));
     await discoverBackend();
   } catch (error) {
+    updateWebSearchStatus(t("tools.applyFailed"));
     updateDeveloperToolsStatus(t("tools.applyFailed"));
     await discoverBackend();
     showError("tools.applyFailedDetail", { error });
@@ -2110,6 +2285,7 @@ async function applyInstalledToolChanges(): Promise<void> {
 
 async function initializeApplication(): Promise<void> {
   try {
+    await refreshWebSearchSettings();
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
@@ -2288,8 +2464,28 @@ elements.selectModelConfigButton.addEventListener("click", () => {
 elements.installToolDirectoryButton.addEventListener("click", () => {
   void chooseAndInstallToolDirectory();
 });
+elements.webSearchEnabledToggle.addEventListener("change", () => {
+  updateWebSearchEnabled(elements.webSearchEnabledToggle.checked);
+});
+elements.webSearchConfigureKeyButton.addEventListener("click", () => {
+  openWebSearchApiKeyDialog(false);
+});
+elements.webSearchApiKeyForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveWebSearchApiKey();
+});
+elements.webSearchApiKeyDialogInput.addEventListener("input", () => {
+  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+});
+elements.webSearchApiKeyCancelButton.addEventListener("click", () => {
+  cancelWebSearchApiKeyDialog();
+});
+elements.webSearchApiKeyDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelWebSearchApiKeyDialog();
+});
 elements.applyToolChangesButton.addEventListener("click", () => {
-  void applyInstalledToolChanges();
+  void applyToolChanges();
 });
 elements.textComposer.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2349,6 +2545,9 @@ window.addEventListener("keydown", (event) => {
   if (managedProgressState === "running") {
     event.preventDefault();
     event.stopImmediatePropagation();
+    return;
+  }
+  if (elements.webSearchApiKeyDialog.open) {
     return;
   }
   if (event.key === "Escape" && managedProgressState === "failed") {

@@ -96,7 +96,7 @@ def test_wheel_requirement_adds_sorted_unique_extras() -> None:
         Path("/tmp/xtalk.whl"),
         ["ali", "testing", "ali"],
     )
-    assert requirement == "/tmp/xtalk.whl[ali,testing]"
+    assert requirement == f"{Path('/tmp/xtalk.whl')}[ali,testing]"
 
 
 def test_wheel_requirement_rejects_invalid_extra() -> None:
@@ -380,16 +380,16 @@ def test_managed_runtime_reset_preserves_readme(tmp_path: Path) -> None:
     assert not (tmp_path / "libonnxruntime.1.28.0.dylib").exists()
 
 
-def test_local_models_example_uses_managed_speech_and_sample_llm() -> None:
-    """Keep the managed example aligned with the public server sample."""
+def test_local_models_example_uses_managed_speech_and_shared_llm() -> None:
+    """Keep managed examples aligned on their shared LLM configuration."""
 
     example = json.loads(
         (APP_ROOT / "examples" / "local_models.json").read_text(
             encoding="utf-8"
         )
     )
-    sample = json.loads(
-        (APP_ROOT.parent / "server_configs" / "sample.json").read_text(
+    mlx_example = json.loads(
+        (APP_ROOT / "examples" / "local_models_mlx.json").read_text(
             encoding="utf-8"
         )
     )
@@ -401,9 +401,7 @@ def test_local_models_example_uses_managed_speech_and_sample_llm() -> None:
         example["tts"]["params"]["base_url"]
         == "managed://moss-tts-nano"
     )
-    expected_llm = sample["llm_agent"]
-    expected_llm["params"]["model"]["api_key"] = ""
-    assert example["llm_agent"] == expected_llm
+    assert example["llm_agent"] == mlx_example["llm_agent"]
 
 
 def test_mlx_local_models_example_selects_native_managed_engine() -> None:

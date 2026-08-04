@@ -31,7 +31,6 @@ code.
 9. Tauri supplies the packaged Silero model as a top-level configuration
    fallback, so the Python sidecar produces speech boundaries when the selected
    configuration does not declare its own VAD.
-
 The sidecar disables HTTP access logs so the query capability used by the
 public SDK cannot appear in URL logs.
 

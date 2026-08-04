@@ -26,7 +26,6 @@ runtime builder 与工具 API，包括原生工具所需、文档已公开的
 8. UI 创建 `xtalk-client` Session，并关闭前端 VAD 与增强器。
 9. Tauri 将随包 Silero 模型作为顶层配置回退项传给 sidecar；当所选配置没有显式
    声明 VAD 时，由 Python sidecar 产生语音边界。
-
 sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出现在 URL
 日志中。
 

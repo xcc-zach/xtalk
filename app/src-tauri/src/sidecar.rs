@@ -32,6 +32,7 @@ const DESKTOP_ANONYMOUS_USER_ID: &str = "xtalk-desktop-user";
 const PROTOCOL_VERSION: u16 = 1;
 const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
 const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
+const WEB_SEARCH_SETTINGS_FILE: &str = "web-search-settings.json";
 const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
 const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
 const DESKTOP_VAD_THRESHOLD: f64 = 0.7;
@@ -73,9 +74,32 @@ pub(crate) struct NativeModelConfigSelection {
     pub(crate) config_path: Option<PathBuf>,
 }
 
+/// Web-search settings exposed to the trusted WebView.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeWebSearchSettings {
+    /// Whether the user selected asynchronous web search.
+    pub(crate) enabled: bool,
+    /// Where the active Serper API key comes from, if one is available.
+    pub(crate) key_source: WebSearchApiKeySource,
+}
+
+/// Source of the Serper API key available to the current App process.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WebSearchApiKeySource {
+    /// A supported key exists in the desktop environment.
+    Environment,
+    /// The user supplied a key for this App session only.
+    Session,
+    /// No supported key is currently available.
+    Missing,
+}
+
 struct BackendSupervisorState {
     config_path: Option<PathBuf>,
     manager: Option<Arc<BackendManager>>,
+    web_search_api_key: Option<String>,
 }
 
 /// Supervises the optional sidecar selected by the desktop user.
@@ -102,6 +126,7 @@ impl BackendSupervisor {
             state: Mutex::new(BackendSupervisorState {
                 config_path,
                 manager: None,
+                web_search_api_key: None,
             }),
             operation_gate: Mutex::new(()),
             app_close_started: AtomicBool::new(false),
@@ -127,27 +152,73 @@ impl BackendSupervisor {
         manager.connection()
     }
 
+    /// Returns the persisted selection and API-key source for web search.
+    pub(crate) async fn web_search_settings(
+        &self,
+        app: &AppHandle,
+    ) -> Result<NativeWebSearchSettings, BackendError> {
+        let key_source = if web_search_environment_api_key_available() {
+            WebSearchApiKeySource::Environment
+        } else if self.state.lock().await.web_search_api_key.is_some() {
+            WebSearchApiKeySource::Session
+        } else {
+            WebSearchApiKeySource::Missing
+        };
+        Ok(NativeWebSearchSettings {
+            enabled: load_web_search_enabled(app)?,
+            key_source,
+        })
+    }
+
+    /// Applies web-search settings without persisting a session API key.
+    pub(crate) async fn configure_web_search(
+        &self,
+        app: &AppHandle,
+        enabled: bool,
+        api_key: Option<String>,
+    ) -> Result<(), BackendError> {
+        let api_key = api_key.and_then(normalize_web_search_api_key);
+        let mut state = self.state.lock().await;
+        if enabled
+            && !web_search_environment_api_key_available()
+            && api_key.is_none()
+            && state.web_search_api_key.is_none()
+        {
+            return Err(BackendError::MissingWebSearchApiKey);
+        }
+
+        persist_web_search_enabled(app, enabled)?;
+        if let Some(api_key) = api_key {
+            state.web_search_api_key = Some(api_key);
+        }
+        Ok(())
+    }
+
     /// Starts the selected backend when no healthy instance is running.
     pub(crate) async fn ensure_started(
         &self,
         app: &AppHandle,
     ) -> Result<NativeBackendConnection, BackendError> {
         let _operation_guard = self.operation_gate.lock().await;
-        let (config_path, previous_manager) = {
+        let (config_path, previous_manager, web_search_api_key) = {
             let mut state = self.state.lock().await;
             if let Some(manager) = state.manager.as_ref() {
                 if let Ok(connection) = manager.connection() {
                     return Ok(connection);
                 }
             }
-            (state.config_path.clone(), state.manager.take())
+            (
+                state.config_path.clone(),
+                state.manager.take(),
+                state.web_search_api_key.clone(),
+            )
         };
 
         if let Some(manager) = previous_manager {
             manager.shutdown().await?;
         }
         let config_path = config_path.ok_or(BackendError::Unavailable)?;
-        let manager = BackendManager::start(app, config_path).await?;
+        let manager = BackendManager::start(app, config_path, web_search_api_key).await?;
         let connection = manager.connection()?;
         self.state.lock().await.manager = Some(manager);
         Ok(connection)
@@ -161,23 +232,28 @@ impl BackendSupervisor {
     ) -> Result<NativeBackendConnection, BackendError> {
         let config_path = validate_model_config_path(&config_path)?;
         let _operation_guard = self.operation_gate.lock().await;
-        let (previous_config_path, previous_manager) = {
+        let (previous_config_path, previous_manager, web_search_api_key) = {
             let mut state = self.state.lock().await;
-            (state.config_path.clone(), state.manager.take())
+            (
+                state.config_path.clone(),
+                state.manager.take(),
+                state.web_search_api_key.clone(),
+            )
         };
 
         if let Some(manager) = previous_manager {
             manager.shutdown().await?;
         }
 
-        let manager = match BackendManager::start(app, config_path.clone()).await {
-            Ok(manager) => manager,
-            Err(error) => {
-                self.restore_previous_manager(app, previous_config_path)
-                    .await;
-                return Err(error);
-            }
-        };
+        let manager =
+            match BackendManager::start(app, config_path.clone(), web_search_api_key).await {
+                Ok(manager) => manager,
+                Err(error) => {
+                    self.restore_previous_manager(app, previous_config_path)
+                        .await;
+                    return Err(error);
+                }
+            };
         let connection = match manager.connection() {
             Ok(connection) => connection,
             Err(error) => {
@@ -216,8 +292,9 @@ impl BackendSupervisor {
     }
 
     async fn restore_previous_manager(&self, app: &AppHandle, config_path: Option<PathBuf>) {
+        let web_search_api_key = self.state.lock().await.web_search_api_key.clone();
         let manager = if let Some(path) = config_path.as_ref() {
-            match BackendManager::start(app, path.clone()).await {
+            match BackendManager::start(app, path.clone(), web_search_api_key).await {
                 Ok(manager) => Some(manager),
                 Err(_) => {
                     eprintln!("the previous app-backend configuration could not be restored");
@@ -264,7 +341,11 @@ pub(crate) struct BackendManager {
 
 impl BackendManager {
     /// Starts the packaged sidecar and completes its readiness handshake.
-    async fn start(app: &AppHandle, config_path: PathBuf) -> Result<Arc<Self>, BackendError> {
+    async fn start(
+        app: &AppHandle,
+        config_path: PathBuf,
+        web_search_api_key: Option<String>,
+    ) -> Result<Arc<Self>, BackendError> {
         let token = generate_launch_token()?;
         let vad_model_path = resolve_required_resource(app, VAD_MODEL_RESOURCE, false)?;
         let builtin_tools_root = resolve_required_resource(app, BUILTIN_TOOLS_RESOURCE, true)?;
@@ -273,6 +354,8 @@ impl BackendManager {
         validate_sidecar_runtime(&sidecar_directory)?;
         let data_dir = app.path().app_data_dir()?;
         std::fs::create_dir_all(&data_dir)?;
+        let web_search_enabled = load_web_search_enabled(app)?;
+        let environment_key_available = web_search_environment_api_key_available();
         let (managed_services, config_overlay) =
             ManagedServices::start(app, &config_path, &data_dir).await?;
 
@@ -283,6 +366,8 @@ impl BackendManager {
             data_dir,
             builtin_tools_root,
             origins: allowed_origins(),
+            web_search_enabled: web_search_enabled
+                && (environment_key_available || web_search_api_key.is_some()),
             config_fallbacks: build_config_fallbacks(&vad_model_path),
             config_overlay,
             anonymous_user_id: DESKTOP_ANONYMOUS_USER_ID,
@@ -290,13 +375,18 @@ impl BackendManager {
         let mut startup_line = serde_json::to_vec(&startup)?;
         startup_line.push(b'\n');
 
-        let command = match app.shell().sidecar(SIDECAR_NAME) {
+        let mut command = match app.shell().sidecar(SIDECAR_NAME) {
             Ok(command) => command.current_dir(sidecar_directory),
             Err(error) => {
                 managed_services.shutdown().await;
                 return Err(error.into());
             }
         };
+        if !environment_key_available {
+            if let Some(api_key) = web_search_api_key {
+                command = command.env("SERPER_API_KEY", api_key);
+            }
+        }
         let (mut events, mut child) = match command.spawn() {
             Ok(spawned) => spawned,
             Err(error) => {
@@ -434,6 +524,7 @@ struct StartupMessage<'a> {
     data_dir: PathBuf,
     builtin_tools_root: PathBuf,
     origins: Vec<String>,
+    web_search_enabled: bool,
     config_fallbacks: Value,
     config_overlay: Value,
     anonymous_user_id: &'a str,
@@ -492,6 +583,8 @@ pub(crate) enum BackendError {
     InvalidModelConfigRoot,
     #[error("the saved model configuration selection has an unsupported version")]
     UnsupportedModelConfigSelection,
+    #[error("web search requires an environment key or a session Serper API key")]
+    MissingWebSearchApiKey,
     #[error("the sidecar runtime resource has no parent directory")]
     InvalidResourceLayout,
     #[error("app-backend did not become ready within the startup timeout")]
@@ -721,6 +814,41 @@ fn model_config_selection_path(app: &AppHandle) -> Result<PathBuf, BackendError>
         .path()
         .app_config_dir()?
         .join(MODEL_CONFIG_SELECTION_FILE))
+}
+
+/// Persists the user's asynchronous web-search selection.
+fn persist_web_search_enabled(app: &AppHandle, enabled: bool) -> Result<(), BackendError> {
+    let settings_path = web_search_settings_path(app)?;
+    let parent = settings_path
+        .parent()
+        .ok_or(BackendError::InvalidResourceLayout)?;
+    fs::create_dir_all(parent)?;
+    fs::write(settings_path, serde_json::to_vec_pretty(&enabled)?)?;
+    Ok(())
+}
+
+fn web_search_settings_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    Ok(app.path().app_config_dir()?.join(WEB_SEARCH_SETTINGS_FILE))
+}
+
+fn load_web_search_enabled(app: &AppHandle) -> Result<bool, BackendError> {
+    let settings_path = web_search_settings_path(app)?;
+    if settings_path.is_file() {
+        Ok(serde_json::from_slice(&fs::read(settings_path)?)?)
+    } else {
+        Ok(false)
+    }
+}
+
+fn normalize_web_search_api_key(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn web_search_environment_api_key_available() -> bool {
+    ["SERPER_API_KEY", "GOOGLE_SERPER_API_KEY"]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
 }
 
 fn validate_model_config_path(path: &Path) -> Result<PathBuf, BackendError> {
@@ -1013,6 +1141,7 @@ mod tests {
             data_dir: PathBuf::from("app-data"),
             builtin_tools_root: PathBuf::from("resources/tools"),
             origins: vec!["tauri://localhost".to_owned()],
+            web_search_enabled: true,
             config_fallbacks: build_config_fallbacks(&vad_model_path),
             config_overlay: json!({}),
             anonymous_user_id: DESKTOP_ANONYMOUS_USER_ID,
@@ -1030,6 +1159,8 @@ mod tests {
                 },
             })
         );
+        assert_eq!(payload["web_search_enabled"], json!(true));
+        assert!(payload.get("web_search_api_key").is_none());
         assert_eq!(payload["config_overlay"], json!({}));
         assert_eq!(
             payload["anonymous_user_id"],
