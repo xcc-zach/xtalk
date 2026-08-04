@@ -22,6 +22,7 @@ REQUIRED_XTALK_EXTRAS = frozenset({"silero-vad"})
 REQUIRED_XTALK_MODULES = (
     "xtalk/models/asr/sherpa_onnx_asr.py",
     "xtalk/models/tts/moss_tts_nano.py",
+    "xtalk/models/tts/sherpa_onnx_tts.py",
 )
 
 

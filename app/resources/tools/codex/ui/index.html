@@ -73,18 +73,78 @@
       <span id="badge" class="badge">Running</span>
     </main>
     <script>
+      const { language } = window.xtalkToolUI.context;
+      const locale = language.toLowerCase().startsWith("zh") ? "zh" : "en";
       const byId = (id) => document.getElementById(id);
-      const labels = {
-        codex_session_search: "Search session",
-        codex_session_create: "New session",
-        codex_session_continue: "Continue session",
-        codex_session_set_model: "Change model",
-        codex_session_delete: "Archive session",
+      const copy = {
+        en: {
+          title: "Codex",
+          preparing: "Preparing…",
+          running: "Running",
+          complete: "Complete",
+          failed: "Failed",
+          seconds: "s",
+          actions: {
+            codex_session_search: "Search session",
+            codex_session_create: "New session",
+            codex_session_continue: "Continue session",
+            codex_session_set_model: "Change model",
+            codex_session_delete: "Archive session",
+          },
+          statuses: {},
+        },
+        zh: {
+          title: "Codex",
+          preparing: "准备中…",
+          running: "运行中",
+          complete: "已完成",
+          failed: "失败",
+          seconds: "秒",
+          actions: {
+            codex_session_search: "搜索会话",
+            codex_session_create: "新建会话",
+            codex_session_continue: "继续会话",
+            codex_session_set_model: "更改模型",
+            codex_session_delete: "归档会话",
+          },
+          statuses: {
+            "Creating Codex session": "正在创建 Codex 会话",
+            "Searching Codex sessions": "正在搜索 Codex 会话",
+            "Continuing Codex session": "正在继续 Codex 会话",
+            "Updating Codex model": "正在更新 Codex 模型",
+            "Archiving Codex session": "正在归档 Codex 会话",
+            "Validating Codex model": "正在验证 Codex 模型",
+            "Codex is working": "Codex 正在处理",
+            "Codex completed": "Codex 已完成",
+            "No Codex sessions found": "未找到 Codex 会话",
+            "Resolving target session": "正在匹配目标会话",
+            "Session search completed": "会话搜索已完成",
+            "Codex model updated": "Codex 模型已更新",
+            "Codex session archived": "Codex 会话已归档",
+            "Stopping Codex": "正在停止 Codex",
+            "Codex stopped": "Codex 已停止",
+            "Codex failed": "Codex 失败",
+          },
+        },
+      }[locale];
+      const localizeStatus = (value, running, failed) => {
+        const fallback = failed ? copy.failed : running ? copy.running : copy.complete;
+        const raw = String(value || "");
+        if (!raw) return fallback;
+        const elapsedMatch = raw.match(/\s*·\s*(\d+)s$/i);
+        const phase = elapsedMatch ? raw.slice(0, elapsedMatch.index).trim() : raw;
+        let localized = copy.statuses[phase] || phase;
+        if (locale === "zh" && phase.startsWith("Codex failed")) {
+          localized = `${copy.statuses["Codex failed"]}${phase.slice("Codex failed".length)}`;
+        }
+        return elapsedMatch
+          ? `${localized} · ${elapsedMatch[1]} ${copy.seconds}`
+          : localized;
       };
       const render = (event, message = "") => {
         const failed = /failed|error/i.test(event.status || "");
         let displayMessage = message;
-        let details = labels[event.toolName] || String(event.toolName || "").replaceAll("_", " ");
+        let details = copy.actions[event.toolName] || String(event.toolName || "").replaceAll("_", " ");
         if (message.startsWith("{")) {
           try {
             const output = JSON.parse(message);
@@ -95,14 +155,17 @@
             displayMessage = message;
           }
         }
-        byId("title").textContent = "Codex";
-        byId("status").textContent = event.status || (event.running ? "Running" : "Complete");
+        byId("title").textContent = copy.title;
+        byId("status").textContent = localizeStatus(event.status, event.running, failed);
         byId("message").textContent = displayMessage;
         byId("meta").textContent = details;
-        byId("badge").textContent = failed ? "Failed" : event.running ? "Running" : "Complete";
+        byId("badge").textContent = failed ? copy.failed : event.running ? copy.running : copy.complete;
         byId("badge").classList.toggle("complete", !event.running && !failed);
         byId("badge").classList.toggle("failed", failed);
       };
+      byId("title").textContent = copy.title;
+      byId("status").textContent = copy.preparing;
+      byId("badge").textContent = copy.running;
       window.xtalkToolUI.status((event) => render(event));
       window.xtalkToolUI.emit((event) => render(event, event.message));
     </script>

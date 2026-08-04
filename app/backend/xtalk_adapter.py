@@ -12,6 +12,23 @@ from .tool_registry import load_enabled_tools
 from .tool_ui import ToolUIBroker
 
 
+def _register_managed_model_clients() -> None:
+    """Import App-supported managed clients before generic model discovery.
+
+    PyInstaller cannot rely on XTalk's dynamic package scan to import these
+    modules: unrelated optional model modules may be unavailable in the slim
+    desktop runtime. Direct imports both register the decorated model classes
+    and make the required modules explicit frozen-backend dependencies.
+    """
+
+    from xtalk.models.asr.sherpa_onnx_asr import SherpaOnnxASR
+    from xtalk.models.tts.moss_tts_nano import MossTTSNano
+    from xtalk.models.tts.sherpa_onnx_tts import SherpaOnnxTTS
+
+    # Keep references until all decorator side effects have completed.
+    _ = (SherpaOnnxASR, MossTTSNano, SherpaOnnxTTS)
+
+
 def build_xtalk_runtime(
     config: dict[str, Any],
     *,
@@ -41,6 +58,7 @@ def build_xtalk_runtime(
         Public XTalk runtime wrapper exposing ``mount_routes``.
     """
 
+    _register_managed_model_clients()
     builder = Xtalk.configure(config)
     if config.get("llm_agent") is not None:
         builder.set_model(DesktopDefaultAgent)

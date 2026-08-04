@@ -1,0 +1,30 @@
+{
+  "asr": {
+    "type": "SherpaOnnxASR",
+    "params": {
+      "base_url": "managed://sensevoice-small",
+      "mode": "offline"
+    }
+  },
+  "llm_agent": {
+    "type": "DefaultAgent",
+    "params": {
+      "model": {
+        "api_key": "",
+        "model": "qwen3.6-plus",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          }
+        }
+      }
+    }
+  },
+  "tts": {
+    "type": "SherpaOnnxTTS",
+    "params": {
+      "base_url": "managed://matcha-icefall-zh-en"
+    }
+  }
+}

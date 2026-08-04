@@ -1,0 +1,24 @@
+[package]
+name = "xtalk-matcha-model-runtime"
+version = "0.1.0"
+description = "Native sherpa-onnx Matcha TTS service for XTalk Desktop"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+
+[[bin]]
+name = "xtalk-matcha-model-runtime"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.8.9"
+clap = { version = "4.5", features = ["derive"] }
+hound = "3.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
+tempfile = "3.27"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

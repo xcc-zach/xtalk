@@ -149,20 +149,23 @@ ASR WebSocket packet and MOSS multipart HTTP contracts, so the Python model
 clients do not branch on the inference backend. Its MOSS response is likewise
 48 kHz mono PCM16.
 
-ONNX Runtime is an application resource, not a user-installed dependency. The
-sidecar loads the exact packaged dynamic library passed through `--ort-dylib`;
-model weights remain outside the application bundle. A selected
-`managed://sensevoice-small` or `managed://moss-tts-nano` URL makes Tauri read
-the immutable `managed-models.lock.json`, download only that service's pinned
-files into `AppData/models/managed/<id>/<version>/`, verify file sizes and
-SHA-256 values, and atomically write the completion marker. Every later launch
-revalidates the installed snapshot before using it.
+ONNX Runtime is an application resource, not a user-installed dependency.
+SenseVoice, Matcha, and the Rust MOSS sidecar all resolve the same packaged
+ONNX Runtime 1.27 dynamic library; model weights remain outside the application
+bundle. A selected `managed://sensevoice-small`,
+`managed://matcha-icefall-zh-en`, or `managed://moss-tts-nano` URL makes Tauri
+read the immutable `managed-models.lock.json`, download only that service's
+pinned files into `AppData/models/managed/<id>/<version>/`, verify file sizes
+and SHA-256 values, extract pinned archives without allowing path traversal,
+and atomically write the completion marker. Every later launch revalidates the
+installed snapshot before using it.
 
 The managed URL accepts `?backend=cpu`, `?backend=cuda`, or `?backend=mlx`.
 Without a query, Tauri selects a packaged CUDA provider on an NVIDIA device,
 then Apple Silicon MLX, then CPU. An explicitly selected unavailable backend is
 an error instead of an implicit fallback. CUDA and CPU share the ONNX snapshot;
-MLX selects its separately pinned safetensor snapshot.
+MLX selects its separately pinned safetensor snapshot. Matcha supports CPU and
+CUDA only, so its automatic selection skips MLX.
 
 After the user selects a configuration, Tauri inspects it before applying it.
 Configurations that request managed services open a blocking progress dialog.
@@ -173,8 +176,9 @@ automatically. A startup failure leaves the dialog open with the error and a
 close action.
 
 For ONNX, Tauri starts SenseVoice through the packaged native
-`sherpa-onnx-offline-websocket-server` and starts MOSS through the Rust sidecar.
-For MLX, it starts one Swift sidecar per requested service.
+`sherpa-onnx-offline-websocket-server`, Matcha through a dedicated Rust
+sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. For MLX, it starts
+one Swift sidecar per requested supported service.
 It waits for TCP/readiness health boundaries, then deep-merges actual ephemeral
 loopback URLs and the resolved AppData voice path into the Python startup
 overlay. The selected file remains portable and contains no generated ports.
@@ -188,7 +192,10 @@ matches `server_configs/sample.json` while intentionally leaving `api_key`
 empty. SenseVoice consumes 16 kHz PCM through the existing offline WebSocket
 client; MOSS reference audio and generated output use 48 kHz. The companion
 [`../examples/local_models_mlx.json`](../examples/local_models_mlx.json)
-explicitly selects MLX.
+explicitly selects MLX. The
+[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
+variant selects the Chinese-English Matcha HTTP client; the sidecar resamples
+its native 16 kHz output to the App-wide 48 kHz mono PCM16 format.
 
 ## Configuration
 

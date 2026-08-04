@@ -10,3 +10,6 @@
 - 提前停止计时。
 
 因为工具名称是 `timer`，启用后会替换桌面应用内置的回退计时器。
+
+工具的 live 与 history UI 会读取
+`window.xtalkToolUI.context.language`，并跟随桌面应用的中英文设置。

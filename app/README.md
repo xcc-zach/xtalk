@@ -104,21 +104,22 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-For a build that supports managed SenseVoice and MOSS services, also stage
-their target-specific native runtimes:
+For a build that supports managed SenseVoice, Matcha, and MOSS services, also
+stage their target-specific native runtimes. The sherpa libraries and the
+single ONNX Runtime 1.27 library must come from compatible target builds:
 
 ```bash
 python scripts/prepare_managed_runtime.py \
   --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
-  --sherpa-ort-library /path/to/sherpa/libonnxruntime \
-  --tts-ort-library /path/to/tts/libonnxruntime
+  --sherpa-library-dir /path/to/sherpa/lib \
+  --ort-library /path/to/sherpa/lib/libonnxruntime.1.27.0.dylib
 ```
 
 On Apple Silicon this also builds and stages the pinned Swift/MLX sidecar and
 its Metal shader bundle; install the build-host component with
 `xcodebuild -downloadComponent MetalToolchain`. CUDA builds additionally pass
-`--sherpa-cuda-runtime-dir` and `--tts-cuda-runtime-dir`, each pointing to the
-matching ONNX Runtime GPU library directory.
+`--cuda-runtime-dir`, pointing to the matching ONNX Runtime 1.27 GPU library
+directory.
 
 Optional weights are not bundled. Their immutable revisions, paths, sizes, and
 SHA-256 values are pinned in
@@ -142,7 +143,7 @@ needs arm64 executables and libraries.
 
 First build a fresh XTalk wheel from the repository root. Do not reuse an older
 wheel: `build_backend.py` rejects wheels that do not contain the managed
-SenseVoice and MOSS client modules.
+SenseVoice, Matcha, and MOSS client modules.
 
 ```bash
 cd ..
@@ -176,16 +177,17 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-Stage the managed-model runtimes. The sherpa server, sherpa ONNX Runtime
-library, and TTS ONNX Runtime library must all target the same platform as the
-App. The script builds the Rust MOSS runtime itself. On Apple Silicon it also
-builds the Swift/MLX runtime and copies its Metal resources:
+Stage the managed-model runtimes. The sherpa server, shared sherpa libraries,
+and ONNX Runtime 1.27 library must all target the same platform as the App. The
+script builds both Rust TTS sidecars and stages one shared ORT copy for
+SenseVoice, Matcha, and MOSS. On Apple Silicon it also builds the Swift/MLX
+runtime and copies its Metal resources:
 
 ```bash
 python scripts/prepare_managed_runtime.py \
   --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
-  --sherpa-ort-library /path/to/sherpa/libonnxruntime.dylib \
-  --tts-ort-library /path/to/tts/libonnxruntime.dylib
+  --sherpa-library-dir /path/to/sherpa/lib \
+  --ort-library /path/to/sherpa/lib/libonnxruntime.1.27.0.dylib
 ```
 
 Before the first Apple Silicon build, install the Xcode Metal toolchain
@@ -196,9 +198,8 @@ xcodebuild -downloadComponent MetalToolchain
 ```
 
 CUDA release artifacts additionally pass
-`--sherpa-cuda-runtime-dir /path/to/sherpa/onnxruntime-gpu/lib` and
-`--tts-cuda-runtime-dir /path/to/tts/onnxruntime-gpu/lib`. Those directories
-must contain the matching CUDA and shared ONNX Runtime provider libraries.
+`--cuda-runtime-dir /path/to/onnxruntime-gpu-1.27/lib`. That directory must
+contain the matching CUDA and shared ONNX Runtime provider libraries.
 
 Install the pinned frontend dependencies, verify all staged resources, and run
 the release checks:
@@ -227,6 +228,11 @@ uses an ad-hoc signature. Set `APPLE_SIGNING_IDENTITY` to an Apple Developer
 identity before running `package_macos_dmg.py` when producing a distributable
 release. Notarization remains a separate release step.
 
+The packager rejects broken or external App-bundle symlinks and launches the
+signed Matcha sidecar without build-machine environment variables. This
+ensures its sherpa and ONNX Runtime dependencies resolve from
+`Contents/Resources/managed-runtime/ort` before a DMG is created.
+
 Do not replace all of `Contents/Frameworks` with links to the resource runtime.
 The PyInstaller bootloader loads `libpython` from `Frameworks`, and a hardened
 sidecar cannot map a differently signed copy through such a link. The packager
@@ -250,12 +256,12 @@ shasum -a 256 \
   src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg
 ```
 
-The release contains ONNX Runtime, the native service executables, the frozen
-Python backend, and the Silero VAD model. SenseVoice Small and MOSS-TTS-Nano
-weights are deliberately excluded; they are downloaded and verified in
-AppData only after a selected configuration references their `managed://`
-URLs. Model configuration files and provider credentials are also external and
-must never be copied into the bundle.
+The release contains ONNX Runtime 1.27, the native service executables, the
+frozen Python backend, and the Silero VAD model. SenseVoice Small,
+matcha-icefall-zh-en, and MOSS-TTS-Nano weights are deliberately excluded; they
+are downloaded and verified in AppData only after a selected configuration
+references their `managed://` URLs. Model configuration files and provider
+credentials are also external and must never be copied into the bundle.
 
 ## Model configuration
 
@@ -277,7 +283,10 @@ Tauri resolves its `managed://` values without modifying the example file. Add
 `?backend=cpu`, `?backend=cuda`, or `?backend=mlx` to force a backend; without
 it, selection order is CUDA, MLX, then CPU. The
 [`examples/local_models_mlx.json`](examples/local_models_mlx.json) variant
-forces MLX.
+forces MLX. Use
+[`examples/local_models_matcha.json`](examples/local_models_matcha.json) to
+select Matcha Chinese-English TTS. Matcha accepts CPU and CUDA backends; it does
+not select MLX.
 
 ## Built-in and user tool directories
 
@@ -320,6 +329,24 @@ read-only display hooks:
   });
 </script>
 ```
+
+The App exposes the resolved interface language and frame mode through a
+read-only runtime context. Tool HTML should use this value instead of
+`navigator.language`, because the user can select a language independently of
+the operating system:
+
+```html
+<script>
+  const { language, mode } = window.xtalkToolUI.context;
+  const copy = language.startsWith("zh")
+    ? { title: "计时器", running: "运行中" }
+    : { title: "Timer", running: "Running" };
+</script>
+```
+
+`language` is currently `zh-CN` or `en`. Changing the App language recreates
+open tool UI frames with the new context. `mode` is `live` for the collapsible
+top status area and `history` for an immutable chat-history card.
 
 Calling `status()` declares a live UI; calling `emit()` declares an immutable
 chat-history UI. If the entrypoint never registers one hook, the App does not
