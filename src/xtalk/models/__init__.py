@@ -15,6 +15,7 @@ __all__ = [
     "PuntRestorer",
     "Rewriter",
     "SpeakerEncoder",
+    "SpeakerDiarization",
     "SpeechEnhancer",
     "SpeechSpeedController",
     "StreamingTextTTS",
@@ -42,6 +43,10 @@ _INTERFACE_IMPORTS = {
     "PuntRestorer": ("xtalk.models.punt_restorer.interfaces", "PuntRestorer"),
     "Rewriter": ("xtalk.models.rewriters.interfaces", "Rewriter"),
     "SpeakerEncoder": ("xtalk.models.speaker_encoder.interfaces", "SpeakerEncoder"),
+    "SpeakerDiarization": (
+        "xtalk.models.speaker_diarization.interfaces",
+        "SpeakerDiarization",
+    ),
     "SpeechEnhancer": ("xtalk.models.speech_enhancer.interfaces", "SpeechEnhancer"),
     "SpeechSpeedController": (
         "xtalk.models.speech_speed_controller.interfaces",

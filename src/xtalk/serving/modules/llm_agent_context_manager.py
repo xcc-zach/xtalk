@@ -18,6 +18,7 @@ from ..events import (
     EmbeddingStatusUpdated,
     Event,
     LLMAgentLoop,
+    MultiSpeakerTurnReady,
     ResponseFinish,
     ResponseUpdate,
     SpeakerRecognized,
@@ -55,6 +56,8 @@ class LLMAgentContextManager(Manager):
         self.session_id = session_id
         self.config: dict[str, Any] = config or {}
         self.llm_agent = models.get(Agent)
+        multi_config = dict(self.config.get("multi_speaker") or {})
+        self.multi_speaker_enabled = bool(multi_config.get("enabled", False))
 
     @Manager.event_handler(ASRResultPartial, priority=20)
     async def _handle_asr_result_partial(self, event: ASRResultPartial) -> None:
@@ -66,7 +69,20 @@ class LLMAgentContextManager(Manager):
     async def _handle_asr_result_final(self, event: ASRResultFinal) -> None:
         """Forward ``ASRResultFinal`` into the agent."""
 
+        if self.multi_speaker_enabled:
+            return
         await self._accept_event_context(event, context_type="asr_final")
+
+    @Manager.event_handler(MultiSpeakerTurnReady, priority=20)
+    async def _handle_multi_speaker_turn_ready(
+        self,
+        event: MultiSpeakerTurnReady,
+    ) -> None:
+        """Forward the joined ASR/MTD hard turn into the agent."""
+
+        if not self.multi_speaker_enabled:
+            return
+        await self._accept_event_context(event, context_type="multi_speaker_final")
 
     @Manager.event_handler(ResponseUpdate, priority=20)
     async def _handle_response_update(self, event: ResponseUpdate) -> None:
