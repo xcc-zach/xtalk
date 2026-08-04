@@ -313,21 +313,75 @@ def test_broker_replays_history_emit_after_app_channel_connects() -> None:
 
 
 def test_timer_example_uses_unlabeled_live_and_history_ui() -> None:
-    """Keep mode annotations out of the user-visible timer card."""
+    """Keep history compact without adding visible mode annotations."""
+
+    app_root = Path(__file__).parents[2]
+    sources = [
+        (app_root / root / "tools" / "timer" / "ui" / "index.html")
+        .read_text(encoding="utf-8")
+        for root in ("examples", "resources")
+    ]
+
+    for source in sources:
+        assert "window.xtalkToolUI.status" in source
+        assert "window.xtalkToolUI.emit" in source
+        assert "window.xtalkToolUI.context" in source
+        assert "const { language, mode }" in source
+        assert ':root[data-mode="history"] .status' in source
+        assert ':root[data-mode="history"] .message' in source
+        assert ':root[data-mode="history"] .progress' in source
+        assert ':root[data-mode="history"] #elapsed' in source
+        assert ':root[data-mode="history"] .badge' in source
+        assert 'title: "计时器"' in source
+        assert 'running: "运行中"' in source
+        assert 'complete: "已完成"' in source
+        assert 'seconds: "秒"' in source
+        assert "copy.seconds" in source
+        assert "History UI" not in source
+        assert "Live UI" not in source
+
+
+def test_tool_ui_runtime_injects_resolved_application_language() -> None:
+    """Give each sandbox the App language and rebuild it after a change."""
+
+    app_root = Path(__file__).parents[2]
+    frame_logic = (app_root / "ui" / "tool-ui-frame.ts").read_text(
+        encoding="utf-8"
+    )
+    app_logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+
+    assert "language: SupportedLanguage" in frame_logic
+    assert "context: Object.freeze({ mode, language })" in frame_logic
+    assert "document.documentElement.lang = language" in frame_logic
+    assert "resetToolUIRowsIfLanguageChanged();" in app_logic
+    reset_logic = app_logic.split(
+        "function resetToolUIRowsIfLanguageChanged()", maxsplit=1
+    )[1].split("function renderLiveToolPanel", maxsplit=1)[0]
+    assert "getResolvedLanguage()" in reset_logic
+    assert "row.frame?.destroy()" in reset_logic
+    assert "row.element.remove()" in reset_logic
+    assert "toolUIRows.clear()" in reset_logic
+    assert "row.mode,\n        getResolvedLanguage()," in app_logic
+
+
+def test_codex_tool_ui_localizes_actions_and_runtime_status() -> None:
+    """Keep the shipped Codex card consistent with the selected language."""
 
     source = (
         Path(__file__).parents[2]
-        / "examples"
+        / "resources"
         / "tools"
-        / "timer"
+        / "codex"
         / "ui"
         / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "window.xtalkToolUI.status" in source
-    assert "window.xtalkToolUI.emit" in source
-    assert "History UI" not in source
-    assert "Live UI" not in source
+    assert "window.xtalkToolUI.context" in source
+    assert 'codex_session_search: "搜索会话"' in source
+    assert 'codex_session_create: "新建会话"' in source
+    assert '"Codex is working": "Codex 正在处理"' in source
+    assert '"Codex completed": "Codex 已完成"' in source
+    assert 'failed: "失败"' in source
 
 
 def test_chat_topbar_uses_collapsible_live_tool_status() -> None:

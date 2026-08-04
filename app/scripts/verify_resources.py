@@ -17,6 +17,7 @@ MANAGED_MODEL_MANIFEST_PATH = (
     APP_ROOT / "resources" / "manifests" / "managed-models.lock.json"
 )
 REQUIRED_MANAGED_MODEL_IDS = {
+    "matcha-icefall-zh-en",
     "sensevoice-small",
     "sensevoice-small-mlx",
     "moss-tts-nano",
@@ -255,6 +256,32 @@ def verify_managed_model_manifest(
                 raise ValueError("managed model SHA-256 is invalid")
             if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
                 raise ValueError("managed model file size is invalid")
+
+        archives = raw_service.get("archives", [])
+        if not isinstance(archives, list):
+            raise ValueError("managed service archives must be an array")
+        for raw_archive in archives:
+            if not isinstance(raw_archive, dict):
+                raise ValueError("managed archive record must be an object")
+            archive_path = raw_archive.get("path")
+            if archive_path not in service_paths:
+                raise ValueError(
+                    "managed archive must reference a downloaded service file"
+                )
+            if raw_archive.get("format") != "tar-bz2":
+                raise ValueError("managed archive format is unsupported")
+
+        required_paths = raw_service.get("required_paths", [])
+        if not isinstance(required_paths, list):
+            raise ValueError("managed required_paths must be an array")
+        for relative_path in required_paths:
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or Path(relative_path).is_absolute()
+                or ".." in Path(relative_path).parts
+            ):
+                raise ValueError("managed required path is unsafe")
 
     missing = REQUIRED_MANAGED_MODEL_IDS - seen
     if missing:

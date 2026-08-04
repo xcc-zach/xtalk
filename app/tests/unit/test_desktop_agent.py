@@ -36,23 +36,37 @@ class _ToolCallChunk:
         self.tool_calls = [tool_call]
 
 
-class _OneCallModel:
-    """Fake streaming model that requests one tool exactly once."""
+class _TextChunk:
+    """One complete fake model chunk containing plain assistant text."""
+
+    tool_calls: list[ToolCall] = []
+
+    def __init__(self, content: str) -> None:
+        """Store the streamed text content."""
+
+        self.content = content
+
+
+class _ReceiptNarrationModel:
+    """Fake model that narrates after receiving an async tool receipt."""
 
     def __init__(self, tool_call: ToolCall) -> None:
-        """Initialize the one-shot model stream."""
+        """Initialize the two-pass model stream."""
 
         self.tool_call = tool_call
         self.calls = 0
 
     async def astream(self, messages: list[BaseMessage]):
-        """Yield one tool call and fail if the Agent asks for narration."""
+        """Request the tool, then acknowledge its initial receipt."""
 
         del messages
         self.calls += 1
-        if self.calls > 1:
-            raise AssertionError("async tool receipt must not trigger narration")
-        yield _ToolCallChunk(self.tool_call)
+        if self.calls == 1:
+            yield _ToolCallChunk(self.tool_call)
+        elif self.calls == 2:
+            yield _TextChunk("Codex has started.")
+        else:
+            raise AssertionError("initial receipt must trigger only one narration")
 
 
 class _AsyncToolEngine:
@@ -90,8 +104,8 @@ def _bare_agent() -> DesktopDefaultAgent:
     return agent
 
 
-def test_async_tool_receipt_stops_until_the_final_update() -> None:
-    """Avoid turning an async receipt into a separate assistant message."""
+def test_async_tool_receipt_triggers_intermediate_narration() -> None:
+    """Match the public frontend by narrating an async tool's initial receipt."""
 
     async def scenario() -> tuple[list[Any], int]:
         tool_call = ToolCall(
@@ -99,7 +113,7 @@ def test_async_tool_receipt_stops_until_the_final_update() -> None:
             name="codex_session_create",
             args={"task": "list files"},
         )
-        model = _OneCallModel(tool_call)
+        model = _ReceiptNarrationModel(tool_call)
         agent = _bare_agent()
         agent.model_with_tools = model
         agent.model_for_async_updates = model
@@ -112,9 +126,10 @@ def test_async_tool_receipt_stops_until_the_final_update() -> None:
 
     output, model_calls = asyncio.run(scenario())
 
-    assert model_calls == 1
-    assert len(output) == 2
+    assert model_calls == 2
+    assert len(output) == 3
     assert output[0]["id"] == "call-1"
+    assert output[-1] == "Codex has started."
 
 
 def test_running_updates_stay_in_tool_ui_and_final_update_wakes_agent() -> None:

@@ -122,6 +122,40 @@ def link_python_metadata_to_resources(app: Path) -> list[Path]:
     return linked
 
 
+def verify_internal_bundle_links(app: Path) -> list[Path]:
+    """Reject symbolic links that make the App depend on the build machine.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Prepared application bundle.
+
+    Returns
+    -------
+    list[pathlib.Path]
+        Resolved internal symbolic-link targets.
+    """
+
+    bundle_root = app.resolve()
+    resolved_targets: list[Path] = []
+    for path in bundle_root.rglob("*"):
+        if not path.is_symlink():
+            continue
+        link_target = Path(os.readlink(path))
+        if not link_target.is_absolute():
+            link_target = path.parent / link_target
+        resolved_target = link_target.resolve()
+        if (
+            not resolved_target.is_relative_to(bundle_root)
+            or not resolved_target.exists()
+        ):
+            raise ValueError(
+                f"app bundle contains an external or broken link: {path}"
+            )
+        resolved_targets.append(resolved_target)
+    return resolved_targets
+
+
 def sign_app(app: Path, identity: str) -> None:
     """Sign nested code, the Python sidecar, and the outer app in loadable order.
 
@@ -203,6 +237,32 @@ def smoke_test_backend(app: Path) -> None:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
         raise RuntimeError(
             f"signed app-backend smoke test failed ({result.returncode}): {detail}"
+        )
+
+
+def smoke_test_matcha_runtime(app: Path) -> None:
+    """Confirm the signed Matcha sidecar resolves only packaged libraries.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Signed application bundle.
+    """
+
+    runtime = app / "Contents" / "MacOS" / "matcha-model-runtime"
+    if not runtime.is_file():
+        raise ValueError(f"app bundle is missing Matcha runtime: {runtime}")
+    result = subprocess.run(
+        [str(runtime), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        raise RuntimeError(
+            "signed Matcha runtime smoke test failed "
+            f"({result.returncode}): {detail}"
         )
 
 
@@ -288,10 +348,15 @@ def main() -> int:
         raise ValueError("--output must use the .dmg extension")
 
     linked = link_python_metadata_to_resources(app)
+    internal_links = verify_internal_bundle_links(app)
     sign_app(app, args.identity)
     smoke_test_backend(app)
+    smoke_test_matcha_runtime(app)
     create_dmg(app, output)
-    print(f"linked {len(linked)} Python metadata directories")
+    print(
+        f"linked {len(linked)} Python metadata directories and verified "
+        f"{len(internal_links)} internal links"
+    )
     print(output)
     return 0
 

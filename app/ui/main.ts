@@ -202,6 +202,7 @@ let toolUILiveExpanded = false;
 const toolUILive = new Map<string, ToolUILiveItem>();
 const toolUIRows = new Map<string, ToolUIRow>();
 const toolUISourceCache = new Map<string, Promise<string>>();
+let toolUIFrameLanguage = getResolvedLanguage();
 const toolUICapabilities = new Map<
   string,
   Partial<ToolUICapabilities>
@@ -324,6 +325,7 @@ function setBackendStatus(
 }
 
 function applyUiLanguage(): void {
+  resetToolUIRowsIfLanguageChanged();
   translateDocument();
   renderVisibleError();
   const preference = getLanguagePreference();
@@ -420,6 +422,8 @@ function managedServiceName(serviceId: string): string {
       return "MOSS-TTS-Nano";
     case "moss-tts-nano-mlx":
       return "MOSS-TTS-Nano (MLX)";
+    case "matcha-icefall-zh-en":
+      return "Matcha Icefall (ZH/EN)";
     default:
       return serviceId;
   }
@@ -1052,6 +1056,20 @@ function switchToolUISession(sessionId: string | null): void {
   );
 }
 
+/** Recreates sandboxed tool documents after the resolved language changes. */
+function resetToolUIRowsIfLanguageChanged(): void {
+  const language = getResolvedLanguage();
+  if (toolUIFrameLanguage === language) {
+    return;
+  }
+  toolUIFrameLanguage = language;
+  for (const row of toolUIRows.values()) {
+    row.frame?.destroy();
+    row.element.remove();
+  }
+  toolUIRows.clear();
+}
+
 function renderLiveToolPanel(): void {
   const items = [...toolUILive.values()]
     .filter(
@@ -1198,7 +1216,12 @@ async function hydrateToolUIRow(
     }
     const channelId = crypto.randomUUID();
     const frameUrl = await frameAdapter.createFrame(
-      createToolUIFrameDocument(source, channelId, row.mode),
+      createToolUIFrameDocument(
+        source,
+        channelId,
+        row.mode,
+        getResolvedLanguage(),
+      ),
     );
     if (
       toolUIRows.get(item.id) !== row ||

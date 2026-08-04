@@ -2,6 +2,7 @@ import type {
   ToolUIEmitEvent,
   ToolUIStatusEvent,
 } from "./adapters/tool-ui-adapter";
+import type { SupportedLanguage } from "./i18n";
 
 /** Tool UI frame rendering mode. */
 export type ToolUIFrameMode = "live" | "history";
@@ -206,15 +207,18 @@ export class ToolUIFrame {
  * @param source Self-contained installed tool HTML.
  * @param channelId Random per-frame message channel identifier.
  * @param mode Live or immutable history mode.
+ * @param language Resolved language selected by the desktop application.
  * @returns Complete HTML served from the restricted loopback frame route.
  */
 export function createToolUIFrameDocument(
   source: string,
   channelId: string,
   mode: ToolUIFrameMode,
+  language: SupportedLanguage,
 ): string {
   const escapedChannelId = JSON.stringify(channelId);
   const escapedMode = JSON.stringify(mode);
+  const escapedLanguage = JSON.stringify(language);
   const bridge = `
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'none'; font-src 'none'; form-action 'none'; frame-src 'none'; img-src data: blob:; media-src 'none'; object-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <script>
@@ -222,6 +226,7 @@ export function createToolUIFrameDocument(
   "use strict";
   const channelId = ${escapedChannelId};
   const mode = ${escapedMode};
+  const language = ${escapedLanguage};
   const statusListeners = new Set();
   const emitListeners = new Set();
   let capabilitiesReady = false;
@@ -240,7 +245,7 @@ export function createToolUIFrameDocument(
     });
   };
   const api = Object.freeze({
-    context: Object.freeze({ mode }),
+    context: Object.freeze({ mode, language }),
     status(callback) {
       if (typeof callback !== "function") throw new TypeError("status callback must be a function");
       statusListeners.add(callback);
@@ -268,6 +273,7 @@ export function createToolUIFrameDocument(
     configurable: false,
     writable: false,
   });
+  document.documentElement.lang = language;
   addEventListener("click", (event) => event.preventDefault(), true);
   addEventListener("submit", (event) => event.preventDefault(), true);
   addEventListener("message", (message) => {

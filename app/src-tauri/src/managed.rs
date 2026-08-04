@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use bzip2::read::BzDecoder;
 use reqwest::{redirect::Policy, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,18 +29,20 @@ use tokio::{
 };
 
 const MANIFEST_RESOURCE: &str = "manifests/managed-models.lock.json";
-const TTS_RUNTIME_RESOURCE: &str = "managed-runtime/ort-tts";
-const SHERPA_RUNTIME_RESOURCE: &str = "managed-runtime/sherpa";
+const ONNX_RUNTIME_RESOURCE: &str = "managed-runtime/ort";
 const TTS_SIDECAR_NAME: &str = "local-model-runtime";
+const MATCHA_TTS_SIDECAR_NAME: &str = "matcha-model-runtime";
 const MLX_SIDECAR_NAME: &str = "mlx-model-runtime";
 const SHERPA_SIDECAR_NAME: &str = "sherpa-onnx-offline-websocket-server";
 const SENSEVOICE_ID: &str = "sensevoice-small";
 const SENSEVOICE_MLX_ID: &str = "sensevoice-small-mlx";
 const MOSS_TTS_ID: &str = "moss-tts-nano";
 const MOSS_TTS_MLX_ID: &str = "moss-tts-nano-mlx";
+const MATCHA_TTS_ID: &str = "matcha-icefall-zh-en";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
+const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
 const DEFAULT_MOSS_VOICE_URL: &str = "managed://moss-tts-nano/voices/zh_1.wav";
 const INSTALL_MARKER: &str = ".complete.json";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -85,6 +88,7 @@ struct ManagedServicesInner {
 struct ManagedRequest {
     sensevoice: Option<ManagedBackend>,
     moss_tts: Option<ManagedBackend>,
+    matcha_tts: Option<ManagedBackend>,
     moss_voices: Vec<ManagedVoice>,
 }
 
@@ -100,6 +104,7 @@ enum ManagedBackend {
 enum ManagedServiceKind {
     SenseVoice,
     MossTts,
+    MatchaTts,
 }
 
 struct ManagedVoice {
@@ -126,6 +131,23 @@ struct ManagedServiceManifest {
     id: String,
     version: String,
     files: Vec<ManagedFileManifest>,
+    #[serde(default)]
+    archives: Vec<ManagedArchiveManifest>,
+    #[serde(default)]
+    required_paths: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedArchiveManifest {
+    path: String,
+    format: ManagedArchiveFormat,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ManagedArchiveFormat {
+    TarBz2,
 }
 
 #[derive(Clone, Deserialize)]
@@ -171,8 +193,8 @@ pub(crate) enum ManagedError {
     MissingRuntime,
     #[error("managed model service did not become ready")]
     StartupTimedOut,
-    #[error("managed model service terminated before readiness")]
-    TerminatedBeforeReady,
+    #[error("managed model service terminated before readiness: {0}")]
+    TerminatedBeforeReady(String),
     #[error("managed model service emitted an invalid readiness message")]
     InvalidReady,
     #[error("the MLX managed runtime is supported only on Apple Silicon macOS")]
@@ -189,7 +211,9 @@ impl ManagedServices {
         data_dir: &Path,
     ) -> Result<(Self, Value), ManagedError> {
         let request = parse_managed_request(config_path)?;
-        let active = request.sensevoice.is_some() || request.moss_tts.is_some();
+        let active = request.sensevoice.is_some()
+            || request.moss_tts.is_some()
+            || request.matcha_tts.is_some();
         let (failure_sender, _) = watch::channel(false);
         let services = Self {
             inner: Arc::new(ManagedServicesInner {
@@ -250,8 +274,9 @@ impl ManagedServices {
         client: &Client,
     ) -> Result<Value, ManagedError> {
         let mut overlay = json!({});
-        let service_count =
-            usize::from(request.sensevoice.is_some()) + usize::from(request.moss_tts.is_some());
+        let service_count = usize::from(request.sensevoice.is_some())
+            + usize::from(request.moss_tts.is_some())
+            + usize::from(request.matcha_tts.is_some());
         let mut service_index = 0;
 
         if let Some(requested_backend) = request.sensevoice {
@@ -387,6 +412,59 @@ impl ManagedServices {
             });
         }
 
+        if let Some(requested_backend) = request.matcha_tts {
+            service_index += 1;
+            let backend = resolve_backend(app, requested_backend, ManagedServiceKind::MatchaTts)?;
+            let service_manifest = find_service(manifest, MATCHA_TTS_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = start_matcha_tts(app, &model_root, backend).await?;
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["tts"] = json!({
+                "params": {
+                    "base_url": format!("http://127.0.0.1:{port}")
+                }
+            });
+        }
+
         emit_managed_progress(
             app,
             "complete",
@@ -440,6 +518,9 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     if request.moss_tts.is_some() {
         services.push(MOSS_TTS_ID.to_owned());
     }
+    if request.matcha_tts.is_some() {
+        services.push(MATCHA_TTS_ID.to_owned());
+    }
     Ok(ManagedModelPlan { services })
 }
 
@@ -455,14 +536,25 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
     }
 
     if let Some(base_url) = model_base_url(&config, "tts")? {
-        request.moss_tts = parse_managed_backend(base_url, MOSS_TTS_URL, "TTS")?;
-        if request.moss_tts.is_some() {
+        if is_service_url(base_url, MOSS_TTS_URL) {
+            request.moss_tts = parse_managed_backend(base_url, MOSS_TTS_URL, "TTS")?;
             require_model_type(&config, "tts", "MossTTSNano")?;
             request.moss_voices = parse_moss_voices(&config)?;
+        } else if is_service_url(base_url, MATCHA_TTS_URL) {
+            request.matcha_tts = parse_managed_backend(base_url, MATCHA_TTS_URL, "TTS")?;
+            require_model_type(&config, "tts", "SherpaOnnxTTS")?;
+        } else if base_url.starts_with(MANAGED_ROOT) {
+            return Err(ManagedError::InvalidConfiguration(format!(
+                "unsupported managed TTS URL `{base_url}`"
+            )));
         }
     }
 
     Ok(request)
+}
+
+fn is_service_url(base_url: &str, service_url: &str) -> bool {
+    base_url == service_url || base_url.starts_with(&format!("{service_url}?"))
 }
 
 fn parse_managed_backend(
@@ -487,10 +579,16 @@ fn resolve_backend(
     requested: ManagedBackend,
     service: ManagedServiceKind,
 ) -> Result<ManagedBackend, ManagedError> {
+    if matches!(service, ManagedServiceKind::MatchaTts) && matches!(requested, ManagedBackend::Mlx)
+    {
+        return Err(ManagedError::InvalidConfiguration(
+            "Matcha TTS supports only CPU and CUDA backends".to_owned(),
+        ));
+    }
     select_backend(
         requested,
         cuda_is_available(app, service)?,
-        mlx_is_available(),
+        !matches!(service, ManagedServiceKind::MatchaTts) && mlx_is_available(),
     )
 }
 
@@ -519,11 +617,10 @@ fn cuda_is_available(app: &AppHandle, service: ManagedServiceKind) -> Result<boo
     if cfg!(target_os = "macos") {
         return Ok(false);
     }
-    let resource = match service {
-        ManagedServiceKind::SenseVoice => SHERPA_RUNTIME_RESOURCE,
-        ManagedServiceKind::MossTts => TTS_RUNTIME_RESOURCE,
-    };
-    let runtime_dir = app.path().resolve(resource, BaseDirectory::Resource)?;
+    let _ = service;
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
     let has_provider = fs::read_dir(runtime_dir)?
         .filter_map(Result::ok)
         .any(|entry| {
@@ -687,6 +784,7 @@ async fn ensure_service_installed(
     }
 
     fs::create_dir_all(&service_root)?;
+    let _ = fs::remove_file(service_root.join(INSTALL_MARKER));
     let total_bytes = manifest.files.iter().map(|file| file.size).sum();
     let mut completed_bytes = 0;
     for file in &manifest.files {
@@ -704,7 +802,29 @@ async fn ensure_service_installed(
         .await?;
         completed_bytes = completed_bytes.saturating_add(file.size);
     }
+    if !manifest.archives.is_empty() {
+        emit_managed_progress(
+            app,
+            "checking",
+            Some(manifest),
+            service_index,
+            service_count,
+            total_bytes,
+            total_bytes,
+            None,
+        );
+        let extraction_root = service_root.clone();
+        let extraction_manifest = manifest.clone();
+        tokio::task::spawn_blocking(move || {
+            extract_service_archives(&extraction_root, &extraction_manifest)
+        })
+        .await
+        .map_err(|error| ManagedError::VerificationFailed(error.to_string()))??;
+    }
     write_install_marker(&service_root, manifest)?;
+    if !verify_installed_service(&service_root, manifest)? {
+        return Err(ManagedError::VerificationFailed(manifest.id.clone()));
+    }
     Ok(service_root)
 }
 
@@ -731,7 +851,91 @@ fn verify_installed_service(
             return Ok(false);
         }
     }
+    for relative_path in &manifest.required_paths {
+        let path = safe_join(root, relative_path)?;
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            return Ok(false);
+        };
+        if metadata.file_type().is_symlink() {
+            return Ok(false);
+        }
+    }
+    verify_extracted_archives(root, manifest)
+}
+
+fn verify_extracted_archives(
+    root: &Path,
+    manifest: &ManagedServiceManifest,
+) -> Result<bool, ManagedError> {
+    for archive_manifest in &manifest.archives {
+        let archive_path = safe_join(root, &archive_manifest.path)?;
+        let input = File::open(archive_path)?;
+        match archive_manifest.format {
+            ManagedArchiveFormat::TarBz2 => {
+                let decoder = BzDecoder::new(input);
+                let mut archive = tar::Archive::new(decoder);
+                for entry in archive.entries()? {
+                    let mut entry = entry?;
+                    let relative_path = entry.path()?.into_owned();
+                    if relative_path.is_absolute()
+                        || relative_path
+                            .components()
+                            .any(|component| !matches!(component, Component::Normal(_)))
+                    {
+                        return Err(ManagedError::UnsafeManifestPath);
+                    }
+                    let destination = root.join(relative_path);
+                    let Ok(metadata) = fs::symlink_metadata(&destination) else {
+                        return Ok(false);
+                    };
+                    let entry_type = entry.header().entry_type();
+                    if entry_type.is_dir() {
+                        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                            return Ok(false);
+                        }
+                    } else if entry_type.is_file() {
+                        if !metadata.is_file()
+                            || metadata.file_type().is_symlink()
+                            || metadata.len() != entry.header().size()?
+                            || sha256_file(&destination)? != sha256_reader(&mut entry)?
+                        {
+                            return Ok(false);
+                        }
+                    } else {
+                        return Err(ManagedError::UnsafeManifestPath);
+                    }
+                }
+            }
+        }
+    }
     Ok(true)
+}
+
+fn extract_service_archives(
+    root: &Path,
+    manifest: &ManagedServiceManifest,
+) -> Result<(), ManagedError> {
+    for archive_manifest in &manifest.archives {
+        let archive_path = safe_join(root, &archive_manifest.path)?;
+        let input = File::open(archive_path)?;
+        match archive_manifest.format {
+            ManagedArchiveFormat::TarBz2 => {
+                let decoder = BzDecoder::new(input);
+                let mut archive = tar::Archive::new(decoder);
+                for entry in archive.entries()? {
+                    let mut entry = entry?;
+                    let entry_type = entry.header().entry_type();
+                    if !entry_type.is_file() && !entry_type.is_dir() {
+                        return Err(ManagedError::UnsafeManifestPath);
+                    }
+                    if !entry.unpack_in(root)? {
+                        return Err(ManagedError::UnsafeManifestPath);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn download_file(
@@ -855,7 +1059,10 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, ManagedError> {
 }
 
 fn sha256_file(path: &Path) -> Result<String, ManagedError> {
-    let mut input = File::open(path)?;
+    sha256_reader(File::open(path)?)
+}
+
+fn sha256_reader(mut input: impl Read) -> Result<String, ManagedError> {
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 128 * 1024];
     loop {
@@ -909,13 +1116,48 @@ async fn start_moss_tts(
 ) -> Result<StartedService, ManagedError> {
     let runtime_dir = app
         .path()
-        .resolve(TTS_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
-    let ort_library = find_ort_library(&runtime_dir, false)?;
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    let ort_library = find_ort_library(&runtime_dir)?;
     let command = app.shell().sidecar(TTS_SIDECAR_NAME)?.args([
         "--model-root".to_owned(),
         model_root.to_string_lossy().into_owned(),
         "--ort-dylib".to_owned(),
         ort_library.to_string_lossy().into_owned(),
+        "--backend".to_owned(),
+        onnx_backend_name(backend).to_owned(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "--port".to_owned(),
+        "0".to_owned(),
+    ]);
+    let command = configure_library_path(command, &runtime_dir);
+    let (mut events, child) = command.spawn()?;
+    let port = match receive_model_ready(&mut events).await {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
+async fn start_matcha_tts(
+    app: &AppHandle,
+    model_root: &Path,
+    backend: ManagedBackend,
+) -> Result<StartedService, ManagedError> {
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    find_ort_library(&runtime_dir)?;
+    let command = app.shell().sidecar(MATCHA_TTS_SIDECAR_NAME)?.args([
+        "--model-root".to_owned(),
+        model_root.to_string_lossy().into_owned(),
         "--backend".to_owned(),
         onnx_backend_name(backend).to_owned(),
         "--host".to_owned(),
@@ -947,8 +1189,8 @@ async fn start_sensevoice(
     let port = reserve_loopback_port()?;
     let runtime_dir = app
         .path()
-        .resolve(SHERPA_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
-    find_ort_library(&runtime_dir, true)?;
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    find_ort_library(&runtime_dir)?;
     let mut command = app.shell().sidecar(SHERPA_SIDECAR_NAME)?.args([
         format!("--port={port}"),
         "--num-work-threads=3".to_owned(),
@@ -993,6 +1235,7 @@ fn reserve_loopback_port() -> Result<u16, ManagedError> {
 
 async fn receive_model_ready(events: &mut Receiver<CommandEvent>) -> Result<u16, ManagedError> {
     timeout(STARTUP_TIMEOUT, async {
+        let mut stderr = String::new();
         loop {
             match events.recv().await {
                 Some(CommandEvent::Stdout(line)) => {
@@ -1007,8 +1250,24 @@ async fn receive_model_ready(events: &mut Receiver<CommandEvent>) -> Result<u16,
                     }
                     return Err(ManagedError::InvalidReady);
                 }
+                Some(CommandEvent::Stderr(line)) => {
+                    if stderr.len() < MAX_READY_LINE_BYTES {
+                        let detail = String::from_utf8_lossy(&line);
+                        for character in detail.chars() {
+                            if stderr.len() + character.len_utf8() > MAX_READY_LINE_BYTES {
+                                break;
+                            }
+                            stderr.push(character);
+                        }
+                    }
+                }
                 Some(CommandEvent::Terminated(_)) | None => {
-                    return Err(ManagedError::TerminatedBeforeReady);
+                    let detail = stderr.trim();
+                    return Err(ManagedError::TerminatedBeforeReady(if detail.is_empty() {
+                        "no diagnostic output".to_owned()
+                    } else {
+                        detail.to_owned()
+                    }));
                 }
                 Some(CommandEvent::Error(_)) => return Err(ManagedError::InvalidReady),
                 Some(_) => {}
@@ -1037,7 +1296,9 @@ async fn wait_for_tcp_ready(
         tokio::select! {
             event = events.recv() => {
                 if matches!(event, Some(CommandEvent::Terminated(_)) | None) {
-                    return Err(ManagedError::TerminatedBeforeReady);
+                    return Err(ManagedError::TerminatedBeforeReady(
+                        "no diagnostic output".to_owned(),
+                    ));
                 }
             }
             _ = sleep(STARTUP_POLL_INTERVAL) => {}
@@ -1063,24 +1324,13 @@ async fn monitor_service(
     }
 }
 
-fn find_ort_library(directory: &Path, sherpa: bool) -> Result<PathBuf, ManagedError> {
+fn find_ort_library(directory: &Path) -> Result<PathBuf, ManagedError> {
     #[cfg(target_os = "macos")]
-    let candidates: &[&str] = if sherpa {
-        &["libonnxruntime.1.27.0.dylib", "libonnxruntime.dylib"]
-    } else {
-        &["libonnxruntime.1.28.0.dylib", "libonnxruntime.dylib"]
-    };
+    let candidates: &[&str] = &["libonnxruntime.1.27.0.dylib", "libonnxruntime.dylib"];
     #[cfg(target_os = "linux")]
-    let candidates: &[&str] = if sherpa {
-        &["libonnxruntime.so.1.27.0", "libonnxruntime.so"]
-    } else {
-        &["libonnxruntime.so.1.28.0", "libonnxruntime.so"]
-    };
+    let candidates: &[&str] = &["libonnxruntime.so.1.27.0", "libonnxruntime.so"];
     #[cfg(target_os = "windows")]
-    let candidates: &[&str] = {
-        let _ = sherpa;
-        &["onnxruntime.dll"]
-    };
+    let candidates: &[&str] = &["onnxruntime.dll"];
 
     candidates
         .iter()
@@ -1112,10 +1362,12 @@ fn configure_library_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        inspect_model_config, parse_managed_request, resolve_moss_voices, safe_join,
-        select_backend, ManagedBackend, ManagedVoice, DEFAULT_MOSS_VOICE_URL, MOSS_TTS_ID,
-        SENSEVOICE_ID,
+        extract_service_archives, inspect_model_config, parse_managed_request, resolve_moss_voices,
+        safe_join, select_backend, verify_installed_service, write_install_marker,
+        ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend, ManagedServiceManifest,
+        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, SENSEVOICE_ID,
     };
+    use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
     use std::{
         fs,
@@ -1236,6 +1488,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_managed_matcha_tts_request() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {"base_url": "managed://sensevoice-small?backend=cpu"}
+                },
+                "tts": {
+                    "type": "SherpaOnnxTTS",
+                    "params": {"base_url": "managed://matcha-icefall-zh-en"}
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert_eq!(request.sensevoice, Some(ManagedBackend::Cpu));
+        assert_eq!(request.moss_tts, None);
+        assert_eq!(request.matcha_tts, Some(ManagedBackend::Auto));
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [SENSEVOICE_ID, MATCHA_TTS_ID]);
+    }
+
+    #[test]
     fn managed_voice_resolves_inside_model_install() {
         let directory = TestDirectory::create();
         let voice_path = directory.path().join("voices").join("zh_1.wav");
@@ -1248,5 +1528,54 @@ mod tests {
         }];
         let resolved = resolve_moss_voices(&voices, directory.path()).expect("resolve voice");
         assert_eq!(resolved[0]["path"], json!(voice_path));
+    }
+
+    #[test]
+    fn extracts_pinned_tar_bz2_service_archive() {
+        let directory = TestDirectory::create();
+        let archive_path = directory.path().join("archives").join("model.tar.bz2");
+        fs::create_dir_all(archive_path.parent().expect("archive parent"))
+            .expect("create archive directory");
+        let output = fs::File::create(&archive_path).expect("create archive");
+        let encoder = BzEncoder::new(output, Compression::best());
+        let mut archive = tar::Builder::new(encoder);
+        let content = b"model";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "matcha/model.onnx", &content[..])
+            .expect("append archive entry");
+        let encoder = archive.into_inner().expect("finish tar archive");
+        encoder.finish().expect("finish bzip2 stream");
+
+        let manifest = ManagedServiceManifest {
+            id: "matcha".to_owned(),
+            version: "test".to_owned(),
+            files: Vec::new(),
+            archives: vec![ManagedArchiveManifest {
+                path: "archives/model.tar.bz2".to_owned(),
+                format: ManagedArchiveFormat::TarBz2,
+            }],
+            required_paths: vec!["matcha/model.onnx".to_owned()],
+        };
+
+        extract_service_archives(directory.path(), &manifest).expect("extract archive");
+        write_install_marker(directory.path(), &manifest).expect("write marker");
+        assert_eq!(
+            fs::read(directory.path().join("matcha").join("model.onnx"))
+                .expect("read extracted model"),
+            content
+        );
+        assert!(verify_installed_service(directory.path(), &manifest)
+            .expect("verify extracted archive"));
+        fs::write(
+            directory.path().join("matcha").join("model.onnx"),
+            b"tampered",
+        )
+        .expect("tamper extracted model");
+        assert!(!verify_installed_service(directory.path(), &manifest)
+            .expect("reject tampered archive output"));
     }
 }

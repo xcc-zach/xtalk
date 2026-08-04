@@ -116,17 +116,19 @@ Apple Silicon 安装包还包含 `app/local-model-runtime-mlx` 中的 Swift side
 Python 模型客户端不需要按推理后端分支。MLX 的 MOSS 输出同样固定为 48 kHz
 单声道 PCM16。
 
-ONNX Runtime 是 App 自带资源，不要求用户另行安装。sidecar 通过
-`--ort-dylib` 加载 App 解析后传入的精确动态库；模型权重不放进安装包。用户配置
-`managed://sensevoice-small` 或 `managed://moss-tts-nano` 后，Tauri 会读取不可变
-的 `managed-models.lock.json`，仅下载对应服务的固定版本文件到
-`AppData/models/managed/<id>/<version>/`，校验文件大小和 SHA-256，再原子写入完成
-标记。此后每次启动仍会重新校验已安装快照。
+ONNX Runtime 是 App 资源，不要求用户另行安装。SenseVoice、Matcha 与 Rust MOSS
+sidecar 统一解析同一份随包 ONNX Runtime 1.27 动态库；模型权重不放进安装包。用户
+配置 `managed://sensevoice-small`、`managed://matcha-icefall-zh-en` 或
+`managed://moss-tts-nano` 后，Tauri 会读取不可变的
+`managed-models.lock.json`，仅下载对应服务的固定版本文件到
+`AppData/models/managed/<id>/<version>/`，校验文件大小和 SHA-256，以禁止目录逃逸
+的方式解压固定归档，再原子写入完成标记。此后每次启动仍会重新校验已安装快照。
 
 managed URL 支持 `?backend=cpu`、`?backend=cuda` 和 `?backend=mlx`。不带查询参数
 时，Tauri 依次选择 NVIDIA 设备上随包可用的 CUDA provider、Apple Silicon MLX，
 最后回退 CPU。显式选择不可用后端会报错，不会静默降级。CUDA 与 CPU 共用 ONNX
-快照，MLX 则选择单独固定的 safetensors 快照。
+快照，MLX 则选择单独固定的 safetensors 快照。Matcha 只支持 CPU 和 CUDA，因此
+自动选择时不会进入 MLX。
 
 用户选择配置后，Tauri 会在应用配置前先做预检。包含 managed 服务的配置会打开阻塞
 式进度窗口；原生进度事件会报告模型校验、逐文件下载字节数、服务启动和就绪状态。
@@ -134,8 +136,9 @@ Python 后端通过健康检查前，界面其余区域保持不可交互；成�
 启动失败时，窗口会保留错误信息和关闭操作。
 
 ONNX 模式下，Tauri 通过随包的原生 `sherpa-onnx-offline-websocket-server` 启动
-SenseVoice，并通过 Rust sidecar 启动 MOSS；MLX 模式下，每项服务分别启动一个
-Swift sidecar。它等待 TCP/readiness 就绪边界，再把真实临时 loopback
+SenseVoice，通过独立 Rust sherpa-onnx HTTP sidecar 启动 Matcha，并通过另一项
+Rust sidecar 启动 MOSS；MLX 模式下，每项受支持服务分别启动一个 Swift sidecar。
+它等待 TCP/readiness 就绪边界，再把真实临时 loopback
 地址和解析后的 AppData 音色路径深度合并进 Python 启动 overlay；外部配置因此不含
 运行时端口。安装、模型进程或 Python 启动任一步骤失败时，刚启动的全部子进程都会
 被停止，并恢复此前配置。managed 子进程意外退出后，后端连接也会立即变为不可用。
@@ -145,7 +148,9 @@ Swift sidecar。它等待 TCP/readiness 就绪边界，再把真实临时 loopba
 `server_configs/sample.json` 一致，但 `api_key` 特意留空。SenseVoice 继续通过现有
 离线 WebSocket 客户端接收 16 kHz PCM；MOSS 参考音频和生成结果均使用 48 kHz。
 [`../examples/local_models_mlx.json`](../examples/local_models_mlx.json) 则显式选择
-MLX。
+MLX。[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
+则选择中英双语 Matcha HTTP 客户端；sidecar 会把原生 16 kHz 输出重采样为 App
+统一的 48 kHz 单声道 PCM16。
 
 ## 配置
 

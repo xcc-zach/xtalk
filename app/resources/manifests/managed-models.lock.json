@@ -158,6 +158,39 @@
       ]
     },
     {
+      "id": "matcha-icefall-zh-en",
+      "version": "271b804af570400d3bcdcb53bf6e53cc9f75180ee763b9f13eb5eaf2b0d086ef+b599142a1fb8ff03de3e84ac35ff537c619e56f4267a6fe894851a42844acf9e",
+      "files": [
+        {
+          "path": "archives/matcha-icefall-zh-en.tar.bz2",
+          "size": 79033838,
+          "sha256": "271b804af570400d3bcdcb53bf6e53cc9f75180ee763b9f13eb5eaf2b0d086ef",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2"
+        },
+        {
+          "path": "vocos-16khz-univ.onnx",
+          "size": 53882848,
+          "sha256": "b599142a1fb8ff03de3e84ac35ff537c619e56f4267a6fe894851a42844acf9e",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx"
+        }
+      ],
+      "archives": [
+        {
+          "path": "archives/matcha-icefall-zh-en.tar.bz2",
+          "format": "tar-bz2"
+        }
+      ],
+      "required_paths": [
+        "matcha-icefall-zh-en/model-steps-3.onnx",
+        "matcha-icefall-zh-en/lexicon.txt",
+        "matcha-icefall-zh-en/tokens.txt",
+        "matcha-icefall-zh-en/date-zh.fst",
+        "matcha-icefall-zh-en/number-zh.fst",
+        "matcha-icefall-zh-en/phone-zh.fst",
+        "matcha-icefall-zh-en/espeak-ng-data"
+      ]
+    },
+    {
       "id": "moss-tts-nano-mlx",
       "version": "229a9c51bb0ffff6fd0dbe53b5bf0c441e438a79",
       "files": [

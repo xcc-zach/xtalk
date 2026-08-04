@@ -9,13 +9,13 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolCall, ToolMess
 from xtalk import model
 from xtalk.models.agents.default import DefaultAgent
 from xtalk.models.agents.interfaces import AgentOutput
-from xtalk.models.agents.tools import AsyncTool, ToolEngine
+from xtalk.models.agents.tools import ToolEngine
 from xtalk.models.agents.tools.utils import build_tool_call_result
 
 
 @model
 class DesktopDefaultAgent(DefaultAgent):
-    """Keep App async-tool progress in Tool UI and speak one final response."""
+    """Expose App tool progress UI while preserving normal LLM narration."""
 
     def clone(self) -> "DesktopDefaultAgent":
         """Create an equivalent desktop agent for a new conversation."""
@@ -35,7 +35,7 @@ class DesktopDefaultAgent(DefaultAgent):
         allow_tools: bool,
         transient_instruction: str | None = None,
     ) -> AsyncIterator[AgentOutput]:
-        """Stream a turn without narrating an async tool's initial receipt."""
+        """Stream a turn and let the LLM respond to each initial tool receipt."""
 
         streaming_model = (
             self.model_with_tools if allow_tools else self.model_for_async_updates
@@ -61,15 +61,9 @@ class DesktopDefaultAgent(DefaultAgent):
             response_message.content = ""
             response_message.tool_calls = tool_calls
             self._chat_history.append_message(response_message)
-            started_async_tool = False
             for tool_call in tool_calls:
                 yield tool_call
                 tool_name = tool_call["name"]
-                selected_tool = self.tool_engine._name_to_tool.get(tool_name)
-                started_async_tool = started_async_tool or (
-                    isinstance(selected_tool, type)
-                    and issubclass(selected_tool, AsyncTool)
-                )
                 try:
                     tool_result = await self.tool_engine.ainvoke_and_append(
                         tool_call,
@@ -90,12 +84,6 @@ class DesktopDefaultAgent(DefaultAgent):
                     tool_call=tool_call,
                     result_content=str(tool_result.content),
                 )
-
-            # The App presents the initial/running states in its Tool UI. The
-            # subscribed final update will wake the agent once and produce the
-            # only spoken assistant response for this asynchronous operation.
-            if started_async_tool:
-                return
 
     def _record_async_tool_update(
         self,
