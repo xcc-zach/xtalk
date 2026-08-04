@@ -188,10 +188,10 @@ children are stopped and the previous configuration is restored. An unexpected
 managed-child exit also makes the backend connection unavailable.
 
 The complete local example is
-[`../examples/local_models.json`](../examples/local_models.json). Its LLM
-matches `server_configs/sample.json` while intentionally leaving `api_key`
-empty. SenseVoice consumes 16 kHz PCM through the existing offline WebSocket
-client; MOSS reference audio and generated output use 48 kHz. The companion
+[`../examples/local_models_moss_tts.json`](../examples/local_models_moss_tts.json).
+Its LLM matches `server_configs/sample.json` while intentionally leaving
+`api_key` empty. SenseVoice consumes 16 kHz PCM through the existing offline
+WebSocket client; MOSS reference audio and generated output use 48 kHz. The companion
 [`../examples/local_models_mlx.json`](../examples/local_models_mlx.json)
 explicitly selects MLX. The
 [`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
@@ -257,7 +257,8 @@ enablement are App metadata rather than manifest fields. Built-in IDs use the
 
 The native delete command resolves the tool source itself and rejects built-in
 IDs, so deletion protection does not depend on the WebView. Both sources can
-be disabled. The Python sidecar resolves the same `module:factory` entrypoint
+contain optional tools that can be disabled; catalogued required built-ins
+cannot. The Python sidecar resolves the same `module:factory` entrypoint
 for each enabled directory, and user exports take precedence over same-named
 built-ins. A factory must return a list accepted by
 `XtalkBuilder.add_agent_tools()`.
@@ -266,16 +267,51 @@ The configured Agent is built after this registry is loaded, so tool changes
 take effect through a controlled sidecar restart. A failed developer factory is
 omitted without preventing the remaining local service from starting.
 
+Current Time and Web Search use this same built-in path; the adapter no longer
+registers either tool through a private branch. Current Time is catalogued with
+`can_disable=false`, and both the Rust registry and Python loader force it on
+even when an old preference file says otherwise. Web Search is disabled by
+default and uses the public XTalk asynchronous Serper tool factory.
+
+External tool credentials are App metadata, not tool metadata.
+`resources/credentials.json` binds credential IDs to environment-variable
+aliases, dependent built-in IDs, and the canonical environment name injected
+into the sidecar. The trusted Rust layer resolves environment variables first,
+then reads the operating system credential store. It uses macOS Keychain,
+Windows Credential Manager, or Linux Secret Service through target-specific
+native backends. The WebView receives only `configured`, `source`, and storage
+availability; secret values are accepted only by the save command and are
+never returned.
+
+At sidecar start or restart, Rust resolves credentials only for enabled tools
+and adds them directly to the child-process environment. They are absent from
+the newline-delimited startup message, command arguments, AppData, tool
+manifests, and logs. Enabling a bound tool without a resolved credential is
+rejected. Deleting a stored credential disables dependent tools when no
+higher-priority environment value remains. Unsupported or unavailable system
+stores remain usable through environment variables; the App provides no
+volatile session-only credential fallback.
+
 The Codex built-in is represented by one catalog entry and one manifest whose
-factory returns five native async tools: search, create, continue, set-model,
-and delete. Consequently its enabled state is atomic; the App has no per-export
-preference. The bundle is disabled by default. Every business thread and turn
+factory returns six native async tools: search, create, continue, model-list,
+set-model, and delete. Consequently its enabled state is atomic; the App has no
+per-export preference. The bundle is disabled by default. Every business thread and turn
 uses the official Python SDK with `Sandbox.full_access`, accepts any existing
 local directory as `cwd`, uses the SDK's no-prompt approval mode, and explicitly
 reapplies the model and reasoning effort stored for that session. Tool
 descriptions contain the conditional routing rules, so no Codex-specific
 instruction is injected into the Agent's
 developer instructions.
+
+The Python SDK is bundled without `openai-codex-cli-bin`. At first use, the
+built-in resolves a user-installed Codex executable from the inherited `PATH`
+or common package-manager locations, and requires a successful
+`codex --version` probe. The validated absolute path is supplied through
+`CodexConfig.codex_bin`; npm shim directories are prepended to the SDK child
+environment so their corresponding Node.js runtime remains discoverable. The
+validated path is cached for the sidecar process lifetime and discovery runs
+again only if that executable disappears or is no longer executable. If no
+candidate works, the tool returns an actionable installation message.
 
 The App-side session index is SQLite at
 `AppData/tool-data/codex/codex_sessions.sqlite3`. It stores the SDK thread ID,

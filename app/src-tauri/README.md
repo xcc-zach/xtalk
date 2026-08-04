@@ -1,7 +1,10 @@
 # XTalk Desktop native shell
 
 The Tauri shell requires prepared, target-specific sidecar artifacts before
-`cargo check`, `tauri dev`, or `tauri build`:
+`cargo check` or `tauri dev`. The supported App packaging entrypoints download
+and verify the locked Sherpa/ORT archive before invoking Tauri. A Tauri build
+then prepares the Python sidecar automatically from the repository's current
+root `src/` tree through the configured `beforeBuildCommand`:
 
 ```text
 app/src-tauri/binaries/
@@ -16,8 +19,13 @@ Do not add a placeholder executable. The app build scripts must produce the
 real `app-backend` binary for the active target triple and the complete
 PyInstaller `onedir` runtime before invoking Tauri.
 
-Build it from an immutable wheel and list any provider extras required by the
-selected acceptance configuration:
+For an ordinary public release, run `npm run package:macos` from `app/` with
+`APPLE_SIGNING_IDENTITY` and `APPLE_NOTARY_KEYCHAIN_PROFILE` configured. Use
+`npm run package:macos:local` for a fully sealed local installer. A direct
+`tauri build --bundles app` is an intermediate Bundle that has not completed
+the repository's nested signing, smoke-test, DMG, and notarization pipeline.
+Use the lower-level command only when intentionally building a sidecar from an
+immutable wheel supplied by CI:
 
 ```sh
 python ../scripts/build_backend.py \
@@ -27,23 +35,19 @@ python ../scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-Prepare the optional managed native runtimes from explicit platform files:
+Prepare the optional managed native runtimes for the current platform:
 
 ```sh
-python ../scripts/prepare_managed_runtime.py \
-  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
-  --sherpa-ort-library /path/to/sherpa/libonnxruntime \
-  --tts-ort-library /path/to/tts/libonnxruntime
+python ../scripts/download_managed_runtime.py
 ```
 
-The script builds the Rust MOSS service, gives the executables Tauri's
-target-specific names, and stages the two ABI-specific ONNX Runtime libraries
-as ignored resources. Apple Silicon builds also compile the pinned Swift MLX
-service through Xcode and stage its Metal resource bundle. CUDA packages pass
-the two optional `--*-cuda-runtime-dir` arguments so the matching execution
-provider libraries are staged. A release build must run it for every target.
-The Apple Silicon build host must have Xcode's Metal Toolchain component
-installed (`xcodebuild -downloadComponent MetalToolchain`).
+The script selects the Rust host target, downloads its official sherpa shared
+distribution, validates the SHA-256 from
+`resources/manifests/native-runtimes.lock.json`, and stages the included
+Sherpa server and ONNX Runtime 1.27 together. It also builds the Rust runtimes;
+Apple Silicon builds compile the pinned Swift MLX service and stage its Metal
+resource bundle. The Apple Silicon host must have Xcode's Metal Toolchain
+component installed (`xcodebuild -downloadComponent MetalToolchain`).
 
 `tauri.conf.json` bundles the runtime directory as
 `$RESOURCE/app-backend-runtime` and launches the external binary with
@@ -51,8 +55,11 @@ the external-binary directory as its working directory. Tauri places resources
 beside the executable on Windows and in Cargo development builds. On macOS,
 `bundle.macOS.files` also places the runtime contents directly in
 `Contents/Frameworks`, which is where the PyInstaller bootloader resolves them
-inside an app bundle. Linux AppImage, Debian, and RPM settings copy the runtime
-to `/usr/bin/app-backend-runtime`, beside the external binary.
+inside an app bundle. The supported macOS packager validates both generated
+copies before signing, keeps Frameworks as the sole complete runtime, and
+retains only Python package metadata under Resources. Linux AppImage, Debian,
+and RPM settings copy the runtime to `/usr/bin/app-backend-runtime`, beside the
+external binary.
 
 PyInstaller `onedir` resolves its contents relative to its executable, not only
 its working directory. The Rust launcher therefore refuses to start when the
@@ -91,9 +98,19 @@ messages. Configuration contents, including provider credentials, remain in
 the user-selected file and are not copied into the application bundle or the
 selection record.
 
+Tool service credentials use a separate App-owned registry at
+`resources/credentials.json`. The native layer persists them through macOS
+Keychain, Windows Credential Manager, or Linux Secret Service; supported
+environment variables take precedence. Only credential status crosses back to
+the WebView. Resolved secrets are added to the Python child environment during
+start or restart and never enter the startup JSON, AppData, arguments, or logs.
+The packaged registry contains bindings and environment names only, never key
+values. A platform without an accessible credential service must use the
+corresponding environment variable.
+
 The example
-[`../examples/local_models.json`](../examples/local_models.json) selects both
-optional managed services. `managed://` is a desktop-only locator: Tauri
+[`../examples/local_models_moss_tts.json`](../examples/local_models_moss_tts.json)
+selects both optional managed services. `managed://` is a desktop-only locator: Tauri
 downloads and verifies the pinned snapshot under AppData, starts the native
 service, and replaces the locator with an ephemeral loopback URL in the Python
 startup overlay. `?backend=cpu|cuda|mlx` forces a backend; otherwise Tauri

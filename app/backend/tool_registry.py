@@ -234,30 +234,38 @@ def _read_enabled_builtin_tool_definitions(
     identifiers: set[str] = set()
     paths: set[str] = set()
     for entry in catalog["tools"]:
-        if not isinstance(entry, dict) or set(entry) != {
-            "id",
-            "path",
-            "enabled_by_default",
-        }:
+        if (
+            not isinstance(entry, dict)
+            or not {"id", "path", "enabled_by_default"}.issubset(entry)
+            or not set(entry).issubset(
+                {"id", "path", "enabled_by_default", "can_disable"}
+            )
+        ):
             raise ValueError("built-in tool catalog entry is invalid")
         identifier = entry["id"]
         relative_path = entry["path"]
         enabled_by_default = entry["enabled_by_default"]
+        can_disable = entry.get("can_disable", True)
         if (
             not _is_safe_name(identifier)
             or not _is_safe_name(relative_path)
             or identifier in identifiers
             or relative_path in paths
             or not isinstance(enabled_by_default, bool)
+            or not isinstance(can_disable, bool)
         ):
             raise ValueError("built-in tool catalog entry is invalid")
         identifiers.add(identifier)
         paths.add(relative_path)
         preference = preferences.get(identifier)
         enabled = (
-            preference["enabled"]
-            if preference is not None
-            else enabled_by_default
+            True
+            if not can_disable
+            else (
+                preference["enabled"]
+                if preference is not None
+                else enabled_by_default
+            )
         )
         if not enabled:
             continue

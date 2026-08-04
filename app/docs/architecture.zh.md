@@ -144,9 +144,10 @@ Rust sidecar 启动 MOSS；MLX 模式下，每项受支持服务分别启动一�
 被停止，并恢复此前配置。managed 子进程意外退出后，后端连接也会立即变为不可用。
 
 完整本地示例见
-[`../examples/local_models.json`](../examples/local_models.json)。其中 LLM 与
-`server_configs/sample.json` 一致，但 `api_key` 特意留空。SenseVoice 继续通过现有
-离线 WebSocket 客户端接收 16 kHz PCM；MOSS 参考音频和生成结果均使用 48 kHz。
+[`../examples/local_models_moss_tts.json`](../examples/local_models_moss_tts.json)。
+其中 LLM 与 `server_configs/sample.json` 一致，但 `api_key` 特意留空。SenseVoice
+继续通过现有离线 WebSocket 客户端接收 16 kHz PCM；MOSS 参考音频和生成结果均使用
+48 kHz。
 [`../examples/local_models_mlx.json`](../examples/local_models_mlx.json) 则显式选择
 MLX。[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
 则选择中英双语 Matcha HTTP 客户端；sidecar 会把原生 16 kHz 输出重采样为 App
@@ -200,20 +201,46 @@ XTalk 原始配置错误返回。
 App 元数据，不进入 manifest。内置工具 ID 使用 `builtin:<id>` 命名空间，其启用
 覆盖保存到 `AppData/tool_preferences.json`。
 
-原生删除命令会自行解析工具来源并拒绝内置 ID，删除保护不依赖 WebView。两种工具
-都可以禁用。Python sidecar 使用同一套 `module:factory` 入口加载每个已启用目录；
+原生删除命令会自行解析工具来源并拒绝内置 ID，删除保护不依赖 WebView。两种来源
+中的可选工具都可以禁用；catalog 标记为必需的内置工具不可禁用。Python sidecar 使用
+同一套 `module:factory` 入口加载每个已启用目录；
 用户工具与内置工具导出同名时优先使用用户实现。工厂必须返回一个列表，其中元素
 可直接交给 `XtalkBuilder.add_agent_tools()`。
 
 配置中的 Agent 会在读取该注册表后构建，因此工具变更通过受控重启 sidecar 生效。
 单个开发者工厂加载失败时会被忽略，不会阻止其余本地服务启动。
 
+当前时间和联网搜索也完全走这套内置工具路径，adapter 不再通过私有分支注册它们。
+当前时间在 catalog 中声明 `can_disable=false`；即使旧偏好文件把它写成关闭，Rust
+注册表与 Python loader 也会强制启用。联网搜索默认关闭，直接使用 XTalk 公开的
+Serper 异步工具工厂。
+
+工具的外部凭据属于 App 元数据，不属于工具 manifest。
+`resources/credentials.json` 把稳定的凭据 ID 绑定到环境变量别名、依赖它的内置工具
+ID，以及注入 sidecar 时使用的规范环境变量名。受信任的 Rust 层先解析环境变量，
+再读取操作系统凭据管理器；各目标分别使用 macOS Keychain、Windows Credential
+Manager 和 Linux Secret Service。WebView 只能得到 `configured`、来源与存储可用
+状态；密钥仅作为保存命令的输入，绝不从原生层返回。
+
+sidecar 启动或重启时，Rust 只为已启用的工具解析所需凭据，并直接加入子进程环境。
+密钥不会进入逐行 JSON 启动消息、命令行参数、AppData、工具 manifest 或日志。
+缺少可解析凭据时原生层会拒绝启用对应工具；删除系统凭据后，如果不存在优先级更高
+的环境变量，还会关闭依赖工具。系统凭据服务不支持或不可用的平台仍可通过环境变量
+使用工具；App 不提供易失的“仅本次运行”凭据模式。
+
 Codex 内置工具由一个 catalog 条目和一个 manifest 表示，其工厂一次返回查询、新建、
-继续、切换模型和删除五个原生异步工具。因此它只能整体启用或禁用，不存在按导出
-工具保存的偏好；默认状态为禁用。所有业务线程与 turn 都通过官方 Python SDK 使用
+继续、列出模型、切换模型和删除六个原生异步工具。因此它只能整体启用或禁用，不存在
+按导出工具保存的偏好；默认状态为禁用。所有业务线程与 turn 都通过官方 Python SDK 使用
 `Sandbox.full_access` 与 SDK 的无提示审批模式，`cwd` 可以是任意真实存在的本地
 目录，并在每次 turn 显式重用该 session 保存的模型与推理强度。条件式路由规则直接
 写入工具描述，不向 Agent 的 developer instructions 注入 Codex 专用指令。
+
+Python SDK 随 App 打包，但明确排除 `openai-codex-cli-bin`。首次使用时，内置工具从
+继承的 `PATH` 以及常见包管理器安装位置解析用户安装的 Codex，并要求
+`codex --version` 探测成功。验证后的绝对路径通过 `CodexConfig.codex_bin` 传给
+SDK；如果命中 npm shim，还会把该目录前置到子进程 `PATH`，确保对应的 Node.js 可被
+找到。已验证的位置会在 sidecar 进程生命周期内缓存；只有该可执行文件消失或失去
+执行权限后才重新查找。没有可用候选时，工具返回明确的安装提示。
 
 App 侧 session 索引是
 `AppData/tool-data/codex/codex_sessions.sqlite3`。其中只保存 SDK thread ID、精简标题与

@@ -61,6 +61,7 @@ def _write_builtin_tool(
     builtin_tools_root: Path,
     *,
     enabled_by_default: bool = True,
+    can_disable: bool = True,
 ) -> None:
     """Write one representative built-in tool and catalog."""
 
@@ -97,6 +98,7 @@ def _write_builtin_tool(
                         "id": "timer",
                         "path": "timer",
                         "enabled_by_default": enabled_by_default,
+                        "can_disable": can_disable,
                     }
                 ],
             }
@@ -160,9 +162,9 @@ def test_repository_builtin_catalog_loads_without_backend_imports(
         builtin_tools_root=app_root / "resources" / "tools",
     )
 
-    assert len(tools) == 1
-    assert tools[0].name == "timer"
-    assert tools[0].__module__.startswith("_xtalk_desktop_tool_builtin_timer")
+    assert {tool.name for tool in tools} == {"get_time", "timer"}
+    timer = next(tool for tool in tools if tool.name == "timer")
+    assert timer.__module__.startswith("_xtalk_desktop_tool_builtin_timer")
 
 
 def test_load_enabled_tools_applies_builtin_disable_preference(
@@ -191,6 +193,34 @@ def test_load_enabled_tools_applies_builtin_disable_preference(
         )
         == []
     )
+
+
+def test_load_enabled_tools_ignores_disable_for_required_builtin(
+    tmp_path: Path,
+) -> None:
+    """Keep a required built-in enabled despite a stale preference file."""
+
+    tools_root = tmp_path / "data" / "tools"
+    builtin_tools_root = tmp_path / "resources" / "tools"
+    _write_builtin_tool(builtin_tools_root, can_disable=False)
+    tools_root.parent.mkdir(parents=True)
+    (tools_root.parent / "tool_preferences.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "builtin": {"timer": {"enabled": False}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tools = load_enabled_tools(
+        tools_root,
+        builtin_tools_root=builtin_tools_root,
+    )
+
+    assert len(tools) == 1
+    assert tools[0].name == "timer"
 
 
 def test_user_tool_name_overrides_builtin_export(tmp_path: Path) -> None:

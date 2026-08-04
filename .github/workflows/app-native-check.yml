@@ -1,0 +1,132 @@
+name: Desktop Native Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/**"
+      - "frontend/**"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/app-native-check.yml"
+  push:
+    paths:
+      - "app/**"
+      - "frontend/**"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/app-native-check.yml"
+
+jobs:
+  native-check:
+    name: ${{ matrix.os }} native credential backend
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Tauri prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create check-only external sidecar placeholder
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          suffix=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            suffix=".exe"
+          fi
+          mkdir -p app/src-tauri/binaries
+          for sidecar in \
+            app-backend \
+            local-model-runtime \
+            matcha-model-runtime \
+            mlx-model-runtime \
+            sherpa-onnx-offline-websocket-server
+          do
+            : > "app/src-tauri/binaries/${sidecar}-${target}${suffix}"
+          done
+          mkdir -p \
+            app/src-tauri/binaries/app-backend-runtime \
+            app/resources/managed-runtime/mlx-swift_Cmlx.bundle
+
+      - name: Compile native shell and tests
+        working-directory: app/src-tauri
+        run: cargo check --tests --locked
+
+  package-macos:
+    name: clean checkout macOS App and DMG
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install locked build tools
+        run: |
+          python3.12 -m pip install build==1.5.0 certifi==2026.7.22
+          npm install --global npm@11.12.1
+
+      - name: Install App dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Install Metal toolchain on Apple Silicon
+        if: runner.arch == 'ARM64'
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Build the signed local App and DMG
+        working-directory: app
+        run: npm run package:macos:local
+
+      - name: Verify App and DMG signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="app/src-tauri/target/release/bundle/macos/XTalk.app"
+          dmg_path="$(find app/src-tauri/target/release/bundle/dmg -maxdepth 1 -name 'XTalk_*.dmg' -print -quit)"
+          test -d "${app_path}"
+          test -f "${dmg_path}"
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+          codesign --verify --strict --verbose=2 "${dmg_path}"
+          hdiutil verify "${dmg_path}"
+
+      - name: Upload verified installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtalk-macos-local-dmg
+          path: app/src-tauri/target/release/bundle/dmg/XTalk_*.dmg
+          if-no-files-found: error

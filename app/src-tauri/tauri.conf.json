@@ -5,7 +5,7 @@
   "identifier": "com.xtalk.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:source",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../ui/dist"
   },
@@ -53,6 +53,7 @@
       "../resources/licenses/mlx-audio-swift-LICENSE.txt": "licenses/mlx-audio-swift-LICENSE.txt",
       "../resources/licenses/mlx-swift-LICENSE.txt": "licenses/mlx-swift-LICENSE.txt",
       "../resources/manifests/managed-models.lock.json": "manifests/managed-models.lock.json",
+      "../resources/credentials.json": "credentials.json",
       "../resources/tools/": "tools/",
       "../resources/managed-runtime/ort/": "managed-runtime/ort/",
       "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",

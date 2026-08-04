@@ -18,3 +18,8 @@ optional SenseVoice and MOSS services. Tauri validates this manifest and
 installs only services selected through a supported `managed://` URL. CPU and
 CUDA use the pinned ONNX snapshots; Apple Silicon MLX uses separately pinned
 safetensor snapshots selected with `?backend=mlx`.
+
+`native-runtimes.lock.json` pins the official shared sherpa-onnx archive for
+each supported macOS, Linux, and Windows x64/ARM64 target. Each archive carries
+the server, Sherpa shared API, and matching ONNX Runtime. The packaging entry
+downloads and verifies this archive before it builds target-specific sidecars.

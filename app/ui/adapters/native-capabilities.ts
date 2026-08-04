@@ -22,21 +22,19 @@ export interface NativeModelConfigSelection {
   configPath: string | null;
 }
 
-/**
- * Web-search settings managed by the native desktop layer.
- */
-export interface NativeWebSearchSettings {
-  /** Whether asynchronous web search is selected for the next restart. */
-  enabled: boolean;
-  /** Where the API key for the current App session comes from. */
-  keySource: NativeWebSearchApiKeySource;
+/** One App-owned external service credential without its secret value. */
+export interface NativeCredentialDefinition {
+  /** Stable credential identifier from the packaged App registry. */
+  id: string;
+  /** Localized human-readable service name. */
+  displayName: string | Record<string, string>;
+  /** Whether an environment variable or system credential is available. */
+  configured: boolean;
+  /** Active environment-first credential source. */
+  source: "environment" | "system" | "missing";
+  /** Whether the platform credential manager could be accessed. */
+  storageAvailable: boolean;
 }
-
-/** Supported sources for the current Serper API key. */
-export type NativeWebSearchApiKeySource =
-  | "environment"
-  | "session"
-  | "missing";
 
 /**
  * Managed services referenced by one selected model configuration.
@@ -76,6 +74,8 @@ export interface NativeToolDefinition {
   origin: "builtin" | "user";
   /** Whether the native layer permits deleting this tool directory. */
   canDelete: boolean;
+  /** Whether the native layer permits disabling this tool. */
+  canDisable: boolean;
   /** Human-readable name declared by the developer tool. */
   displayName: string | Record<string, string>;
   /** Python `module:factory` entrypoint declared by the tool. */
@@ -104,7 +104,8 @@ export interface NativeToolUiSource {
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
 const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
-const WEB_SEARCH_SETTINGS_COMMAND = "get_web_search_settings";
+const CREDENTIALS_COMMAND = "get_credentials";
+const DELETE_CREDENTIAL_COMMAND = "delete_credential";
 const ENSURE_BACKEND_STARTED_COMMAND = "ensure_backend_started";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
@@ -112,6 +113,7 @@ const MANAGED_MODEL_PLAN_COMMAND = "get_managed_model_plan";
 const MANAGED_MODEL_PROGRESS_EVENT = "managed-model-progress";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
 const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
+const SAVE_CREDENTIAL_COMMAND = "save_credential";
 const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
 const TOOL_UI_SOURCE_COMMAND = "get_tool_ui_source";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "::1", "localhost"]);
@@ -164,15 +166,38 @@ export async function getNativeModelConfigSelection(): Promise<NativeModelConfig
   return { configPath };
 }
 
-/**
- * Reads persisted web-search selection and current availability.
- *
- * @returns Current web-search settings from the trusted native layer.
- */
-export async function getNativeWebSearchSettings(): Promise<NativeWebSearchSettings> {
+/** Lists external service credentials without returning secret values. */
+export async function getNativeCredentials(): Promise<NativeCredentialDefinition[]> {
   requireTauriRuntime();
-  const payload = await invoke<unknown>(WEB_SEARCH_SETTINGS_COMMAND);
-  return parseNativeWebSearchSettings(payload);
+  const payload = await invoke<unknown>(CREDENTIALS_COMMAND);
+  if (!Array.isArray(payload)) {
+    throw new Error("Tauri returned an invalid credential list.");
+  }
+  return payload.map(parseNativeCredentialDefinition);
+}
+
+/** Saves one external service credential in the platform credential manager. */
+export async function saveNativeCredential(
+  credentialId: string,
+  value: string,
+): Promise<NativeCredentialDefinition> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(SAVE_CREDENTIAL_COMMAND, {
+    credentialId,
+    value,
+  });
+  return parseNativeCredentialDefinition(payload);
+}
+
+/** Deletes one external service credential from the platform credential manager. */
+export async function deleteNativeCredential(
+  credentialId: string,
+): Promise<NativeCredentialDefinition> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(DELETE_CREDENTIAL_COMMAND, {
+    credentialId,
+  });
+  return parseNativeCredentialDefinition(payload);
 }
 
 /**
@@ -209,20 +234,14 @@ export async function chooseNativeModelConfigFile(): Promise<string | null> {
  * Persists a selected model configuration and restarts the native sidecar.
  *
  * @param configPath Absolute JSON configuration path selected by the user.
- * @param webSearchEnabled Desired web-search state after restart.
- * @param webSearchApiKey Optional memory-only Serper key for this App session.
  * @returns Validated connection details for the restarted sidecar.
  */
 export async function applyNativeModelConfig(
   configPath: string,
-  webSearchEnabled: boolean,
-  webSearchApiKey: string | null,
 ): Promise<NativeBackendConnection> {
   requireTauriRuntime();
   const payload = await invoke<unknown>(APPLY_MODEL_CONFIG_COMMAND, {
     configPath,
-    webSearchEnabled,
-    webSearchApiKey,
   });
   return parseNativeBackendConnection(payload);
 }
@@ -351,19 +370,11 @@ export async function removeNativeInstalledTool(toolId: string): Promise<void> {
 /**
  * Restarts the sidecar so persisted tool changes become active.
  *
- * @param webSearchEnabled Desired web-search state after restart.
- * @param webSearchApiKey Optional memory-only Serper key for this App session.
  * @returns Validated connection details for the restarted sidecar.
  */
-export async function applyNativeToolChanges(
-  webSearchEnabled: boolean,
-  webSearchApiKey: string | null,
-): Promise<NativeBackendConnection> {
+export async function applyNativeToolChanges(): Promise<NativeBackendConnection> {
   requireTauriRuntime();
-  const payload = await invoke<unknown>(APPLY_TOOL_CHANGES_COMMAND, {
-    webSearchEnabled,
-    webSearchApiKey,
-  });
+  const payload = await invoke<unknown>(APPLY_TOOL_CHANGES_COMMAND);
   return parseNativeBackendConnection(payload);
 }
 
@@ -467,6 +478,7 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   const enabled = payload.enabled;
   const origin = payload.origin;
   const canDelete = payload.canDelete;
+  const canDisable = payload.canDisable;
   if (
     typeof id !== "string" ||
     !isDisplayName(displayName) ||
@@ -474,6 +486,7 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
     typeof enabled !== "boolean" ||
     (origin !== "builtin" && origin !== "user") ||
     typeof canDelete !== "boolean" ||
+    typeof canDisable !== "boolean" ||
     canDelete !== (origin === "user") ||
     !id.trim() ||
     !entrypoint.trim() ||
@@ -492,6 +505,7 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
     id,
     origin,
     canDelete,
+    canDisable,
     displayName,
     entrypoint,
     ui:
@@ -505,23 +519,29 @@ function parseNativeToolDefinition(payload: unknown): NativeToolDefinition {
   };
 }
 
-function parseNativeWebSearchSettings(
+function parseNativeCredentialDefinition(
   payload: unknown,
-): NativeWebSearchSettings {
+): NativeCredentialDefinition {
   if (!isRecord(payload)) {
-    throw new Error("Tauri returned invalid web-search settings.");
+    throw new Error("Tauri returned an invalid credential definition.");
   }
-  const enabled = payload.enabled;
-  const keySource = payload.keySource;
+  const id = payload.id;
+  const displayName = payload.displayName;
+  const configured = payload.configured;
+  const source = payload.source;
+  const storageAvailable = payload.storageAvailable;
   if (
-    typeof enabled !== "boolean" ||
-    (keySource !== "environment" &&
-      keySource !== "session" &&
-      keySource !== "missing")
+    typeof id !== "string" ||
+    !id.trim() ||
+    !isDisplayName(displayName) ||
+    typeof configured !== "boolean" ||
+    (source !== "environment" && source !== "system" && source !== "missing") ||
+    configured !== (source !== "missing") ||
+    typeof storageAvailable !== "boolean"
   ) {
-    throw new Error("Web-search settings contain invalid fields.");
+    throw new Error("Credential definition contains invalid fields.");
   }
-  return { enabled, keySource };
+  return { id, displayName, configured, source, storageAvailable };
 }
 
 function isDisplayName(value: unknown): value is string | Record<string, string> {
