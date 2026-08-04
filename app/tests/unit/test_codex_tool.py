@@ -32,6 +32,7 @@ class _FakeAdapter:
         "selected_session_ids": ["thr-test"],
         "reason": "The project path and task match.",
     }
+    model_catalog: list[Any] = []
 
     async def __aenter__(self) -> _FakeAdapter:
         """Return this fake client."""
@@ -46,6 +47,12 @@ class _FakeAdapter:
 
         self.operations.append(("validate", (model, effort)))
         return model
+
+    async def list_models(self) -> list[Any]:
+        """Return the current deterministic model catalog."""
+
+        self.operations.append(("models", None))
+        return list(self.model_catalog)
 
     async def start_thread(
         self,
@@ -133,6 +140,17 @@ def _load_codex_bundle(tmp_path: Path) -> tuple[list[type[Any]], Any]:
     module = sys.modules[tools[0].__module__]
     module._adapter_factory = _FakeAdapter
     _FakeAdapter.operations = []
+    _FakeAdapter.model_catalog = [
+        module.CodexModelInfo(
+            id="gpt-5.6-sol",
+            model="gpt-5.6-sol",
+            display_name="GPT-5.6 Sol",
+            description="Frontier coding model.",
+            is_default=True,
+            default_reasoning_effort="high",
+            supported_reasoning_efforts=["medium", "high", "xhigh"],
+        )
+    ]
     return tools, module
 
 
@@ -154,7 +172,7 @@ async def _invoke(tool: type[Any], tool_input: Any, module: Any) -> Any:
 def test_codex_catalog_toggle_loads_all_operations_atomically(
     tmp_path: Path,
 ) -> None:
-    """Expose five operations from one disabled-by-default built-in entry."""
+    """Expose six operations from one disabled-by-default built-in entry."""
 
     tools, module = _load_codex_bundle(tmp_path)
 
@@ -162,11 +180,14 @@ def test_codex_catalog_toggle_loads_all_operations_atomically(
         "codex_session_search",
         "codex_session_create",
         "codex_session_continue",
+        "codex_models_list",
         "codex_session_set_model",
         "codex_session_delete",
     ]
     assert "Default tool for new requests" in tools[1].__doc__
     assert "exact session ID" in tools[2].__doc__
+    assert "never guessed" in tools[3].__doc__
+    assert "codex_models_list" in tools[4].__doc__
     assert module._STORE.path == (
         tmp_path / "data" / "tool-data" / "codex" / "codex_sessions.sqlite3"
     )
@@ -181,6 +202,19 @@ def test_codex_session_lifecycle_persists_settings_and_uses_resolver(
     by_name = {tool.name: tool for tool in tools}
 
     async def scenario() -> None:
+        catalog = await _invoke(
+            by_name["codex_models_list"],
+            module.CodexModelsInput(),
+            module,
+        )
+        assert catalog.models[0].id == "gpt-5.6-sol"
+        assert catalog.models[0].supported_reasoning_efforts == [
+            "medium",
+            "high",
+            "xhigh",
+        ]
+        assert "| gpt-5.6-sol | GPT-5.6 Sol | high |" in catalog.message
+
         create = await _invoke(
             by_name["codex_session_create"],
             module.CodexCreateInput(
@@ -245,6 +279,7 @@ def test_codex_session_lifecycle_persists_settings_and_uses_resolver(
     assert resolver_payload[0]["query"] == "README documentation project"
     assert resolver_payload[0]["candidates"][0]["session_id"] == "thr-test"
     assert ("archive", "thr-test") in _FakeAdapter.operations
+    assert ("models", None) in _FakeAdapter.operations
     with pytest.raises(ValueError, match="not found"):
         module._STORE.require("thr-test")
 

@@ -80,10 +80,11 @@ app 通过公共 runtime builder 注册已启用的内置与用户工具。随�
 `examples/sample_app/custom_async_tool.py` 契约一致，并作为普通内置 manifest 工具
 加载；若用户工具导出相同名称，则优先使用用户实现。单元测试覆盖 `Running`、进度、
 `Finished`、stop、工具
-入口加载，并通过公共 `ToolEngine` 验证最终更新；模型 smoke 则独立从文本入口发起
-请求，观察 `tool_called: timer`，确认真实的助手回复与 TTS 音频播放。测试不强制要求
-第二次 LLM 主动报告，因为模型驱动的报告可能与首轮响应重叠；app 不为这一时序增加
-timer 专用的 serving 修补。
+入口加载，并验证公共 `ToolEngine` 更新链路。`DesktopDefaultAgent` 只负责桌面模型注册，
+完整回合循环与异步更新策略直接继承
+`xtalk.models.agents.default.DefaultAgent`。因此用户结束说话后，已订阅工具的每次进度
+更新都会唤醒普通的 Agent 异步报告循环；用户仍在说话时则忽略中间进度，仅延后最终
+更新，与默认 Agent 完全一致。工具 UI 仍通过独立观察通道显示这些更新。
 
 文本输入要求已有活动的 XTalk Session。公共 SDK 的 `open()` 仍会初始化麦克风采集，
 因此即使随后只输入文字，启动 Session 也需要麦克风权限。
@@ -223,11 +224,11 @@ App 侧 session 索引是
 归档 SDK thread，再在 App 索引中将其移出活动池；每个 session 的异步锁会串行化
 继续、改配置和归档操作。
 
-异步工具的运行进度不会再回灌到对话文本流。Agent 会把生命周期更新记录到工具历史，
-但只有终态更新会触发一次自然语言总结，因此长时间运行的 Codex turn 不会显示成多条
-被截断的 AI 消息。Tool UI broker 会保留每个仍在运行的状态以及有界的不可变 emit
-历史，并通过受认证的 App HTTP 快照重放；即使工具执行早于 WebView 开始轮询，
-界面仍会显示 live 与 history 工具卡片。
+已订阅异步工具的进度遵循默认 Agent 对话循环：用户结束说话后，每次订阅更新都会
+唤醒一次自然语言报告；用户仍在说话时忽略中间更新，只延后最终结果。Tool UI broker
+通过独立通道保留每个仍在运行的状态以及有界的不可变 emit 历史，并通过受认证的
+App HTTP 快照重放；即使工具执行早于 WebView 开始轮询，界面仍会显示 live 与
+history 工具卡片。
 
 可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
 `window.xtalkToolUI.status(callback)` 和/或
@@ -243,13 +244,15 @@ initial emit 和每次 update emit 都会产生独立的 history 事件，其中
 消息和当时的 status。history 快照不会变化，每个会话最多保留 200 条，并按持久化
 session ID 保存到 WebView AppData。broker 还会在当前进程内为每个会话保留最近
 200 条 emit 用于重连恢复；WebView 通过稳定的调用 ID 和序号去重。live 状态只保存
-在内存中；即使最终 status 观察被错过，终态 history 事件也会移除对应 live 卡片。
+在内存中。完成和取消都会发布终态 history 事件；取消事件使用
+`outcome="cancelled"`。即使最终 status 观察被错过，任一终态事件也会移除对应
+live 卡片。
 
 对话顶部不再重复显示 XTalk 产品名。没有支持 live UI 的工具运行时，顶部中心保持
 空白；有工具运行时显示一条默认收起的紧凑状态栏，其中包含运行数量和最新状态。
 用户点击后可展开查看所有当前 live UI。live 卡片不再插入消息时间线，history 卡片
 仍固定在对应 emit 的历史位置；同一次调用的终态 emit 会替换此前卡片，避免工具完成
-后残留 Running 卡片。live 面板和消息时间线都使用增量 DOM 协调，在状态更新期间
+或取消后残留 Running 卡片。live 面板和消息时间线都使用增量 DOM 协调，在状态更新期间
 保留 iframe 的浏览上下文，避免画面闪烁。
 
 每张卡片使用独立的 `sandbox="allow-scripts"` iframe。注入的 CSP 阻止外部资源和

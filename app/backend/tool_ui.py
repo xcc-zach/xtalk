@@ -7,7 +7,7 @@ import secrets
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
 from xtalk.models.agents.tools import AsyncTool, Finished, Running
@@ -189,8 +189,37 @@ class ToolUIBroker:
         message: str,
         status: str,
         running: bool,
+        outcome: Literal["running", "complete", "cancelled"] | None = None,
     ) -> None:
-        """Publish one immutable tool emit observation."""
+        """Publish one immutable tool emit observation.
+
+        Parameters
+        ----------
+        binding : ToolUIBinding
+            Installed UI metadata for the observed tool.
+        tool_name : str
+            Exported tool name.
+        call_id : str
+            Stable source tool-call identifier.
+        message : str
+            Human-readable content emitted by the tool.
+        status : str
+            Latest human-readable status observation.
+        running : bool
+            Whether the tool call remains active.
+        outcome : {"running", "complete", "cancelled"} | None, optional
+            Explicit lifecycle outcome. When omitted, it is derived from
+            ``running`` for compatibility with existing callers.
+
+        Raises
+        ------
+        ValueError
+            If the explicit outcome contradicts ``running``.
+        """
+
+        resolved_outcome = outcome or ("running" if running else "complete")
+        if running != (resolved_outcome == "running"):
+            raise ValueError("tool UI outcome contradicts running state")
 
         sequence = self._emit_sequences.get(call_id, 0) + 1
         self._emit_sequences[call_id] = sequence
@@ -206,6 +235,7 @@ class ToolUIBroker:
                 "message": str(message),
                 "status": str(status),
                 "running": running,
+                "outcome": resolved_outcome,
                 "emittedAt": _utc_now(),
             }
         )
@@ -513,14 +543,16 @@ def _wrap_async_tool(
                 tool_state,
                 global_state,
             )
-            await broker.publish_status(
+            cancellation_message = status or "Tool cancelled"
+            await broker.publish_emit(
                 binding=binding,
                 tool_name=tool_name,
                 call_id=call_id,
+                message=cancellation_message,
                 status=status,
                 running=False,
+                outcome="cancelled",
             )
-            broker.finish_call(call_id)
             raise
         except BaseException as exc:
             if not isinstance(exc, StopAsyncIteration):

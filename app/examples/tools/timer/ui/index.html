@@ -121,6 +121,10 @@
         color: #16855b;
       }
 
+      .badge.cancelled {
+        color: rgb(127 127 127);
+      }
+
       @media (max-width: 520px) {
         .card {
           padding: 16px;
@@ -215,6 +219,7 @@
           preparing: "Preparing…",
           running: "Running",
           complete: "Complete",
+          cancelled: "Cancelled",
           seconds: "s",
         },
         zh: {
@@ -222,6 +227,7 @@
           preparing: "准备中…",
           running: "运行中",
           complete: "已完成",
+          cancelled: "已取消",
           seconds: "秒",
         },
       }[locale];
@@ -239,16 +245,27 @@
           Number(match[0]),
         );
 
-      const renderStatus = (value, running) => {
-        status.textContent = running ? copy.running : copy.complete;
+      const renderStatus = (value, running, outcome) => {
+        const resolvedOutcome = outcome || (running ? "running" : "complete");
+        const cancelled = resolvedOutcome === "cancelled";
+        status.textContent = cancelled
+          ? copy.cancelled
+          : running
+            ? copy.running
+            : copy.complete;
         const [used = 0, duration = Math.max(used, 1)] = numbers(value);
         const maximum = Math.max(duration, 1);
         const percentage = Math.min(100, Math.max(0, (used / maximum) * 100));
         progressValue.style.width = `${percentage}%`;
         elapsed.textContent = `${used} ${copy.seconds}`;
         total.textContent = `${duration} ${copy.seconds}`;
-        badge.textContent = running ? copy.running : copy.complete;
-        badge.classList.toggle("complete", !running);
+        badge.textContent = cancelled
+          ? copy.cancelled
+          : running
+            ? copy.running
+            : copy.complete;
+        badge.classList.toggle("complete", resolvedOutcome === "complete");
+        badge.classList.toggle("cancelled", cancelled);
       };
 
       title.textContent = copy.title;
@@ -256,13 +273,13 @@
       badge.textContent = copy.running;
       window.xtalkToolUI.status((event) => {
         title.textContent = copy.title;
-        renderStatus(event.status, event.running);
+        renderStatus(event.status, event.running, event.outcome);
       });
 
       window.xtalkToolUI.emit((event) => {
         title.textContent = copy.title;
         message.textContent = event.message;
-        renderStatus(event.status, event.running);
+        renderStatus(event.status, event.running, event.outcome);
       });
     </script>
   </body>

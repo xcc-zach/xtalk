@@ -299,11 +299,12 @@ export function createToolUIFrameDocument(
   addEventListener("load", () => {
     capabilitiesReady = true;
     reportCapabilities();
+    const measuredElement = document.body || document.documentElement;
     const reportHeight = () => api.reportHeight(
-      Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0),
+      Math.ceil(measuredElement.getBoundingClientRect().height),
     );
     reportHeight();
-    new ResizeObserver(reportHeight).observe(document.documentElement);
+    new ResizeObserver(reportHeight).observe(measuredElement);
   });
 })();
 </script>`;

@@ -698,6 +698,12 @@ summary,
   font-size: 14px;
 }
 
+#messages > .tool-ui-row + .tool-ui-row,
+#messages > .tool-ui-row + .message-row,
+#messages > .message-row + .tool-ui-row {
+  margin-top: -6px;
+}
+
 .message-row {
   display: flex;
   width: 100%;
