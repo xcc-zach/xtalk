@@ -24,9 +24,6 @@ DEFAULT_APP = (
     / "XTalk.app"
 )
 ENTITLEMENTS = APP_ROOT / "src-tauri" / "Entitlements.plist"
-CODEX_HOST_ENTITLEMENTS = (
-    APP_ROOT / "src-tauri" / "CodexHostEntitlements.plist"
-)
 METADATA_SUFFIXES = (".dist-info", ".egg-info")
 
 
@@ -46,6 +43,16 @@ def parse_args() -> argparse.Namespace:
         "--identity",
         default=os.environ.get("APPLE_SIGNING_IDENTITY", "-"),
         help="codesign identity; defaults to an ad-hoc local signature",
+    )
+    parser.add_argument(
+        "--notarize",
+        action="store_true",
+        help="submit the signed DMG to Apple's notary service and staple it",
+    )
+    parser.add_argument(
+        "--notary-profile",
+        default=os.environ.get("APPLE_NOTARY_KEYCHAIN_PROFILE"),
+        help="notarytool Keychain profile used when --notarize is set",
     )
     return parser.parse_args()
 
@@ -122,6 +129,127 @@ def link_python_metadata_to_resources(app: Path) -> list[Path]:
     return linked
 
 
+def runtime_layout(root: Path) -> dict[Path, str]:
+    """Describe non-metadata entries in a packaged Python runtime.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Complete Python runtime directory.
+
+    Returns
+    -------
+    dict[pathlib.Path, str]
+        Relative paths mapped to ``directory``, ``file``, or ``symlink``.
+    """
+
+    layout: dict[Path, str] = {}
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if relative.parts[0].endswith(METADATA_SUFFIXES):
+            continue
+        if path.is_symlink():
+            kind = "symlink"
+        elif path.is_dir():
+            kind = "directory"
+        elif path.is_file():
+            kind = "file"
+        else:
+            kind = "other"
+        layout[relative] = kind
+    return layout
+
+
+def path_logical_size(path: Path) -> int:
+    """Measure regular-file bytes allocated below one runtime entry.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        File, link, or directory about to be removed.
+
+    Returns
+    -------
+    int
+        Sum of regular-file logical sizes in bytes.
+    """
+
+    if path.is_symlink():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(
+        entry.stat().st_size
+        for entry in path.rglob("*")
+        if entry.is_file() and not entry.is_symlink()
+    )
+
+
+def prune_duplicate_resource_runtime(app: Path) -> tuple[int, int]:
+    """Keep one complete macOS Python runtime under ``Frameworks``.
+
+    Tauri initially places the PyInstaller onedir tree in both ``Frameworks``
+    and ``Resources``. The bootloader loads native code from ``Frameworks``;
+    only package metadata must remain in ``Resources`` so it can be referenced
+    without being interpreted as nested code-signing bundles.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Tauri-generated application bundle.
+
+    Returns
+    -------
+    tuple[int, int]
+        Number of removed top-level entries and their logical byte size.
+
+    Raises
+    ------
+    ValueError
+        If either runtime is missing or their non-metadata layouts differ.
+    """
+
+    contents = app / "Contents"
+    frameworks = contents / "Frameworks"
+    resource_runtime = contents / "Resources" / "app-backend-runtime"
+    if not frameworks.is_dir() or not resource_runtime.is_dir():
+        raise ValueError("app bundle is missing the PyInstaller runtime layout")
+
+    framework_layout = runtime_layout(frameworks)
+    resource_layout = runtime_layout(resource_runtime)
+    if framework_layout != resource_layout:
+        framework_only = sorted(framework_layout.keys() - resource_layout.keys())
+        resource_only = sorted(resource_layout.keys() - framework_layout.keys())
+        kind_mismatches = sorted(
+            path
+            for path in framework_layout.keys() & resource_layout.keys()
+            if framework_layout[path] != resource_layout[path]
+        )
+        detail = ", ".join(
+            str(path)
+            for path in [*framework_only, *resource_only, *kind_mismatches][:5]
+        )
+        raise ValueError(
+            "Frameworks and Resources Python runtime layouts differ"
+            + (f": {detail}" if detail else "")
+        )
+
+    removed_count = 0
+    removed_bytes = 0
+    for path in sorted(resource_runtime.iterdir()):
+        if path.name.endswith(METADATA_SUFFIXES):
+            continue
+        removed_bytes += path_logical_size(path)
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        else:
+            raise ValueError(f"unexpected Python runtime entry: {path}")
+        removed_count += 1
+    return removed_count, removed_bytes
+
+
 def verify_internal_bundle_links(app: Path) -> list[Path]:
     """Reject symbolic links that make the App depend on the build machine.
 
@@ -156,6 +284,27 @@ def verify_internal_bundle_links(app: Path) -> list[Path]:
     return resolved_targets
 
 
+def signing_options(identity: str) -> list[str]:
+    """Return hardened-runtime options for one signing identity.
+
+    Parameters
+    ----------
+    identity : str
+        Apple signing identity or ``-`` for an ad-hoc signature.
+
+    Returns
+    -------
+    list[str]
+        Common ``codesign`` options, including a secure timestamp for a
+        Developer ID identity.
+    """
+
+    options = ["--options", "runtime"]
+    if identity != "-":
+        options.append("--timestamp")
+    return options
+
+
 def sign_app(app: Path, identity: str) -> None:
     """Sign nested code, the Python sidecar, and the outer app in loadable order.
 
@@ -167,52 +316,105 @@ def sign_app(app: Path, identity: str) -> None:
         Apple signing identity or ``-`` for an ad-hoc signature.
     """
 
+    managed_runtime = app / "Contents" / "Resources" / "managed-runtime" / "ort"
+    if managed_runtime.is_dir():
+        library_signing = [
+            "codesign",
+            "--force",
+            "--sign",
+            identity,
+            *signing_options(identity),
+        ]
+        for library in sorted(managed_runtime.glob("*.dylib")):
+            run([*library_signing, str(library)])
+            run(["codesign", "--verify", "--strict", str(library)])
+
     common = [
         "codesign",
         "--force",
         "--sign",
         identity,
-        "--options",
-        "runtime",
+        *signing_options(identity),
         "--entitlements",
         str(ENTITLEMENTS),
     ]
     run([*common, "--deep", str(app)])
 
-    # --deep signs nested executables but does not propagate entitlements to
-    # them. The Codex code-mode host embeds V8 and requires executable-memory
-    # entitlements even in jitless mode; without them hardened-runtime builds
-    # crash while creating the first isolate. Sign both packaged runtime copies
-    # because Tauri may resolve either layout. The PyInstaller bootloader must
-    # also be allowed to load libpython, then the outer seal is refreshed.
-    codex_host_relative = (
-        Path("codex_cli_bin") / "bin" / "codex-code-mode-host"
-    )
-    codex_common = [
-        "codesign",
-        "--force",
-        "--sign",
-        identity,
-        "--options",
-        "runtime",
-        "--entitlements",
-        str(CODEX_HOST_ENTITLEMENTS),
-    ]
-    for runtime_root in (
-        app / "Contents" / "Frameworks",
-        app / "Contents" / "Resources" / "app-backend-runtime",
-    ):
-        codex_host = runtime_root / codex_host_relative
-        if not codex_host.is_file():
-            raise ValueError(
-                "app bundle is missing Codex code-mode host: "
-                f"{codex_host}"
-            )
-        run([*codex_common, str(codex_host)])
+    # The PyInstaller bootloader must be allowed to load libpython, then the
+    # outer seal is refreshed. Codex is supplied by the user and is not nested
+    # code owned or signed by this App bundle.
     backend = app / "Contents" / "MacOS" / "app-backend"
     run([*common, str(backend)])
     run([*common, str(app)])
     run(["codesign", "--verify", "--deep", "--strict", str(app)])
+
+
+def sign_dmg(output: Path, identity: str) -> None:
+    """Sign and verify one disk image.
+
+    Parameters
+    ----------
+    output : pathlib.Path
+        Created disk image.
+    identity : str
+        Developer ID identity or ``-`` for an ad-hoc local signature.
+    """
+
+    command = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        command.append("--timestamp")
+    command.append(str(output))
+    run(command)
+    run(["codesign", "--verify", "--strict", str(output)])
+
+
+def sign_and_notarize_dmg(
+    output: Path,
+    identity: str,
+    notary_profile: str,
+) -> None:
+    """Sign, notarize, staple, and assess a distributable disk image.
+
+    Parameters
+    ----------
+    output : pathlib.Path
+        Created disk image.
+    identity : str
+        Developer ID Application signing identity.
+    notary_profile : str
+        Keychain profile previously created for ``notarytool``.
+    """
+
+    if identity == "-":
+        raise ValueError("notarization requires a Developer ID identity")
+    if not notary_profile.strip():
+        raise ValueError("notarization requires a notarytool Keychain profile")
+    sign_dmg(output, identity)
+    run(
+        [
+            "xcrun",
+            "notarytool",
+            "submit",
+            str(output),
+            "--keychain-profile",
+            notary_profile,
+            "--wait",
+        ]
+    )
+    run(["xcrun", "stapler", "staple", str(output)])
+    run(["xcrun", "stapler", "validate", str(output)])
+    run(
+        [
+            "spctl",
+            "--assess",
+            "--type",
+            "open",
+            "--context",
+            "context:primary-signature",
+            "--verbose=2",
+            str(output),
+        ]
+    )
 
 
 def smoke_test_backend(app: Path) -> None:
@@ -347,14 +549,25 @@ def main() -> int:
     if output.suffix.lower() != ".dmg":
         raise ValueError("--output must use the .dmg extension")
 
+    removed_count, removed_bytes = prune_duplicate_resource_runtime(app)
     linked = link_python_metadata_to_resources(app)
     internal_links = verify_internal_bundle_links(app)
     sign_app(app, args.identity)
     smoke_test_backend(app)
     smoke_test_matcha_runtime(app)
     create_dmg(app, output)
+    if args.notarize:
+        sign_and_notarize_dmg(
+            output,
+            args.identity,
+            args.notary_profile or "",
+        )
+    else:
+        sign_dmg(output, args.identity)
     print(
-        f"linked {len(linked)} Python metadata directories and verified "
+        f"removed {removed_count} duplicate Python runtime entries "
+        f"({removed_bytes / (1024 * 1024):.1f} MiB), linked {len(linked)} "
+        "metadata directories, and verified "
         f"{len(internal_links)} internal links"
     )
     print(output)

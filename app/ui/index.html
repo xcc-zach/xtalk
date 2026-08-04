@@ -135,6 +135,38 @@
 
           <details class="settings-accordion">
             <summary>
+              <span data-i18n="credentials.title">服务凭据</span>
+            </summary>
+            <div class="settings-accordion-content settings-section">
+              <p data-i18n="credentials.description">
+                API Key 保存在系统凭据管理器中，不会写入 AppData 或工具目录。
+              </p>
+              <div
+                id="credentials-list"
+                class="credential-list"
+                aria-label="服务凭据"
+                data-i18n-aria-label="credentials.listLabel"
+              ></div>
+              <button
+                id="apply-credential-changes-button"
+                class="drawer-action-button drawer-action-button-primary"
+                type="button"
+                disabled
+                data-i18n="credentials.apply"
+              >
+                应用并重启本地服务
+              </button>
+              <p
+                id="credentials-status"
+                class="settings-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </div>
+          </details>
+
+          <details class="settings-accordion">
+            <summary>
               <span id="model-config-title" data-i18n="model.title">模型配置</span>
             </summary>
             <div class="settings-accordion-content settings-section">
@@ -266,55 +298,6 @@
         <div class="tools-dialog-content settings-section">
           <p data-i18n="tools.description">
             内置工具与用户工具使用相同的 xtalk_tool.json 协议。
-          </p>
-          <div
-            class="developer-tools-list"
-            aria-label="核心工具"
-            data-i18n-aria-label="webSearch.coreTools"
-          >
-            <section class="developer-tool-section">
-              <h3 data-i18n="webSearch.coreTools">核心工具</h3>
-              <article class="developer-tool-row">
-                <div class="developer-tool-copy">
-                  <strong data-i18n="webSearch.timeName">当前时间</strong>
-                  <code data-i18n="webSearch.timeDetail">get_time · 始终启用</code>
-                </div>
-              </article>
-              <article class="developer-tool-row">
-                <div class="developer-tool-copy">
-                  <strong data-i18n="webSearch.name">联网搜索</strong>
-                  <code data-i18n="webSearch.detail">web_search · 异步 Serper 搜索</code>
-                </div>
-                <div class="developer-tool-actions">
-                  <button
-                    id="web-search-configure-key-button"
-                    class="developer-tool-key-button"
-                    type="button"
-                    hidden
-                    data-i18n="webSearch.enterKey"
-                  >
-                    配置 Key
-                  </button>
-                  <label class="developer-tool-toggle">
-                    <input
-                      id="web-search-enabled-toggle"
-                      type="checkbox"
-                      aria-label="启用联网搜索工具"
-                      data-i18n-aria-label="webSearch.enableLabel"
-                    />
-                    <span data-i18n="tools.enabled">启用</span>
-                  </label>
-                </div>
-              </article>
-            </section>
-          </div>
-          <p
-            id="web-search-status"
-            class="settings-status"
-            role="status"
-            aria-live="polite"
-          >
-            正在读取联网搜索配置
           </p>
           <div
             id="developer-tools-list"
@@ -629,46 +612,46 @@
       </div>
 
       <dialog
-        id="web-search-api-key-dialog"
+        id="credential-dialog"
         class="settings-dialog"
-        aria-labelledby="web-search-api-key-dialog-title"
+        aria-labelledby="credential-dialog-title"
       >
-        <form id="web-search-api-key-form" class="settings-dialog-card">
+        <form id="credential-form" class="settings-dialog-card">
           <header>
-            <h2 id="web-search-api-key-dialog-title" data-i18n="webSearch.dialogTitle">
-              配置联网搜索 Key
+            <h2 id="credential-dialog-title" data-i18n="credentials.dialogTitle">
+              保存服务凭据
             </h2>
-            <p data-i18n="webSearch.dialogDescription">
-              Key 只在本次 App 运行期间保存在内存中，关闭 App 后失效，不会写入本地文件。
+            <p data-i18n="credentials.dialogDescription">
+              Key 将保存到操作系统凭据管理器，不会写入 AppData 或工具目录。
             </p>
           </header>
-          <label class="settings-dialog-field" for="web-search-api-key-dialog-input">
-            <span data-i18n="webSearch.keyLabel">Serper API Key</span>
+          <label class="settings-dialog-field" for="credential-dialog-input">
+            <span id="credential-dialog-label">API Key</span>
             <input
-              id="web-search-api-key-dialog-input"
+              id="credential-dialog-input"
               type="password"
-              autocomplete="off"
+              autocomplete="new-password"
               spellcheck="false"
-              placeholder="输入 Serper API Key"
-              data-i18n-placeholder="webSearch.keyPlaceholder"
+              placeholder="输入 API Key"
+              data-i18n-placeholder="credentials.keyPlaceholder"
               required
             />
           </label>
           <div class="settings-dialog-actions">
             <button
-              id="web-search-api-key-cancel-button"
+              id="credential-cancel-button"
               class="settings-dialog-button"
               type="button"
-              data-i18n="webSearch.cancel"
+              data-i18n="credentials.cancel"
             >
               取消
             </button>
             <button
               class="settings-dialog-button settings-dialog-button-primary"
               type="submit"
-              data-i18n="webSearch.useKey"
+              data-i18n="credentials.save"
             >
-              使用此 Key
+              保存
             </button>
           </div>
         </form>

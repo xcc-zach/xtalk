@@ -5,21 +5,23 @@ import {
   applyNativeToolChanges,
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
+  deleteNativeCredential,
   ensureNativeBackendStarted,
+  getNativeCredentials,
   getNativeManagedModelPlan,
   getNativeBackendConnection,
-  getNativeWebSearchSettings,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
   getNativeToolUiSource,
   installNativeToolDirectory,
   listenNativeManagedModelProgress,
   removeNativeInstalledTool,
+  saveNativeCredential,
   setNativeToolEnabled,
   type NativeManagedModelProgress,
+  type NativeCredentialDefinition,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
-  type NativeWebSearchSettings,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
@@ -88,25 +90,20 @@ const elements = {
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
   ),
-  webSearchEnabledToggle: requireElement<HTMLInputElement>(
-    "web-search-enabled-toggle",
+  credentialsList: requireElement<HTMLElement>("credentials-list"),
+  credentialsStatus: requireElement<HTMLElement>("credentials-status"),
+  credentialDialog: requireElement<HTMLDialogElement>("credential-dialog"),
+  credentialForm: requireElement<HTMLFormElement>("credential-form"),
+  credentialDialogLabel: requireElement<HTMLElement>("credential-dialog-label"),
+  credentialDialogInput: requireElement<HTMLInputElement>(
+    "credential-dialog-input",
   ),
-  webSearchConfigureKeyButton: requireElement<HTMLButtonElement>(
-    "web-search-configure-key-button",
+  credentialCancelButton: requireElement<HTMLButtonElement>(
+    "credential-cancel-button",
   ),
-  webSearchApiKeyDialog: requireElement<HTMLDialogElement>(
-    "web-search-api-key-dialog",
+  applyCredentialChangesButton: requireElement<HTMLButtonElement>(
+    "apply-credential-changes-button",
   ),
-  webSearchApiKeyForm: requireElement<HTMLFormElement>(
-    "web-search-api-key-form",
-  ),
-  webSearchApiKeyDialogInput: requireElement<HTMLInputElement>(
-    "web-search-api-key-dialog-input",
-  ),
-  webSearchApiKeyCancelButton: requireElement<HTMLButtonElement>(
-    "web-search-api-key-cancel-button",
-  ),
-  webSearchStatus: requireElement<HTMLElement>("web-search-status"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
   developerToolsStatus: requireElement<HTMLElement>(
     "developer-tools-status",
@@ -205,8 +202,9 @@ let sessionOperation = false;
 let sendingText = false;
 let modelConfigOperation = false;
 let toolOperation = false;
-let webSearchChangesPending = false;
+let credentialOperation = false;
 let developerToolChangesPending = false;
+let credentialChangesPending = false;
 let diagnosticsOpen = false;
 let toolsDialogOpen = false;
 let managedProgressState: "closed" | "running" | "failed" = "closed";
@@ -217,9 +215,8 @@ let sidebarOpen = false;
 let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
-let webSearchSettings: NativeWebSearchSettings | null = null;
-let pendingWebSearchApiKey: string | null = null;
-let enableWebSearchAfterKeyDialog = false;
+let credentials: NativeCredentialDefinition[] = [];
+let selectedCredentialId: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
 let activeToolUISessionId: string | null = null;
 let toolUIOrder = 0;
@@ -375,9 +372,7 @@ function applyUiLanguage(): void {
   updateNetworkStatus();
   renderModelConfigSelection({ configPath: modelConfigPath });
   renderInstalledTools(installedTools);
-  if (webSearchSettings !== null) {
-    renderWebSearchSettings(webSearchSettings);
-  }
+  renderCredentials(credentials);
   updateDeveloperToolsStatus();
   renderSnapshot(latestSnapshot);
   renderManagedProgress();
@@ -1737,18 +1732,31 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.checked = tool.enabled;
+    toggle.disabled = !tool.canDisable;
+    toggle.dataset.required = String(!tool.canDisable);
     toggle.setAttribute(
       "aria-label",
-      t(tool.enabled ? "tools.disableName" : "tools.enableName", {
-        name: resolveToolDisplayName(tool.displayName),
-      }),
+      t(
+        !tool.canDisable
+          ? "tools.requiredName"
+          : tool.enabled
+            ? "tools.disableName"
+            : "tools.enableName",
+        {
+          name: resolveToolDisplayName(tool.displayName),
+        },
+      ),
     );
-    toggle.addEventListener("change", () => {
-      void updateInstalledToolEnabled(tool.id, toggle.checked);
-    });
+    if (tool.canDisable) {
+      toggle.addEventListener("change", () => {
+        void updateInstalledToolEnabled(tool.id, toggle.checked);
+      });
+    }
 
     const toggleText = document.createElement("span");
-    toggleText.textContent = t("tools.enabled");
+    toggleText.textContent = t(
+      tool.canDisable ? "tools.enabled" : "tools.required",
+    );
     toggleLabel.append(toggle, toggleText);
 
     actions.append(toggleLabel);
@@ -1795,19 +1803,67 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
   updateToolControls();
 }
 
-function renderWebSearchSettings(settings: NativeWebSearchSettings): void {
-  webSearchSettings = settings;
-  elements.webSearchEnabledToggle.checked = settings.enabled;
-  const canConfigureKey =
-    settings.keySource === "session" ||
-    pendingWebSearchApiKey !== null ||
-    (settings.keySource === "missing" && settings.enabled);
-  elements.webSearchConfigureKeyButton.hidden = !canConfigureKey;
-  elements.webSearchConfigureKeyButton.textContent =
-    settings.keySource === "session" || pendingWebSearchApiKey !== null
-      ? t("webSearch.modifyKey")
-      : t("webSearch.enterKey");
-  updateWebSearchStatus();
+function renderCredentials(items: NativeCredentialDefinition[]): void {
+  credentials = items;
+  const rows = items.map((credential) => {
+    const row = document.createElement("article");
+    row.className = "credential-row";
+
+    const copy = document.createElement("div");
+    copy.className = "credential-copy";
+    const name = document.createElement("strong");
+    name.textContent = resolveToolDisplayName(credential.displayName);
+    const status = document.createElement("span");
+    status.textContent = t(
+      credential.source === "environment"
+        ? "credentials.environment"
+        : credential.source === "system"
+          ? "credentials.system"
+          : credential.storageAvailable
+            ? "credentials.missing"
+            : "credentials.unavailable",
+    );
+    copy.append(name, status);
+
+    const actions = document.createElement("div");
+    actions.className = "credential-actions";
+    if (credential.source !== "environment" && credential.storageAvailable) {
+      const configure = document.createElement("button");
+      configure.type = "button";
+      configure.className = "credential-action";
+      configure.textContent = t(
+        credential.source === "system"
+          ? "credentials.replace"
+          : "credentials.configure",
+      );
+      configure.addEventListener("click", () => {
+        openCredentialDialog(credential.id);
+      });
+      actions.append(configure);
+    }
+    if (credential.source === "system" && credential.storageAvailable) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "credential-action credential-action-danger";
+      remove.textContent = t("credentials.delete");
+      remove.addEventListener("click", () => {
+        void removeCredential(credential.id);
+      });
+      actions.append(remove);
+    }
+
+    row.append(copy, actions);
+    return row;
+  });
+  if (rows.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "credential-empty";
+    empty.textContent = t("credentials.none");
+    elements.credentialsList.replaceChildren(empty);
+  } else {
+    elements.credentialsList.replaceChildren(...rows);
+  }
+  updateCredentialStatus();
   updateToolControls();
 }
 
@@ -1817,67 +1873,41 @@ function updateToolControls(): void {
     modelConfigOperation ||
     discoveringBackend ||
     sessionOperation ||
-    sendingText;
+    sendingText ||
+    credentialOperation;
+  const hasPendingChanges =
+    developerToolChangesPending || credentialChangesPending;
   elements.installToolDirectoryButton.disabled = busy;
   elements.applyToolChangesButton.disabled =
-    busy ||
-    (!webSearchChangesPending && !developerToolChangesPending) ||
-    modelConfigPath === null;
-  elements.webSearchEnabledToggle.disabled =
-    busy ||
-    webSearchSettings === null;
-  elements.webSearchConfigureKeyButton.disabled =
-    busy || webSearchSettings === null;
+    busy || !hasPendingChanges || modelConfigPath === null;
+  elements.applyCredentialChangesButton.disabled =
+    busy || !hasPendingChanges || modelConfigPath === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
   >("input, button")) {
+    control.disabled =
+      busy ||
+      (control instanceof HTMLInputElement && control.dataset.required === "true");
+  }
+  for (const control of elements.credentialsList.querySelectorAll<
+    HTMLButtonElement
+  >("button")) {
     control.disabled = busy;
   }
 }
 
-function updateWebSearchStatus(message?: string): void {
+function updateCredentialStatus(message?: string): void {
   if (message) {
-    elements.webSearchStatus.textContent = message;
+    elements.credentialsStatus.textContent = message;
     return;
   }
-  if (webSearchSettings === null) {
-    elements.webSearchStatus.textContent = t("webSearch.loading");
+  if (credentialChangesPending) {
+    elements.credentialsStatus.textContent = t("credentials.pending");
     return;
   }
-  if (webSearchChangesPending) {
-    if (
-      webSearchSettings.enabled &&
-      webSearchSettings.keySource === "missing" &&
-      pendingWebSearchApiKey === null
-    ) {
-      elements.webSearchStatus.textContent =
-        t("webSearch.keyRequired");
-      return;
-    }
-    if (pendingWebSearchApiKey !== null) {
-      elements.webSearchStatus.textContent = webSearchSettings.enabled
-        ? t("webSearch.keyPendingEnabled")
-        : t("webSearch.keyPendingDisabled");
-      return;
-    }
-    elements.webSearchStatus.textContent = t("webSearch.pending");
-    return;
-  }
-  if (webSearchSettings.keySource === "missing") {
-    elements.webSearchStatus.textContent =
-      webSearchSettings.enabled
-        ? t("webSearch.keyRequired")
-        : t("webSearch.missingDisabled");
-    return;
-  }
-  elements.webSearchStatus.textContent =
-    webSearchSettings.enabled
-      ? webSearchSettings.keySource === "environment"
-        ? t("webSearch.enabledEnvironment")
-        : t("webSearch.enabledSession")
-      : webSearchSettings.keySource === "environment"
-        ? t("webSearch.disabledEnvironment")
-        : t("webSearch.disabledSession");
+  elements.credentialsStatus.textContent = credentials.length
+    ? t("credentials.count", { count: credentials.length })
+    : t("credentials.none");
 }
 
 function updateDeveloperToolsStatus(message?: string): void {
@@ -1908,10 +1938,10 @@ async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
   return tools;
 }
 
-async function refreshWebSearchSettings(): Promise<NativeWebSearchSettings> {
-  const settings = await getNativeWebSearchSettings();
-  renderWebSearchSettings(settings);
-  return settings;
+async function refreshCredentials(): Promise<NativeCredentialDefinition[]> {
+  const items = await getNativeCredentials();
+  renderCredentials(items);
+  return items;
 }
 
 async function detachCurrentAdapter(): Promise<void> {
@@ -1993,16 +2023,11 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     elements.modelConfigStatus.textContent = t("model.restarting");
     setBackendStatus("loading", "service.applyingConfig");
     await detachCurrentAdapter();
-    await applyNativeModelConfig(
-      selectedPath,
-      webSearchSettings?.enabled ?? false,
-      pendingWebSearchApiKey,
-    );
-    pendingWebSearchApiKey = null;
-    webSearchChangesPending = false;
+    await applyNativeModelConfig(selectedPath);
     developerToolChangesPending = false;
+    credentialChangesPending = false;
     const selection = await refreshModelConfigSelection();
-    await refreshWebSearchSettings();
+    await refreshCredentials();
     updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
       ? t("model.appliedRestarted")
@@ -2185,65 +2210,91 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   }
 }
 
-function updateWebSearchEnabled(enabled: boolean): void {
-  if (webSearchSettings === null) {
-    return;
-  }
+function openCredentialDialog(credentialId: string): void {
+  const credential = credentials.find((item) => item.id === credentialId);
   if (
-    enabled &&
-    webSearchSettings.keySource === "missing" &&
-    pendingWebSearchApiKey === null
+    credential === undefined ||
+    credential.source === "environment" ||
+    !credential.storageAvailable
   ) {
-    openWebSearchApiKeyDialog(true);
     return;
   }
-  webSearchChangesPending = true;
-  renderWebSearchSettings({ ...webSearchSettings, enabled });
+  selectedCredentialId = credentialId;
+  elements.credentialDialogLabel.textContent = t("credentials.keyFor", {
+    name: resolveToolDisplayName(credential.displayName),
+  });
+  elements.credentialDialogInput.value = "";
+  elements.credentialDialogInput.setCustomValidity("");
+  elements.credentialDialog.showModal();
+  elements.credentialDialogInput.focus();
 }
 
-function openWebSearchApiKeyDialog(enableAfterSave: boolean): void {
-  enableWebSearchAfterKeyDialog = enableAfterSave;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialogInput.setCustomValidity("");
-  elements.webSearchApiKeyDialog.showModal();
-  elements.webSearchApiKeyDialogInput.focus();
+function cancelCredentialDialog(): void {
+  selectedCredentialId = null;
+  elements.credentialDialogInput.value = "";
+  elements.credentialDialog.close();
 }
 
-function cancelWebSearchApiKeyDialog(): void {
-  enableWebSearchAfterKeyDialog = false;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialog.close();
-  elements.webSearchEnabledToggle.checked =
-    webSearchSettings?.enabled ?? false;
-}
-
-function saveWebSearchApiKey(): void {
-  const apiKey = elements.webSearchApiKeyDialogInput.value.trim();
-  if (!apiKey) {
-    elements.webSearchApiKeyDialogInput.setCustomValidity(
-      t("webSearch.keyValidation"),
+async function saveCredential(): Promise<void> {
+  const credentialId = selectedCredentialId;
+  const value = elements.credentialDialogInput.value.trim();
+  if (credentialId === null) {
+    cancelCredentialDialog();
+    return;
+  }
+  if (!value) {
+    elements.credentialDialogInput.setCustomValidity(
+      t("credentials.keyValidation"),
     );
-    elements.webSearchApiKeyDialogInput.reportValidity();
+    elements.credentialDialogInput.reportValidity();
     return;
   }
 
-  pendingWebSearchApiKey = apiKey;
-  webSearchChangesPending = true;
-  const enabled = enableWebSearchAfterKeyDialog
-    ? true
-    : (webSearchSettings?.enabled ?? false);
-  enableWebSearchAfterKeyDialog = false;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialog.close();
-  if (webSearchSettings !== null) {
-    renderWebSearchSettings({ ...webSearchSettings, enabled });
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("credentials.saving"));
+  updateToolControls();
+  try {
+    await saveNativeCredential(credentialId, value);
+    credentialChangesPending = true;
+    cancelCredentialDialog();
+    await refreshCredentials();
+    updateCredentialStatus(t("credentials.saved"));
+  } catch (error) {
+    updateCredentialStatus(t("credentials.saveFailed"));
+    showError("credentials.saveFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
+  }
+}
+
+async function removeCredential(credentialId: string): Promise<void> {
+  if (credentialOperation) {
+    return;
+  }
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("credentials.deleting"));
+  updateToolControls();
+  try {
+    await deleteNativeCredential(credentialId);
+    credentialChangesPending = true;
+    await Promise.all([refreshCredentials(), refreshInstalledTools()]);
+    updateCredentialStatus(t("credentials.deleted"));
+  } catch (error) {
+    updateCredentialStatus(t("credentials.deleteFailed"));
+    showError("credentials.deleteFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
   }
 }
 
 async function applyToolChanges(): Promise<void> {
   if (
     toolOperation ||
-    (!webSearchChangesPending && !developerToolChangesPending)
+    (!developerToolChangesPending && !credentialChangesPending)
   ) {
     return;
   }
@@ -2254,25 +2305,21 @@ async function applyToolChanges(): Promise<void> {
 
   toolOperation = true;
   showError(null);
-  updateWebSearchStatus(t("tools.restarting"));
+  updateCredentialStatus(t("tools.restarting"));
   updateDeveloperToolsStatus(t("tools.restarting"));
   setBackendStatus("loading", "tools.applying");
   updateControls(latestSnapshot);
 
   try {
     await detachCurrentAdapter();
-    await applyNativeToolChanges(
-      webSearchSettings?.enabled ?? false,
-      pendingWebSearchApiKey,
-    );
-    pendingWebSearchApiKey = null;
-    webSearchChangesPending = false;
+    await applyNativeToolChanges();
     developerToolChangesPending = false;
-    await refreshWebSearchSettings();
+    credentialChangesPending = false;
+    await refreshCredentials();
     updateDeveloperToolsStatus(t("tools.applied"));
     await discoverBackend();
   } catch (error) {
-    updateWebSearchStatus(t("tools.applyFailed"));
+    updateCredentialStatus(t("tools.applyFailed"));
     updateDeveloperToolsStatus(t("tools.applyFailed"));
     await discoverBackend();
     showError("tools.applyFailedDetail", { error });
@@ -2285,7 +2332,7 @@ async function applyToolChanges(): Promise<void> {
 
 async function initializeApplication(): Promise<void> {
   try {
-    await refreshWebSearchSettings();
+    await refreshCredentials();
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
@@ -2464,27 +2511,24 @@ elements.selectModelConfigButton.addEventListener("click", () => {
 elements.installToolDirectoryButton.addEventListener("click", () => {
   void chooseAndInstallToolDirectory();
 });
-elements.webSearchEnabledToggle.addEventListener("change", () => {
-  updateWebSearchEnabled(elements.webSearchEnabledToggle.checked);
-});
-elements.webSearchConfigureKeyButton.addEventListener("click", () => {
-  openWebSearchApiKeyDialog(false);
-});
-elements.webSearchApiKeyForm.addEventListener("submit", (event) => {
+elements.credentialForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  saveWebSearchApiKey();
+  void saveCredential();
 });
-elements.webSearchApiKeyDialogInput.addEventListener("input", () => {
-  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+elements.credentialDialogInput.addEventListener("input", () => {
+  elements.credentialDialogInput.setCustomValidity("");
 });
-elements.webSearchApiKeyCancelButton.addEventListener("click", () => {
-  cancelWebSearchApiKeyDialog();
+elements.credentialCancelButton.addEventListener("click", () => {
+  cancelCredentialDialog();
 });
-elements.webSearchApiKeyDialog.addEventListener("cancel", (event) => {
+elements.credentialDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
-  cancelWebSearchApiKeyDialog();
+  cancelCredentialDialog();
 });
 elements.applyToolChangesButton.addEventListener("click", () => {
+  void applyToolChanges();
+});
+elements.applyCredentialChangesButton.addEventListener("click", () => {
   void applyToolChanges();
 });
 elements.textComposer.addEventListener("submit", (event) => {
@@ -2547,7 +2591,7 @@ window.addEventListener("keydown", (event) => {
     event.stopImmediatePropagation();
     return;
   }
-  if (elements.webSearchApiKeyDialog.open) {
+  if (elements.credentialDialog.open) {
     return;
   }
   if (event.key === "Escape" && managedProgressState === "failed") {

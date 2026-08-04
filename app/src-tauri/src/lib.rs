@@ -2,6 +2,7 @@
 
 #![warn(missing_docs)]
 
+mod credentials;
 mod managed;
 mod sidecar;
 mod tools;
@@ -10,7 +11,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use sidecar::{
     inspect_managed_model_config, BackendSupervisor, NativeBackendConnection,
-    NativeModelConfigSelection, NativeWebSearchSettings,
+    NativeModelConfigSelection,
 };
 use tauri::{Manager, State, WindowEvent};
 use tools::NativeToolDefinition;
@@ -25,14 +26,16 @@ pub fn run() {
             apply_model_config,
             ensure_backend_started,
             get_backend_connection,
-            get_web_search_settings,
+            get_credentials,
             get_installed_tools,
             get_managed_model_plan,
             get_model_config_selection,
             get_tool_ui_source,
             install_tool_directory,
             remove_installed_tool,
+            save_credential,
             set_tool_enabled,
+            delete_credential,
             shutdown_backend
         ])
         .setup(|app| {
@@ -80,12 +83,31 @@ async fn get_model_config_selection(
 }
 
 #[tauri::command]
-async fn get_web_search_settings(
+async fn get_credentials(
     app: tauri::AppHandle,
-    supervisor: State<'_, Arc<BackendSupervisor>>,
-) -> Result<NativeWebSearchSettings, String> {
-    supervisor
-        .web_search_settings(&app)
+) -> Result<Vec<credentials::NativeCredentialDefinition>, String> {
+    credentials::list_credentials(&app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn save_credential(
+    app: tauri::AppHandle,
+    credential_id: String,
+    value: String,
+) -> Result<credentials::NativeCredentialDefinition, String> {
+    credentials::save_credential(&app, credential_id, value)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn delete_credential(
+    app: tauri::AppHandle,
+    credential_id: String,
+) -> Result<credentials::NativeCredentialDefinition, String> {
+    credentials::delete_credential(&app, credential_id)
         .await
         .map_err(|error| error.to_string())
 }
@@ -95,13 +117,7 @@ async fn apply_model_config(
     app: tauri::AppHandle,
     supervisor: State<'_, Arc<BackendSupervisor>>,
     config_path: PathBuf,
-    web_search_enabled: bool,
-    web_search_api_key: Option<String>,
 ) -> Result<NativeBackendConnection, String> {
-    supervisor
-        .configure_web_search(&app, web_search_enabled, web_search_api_key)
-        .await
-        .map_err(|error| error.to_string())?;
     supervisor
         .apply_model_config(&app, config_path)
         .await
@@ -130,11 +146,16 @@ fn install_tool_directory(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn set_tool_enabled(
+async fn set_tool_enabled(
     app: tauri::AppHandle,
     tool_id: String,
     enabled: bool,
 ) -> Result<NativeToolDefinition, String> {
+    if enabled {
+        credentials::ensure_tool_can_enable(&app, &tool_id)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     tools::set_tool_enabled(&app, &tool_id, enabled)
 }
 
@@ -147,13 +168,7 @@ fn remove_installed_tool(app: tauri::AppHandle, tool_id: String) -> Result<(), S
 async fn apply_tool_changes(
     app: tauri::AppHandle,
     supervisor: State<'_, Arc<BackendSupervisor>>,
-    web_search_enabled: bool,
-    web_search_api_key: Option<String>,
 ) -> Result<NativeBackendConnection, String> {
-    supervisor
-        .configure_web_search(&app, web_search_enabled, web_search_api_key)
-        .await
-        .map_err(|error| error.to_string())?;
     supervisor
         .restart(&app)
         .await

@@ -60,7 +60,6 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
             "tauri://localhost",
             "http://localhost:1420",
         ],
-        "web_search_enabled": True,
         "config_overlay": {"arbitrary_section": {"enabled": True}},
         "anonymous_user_id": " desktop-user ",
     }
@@ -74,7 +73,6 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
         "tauri://localhost",
         "http://localhost:1420",
     )
-    assert startup.web_search_enabled
     assert startup.config_overlay == payload["config_overlay"]
     assert startup.builtin_tools_root == (
         tmp_path / "resources" / "tools"
@@ -82,20 +80,6 @@ def test_read_startup_config_consumes_one_json_line(tmp_path: Path) -> None:
     assert startup.anonymous_user_id == "desktop-user"
     assert startup.config_fallbacks == {}
     assert stream.readline() == "ignored second line\n"
-
-
-def test_startup_config_rejects_invalid_web_search_state(tmp_path: Path) -> None:
-    """Accept only a boolean web-search state from the native parent."""
-
-    payload = {
-        "token": TOKEN,
-        "config_path": str(tmp_path / "base.json"),
-        "data_dir": str(tmp_path / "data"),
-        "web_search_enabled": "true",
-    }
-
-    with pytest.raises(ValueError, match="web_search_enabled"):
-        StartupConfig.from_mapping(payload)
 
 
 @pytest.mark.parametrize(
@@ -350,7 +334,7 @@ def test_build_effective_config_loads_repository_sample(tmp_path: Path) -> None:
     """Use the repository's requested model configuration as the base fixture."""
 
     app_root = Path(__file__).resolve().parents[2]
-    sample_path = app_root / "examples" / "local_models.json"
+    sample_path = app_root / "examples" / "local_models_moss_tts.json"
     startup = StartupConfig.from_mapping(
         {
             "protocol_version": 1,

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -50,6 +52,13 @@ SESSION_RESOLVER_SCHEMA = {
     "additionalProperties": False,
 }
 
+CODEX_INSTALL_MESSAGE = (
+    "Codex CLI is not installed or could not be started. Install it with "
+    "`npm install -g @openai/codex`, then fully restart XTalk."
+)
+_CODEX_CACHE_LOCK = threading.RLock()
+_CODEX_CACHE: tuple[Path, dict[str, str], str] | None = None
+
 
 def _utc_now() -> str:
     """Return one sortable UTC timestamp."""
@@ -81,6 +90,147 @@ def _resolve_working_directory(value: str) -> Path:
     if not directory.is_dir():
         raise ValueError(f"Working directory is not a directory: {directory}")
     return directory
+
+
+def _absolute_path_without_resolving_links(path: Path) -> Path:
+    """Expand a path while preserving an npm-managed executable symlink."""
+
+    return Path(os.path.abspath(path.expanduser()))
+
+
+def _candidate_codex_paths() -> Iterator[Path]:
+    """Yield user-installed Codex executables in priority order."""
+
+    candidates: list[Path] = []
+    discovered = shutil.which("codex")
+    if discovered:
+        candidates.append(Path(discovered))
+
+    home = Path.home()
+    candidates.extend(
+        (
+            home / ".volta" / "bin" / "codex",
+            home / ".local" / "bin" / "codex",
+            home / ".npm-global" / "bin" / "codex",
+            home / ".bun" / "bin" / "codex",
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+            Path("/usr/bin/codex"),
+            Path("/snap/bin/codex"),
+        )
+    )
+    candidates.extend(
+        sorted(
+            (home / ".nvm" / "versions" / "node").glob("*/bin/codex"),
+            reverse=True,
+        )
+    )
+    for fnm_root in (
+        home / ".local" / "share" / "fnm" / "node-versions",
+        home / "Library" / "Application Support" / "fnm" / "node-versions",
+    ):
+        candidates.extend(
+            sorted(
+                fnm_root.glob("*/installation/bin/codex"),
+                reverse=True,
+            )
+        )
+    app_data = os.environ.get("APPDATA", "").strip()
+    if app_data:
+        candidates.extend(
+            (
+                Path(app_data) / "npm" / "codex.exe",
+                Path(app_data) / "npm" / "codex.cmd",
+            )
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        absolute = _absolute_path_without_resolving_links(candidate)
+        key = os.path.normcase(str(absolute))
+        if key in seen:
+            continue
+        seen.add(key)
+        yield absolute
+
+
+def _codex_environment(executable: Path) -> dict[str, str]:
+    """Create a child environment that can run npm's Node.js shim."""
+
+    environment = os.environ.copy()
+    path_key = "PATH"
+    if os.name == "nt":
+        path_key = next(
+            (key for key in environment if key.upper() == "PATH"),
+            "Path",
+        )
+    existing = environment.get(path_key, "")
+    entries = [entry for entry in existing.split(os.pathsep) if entry]
+    executable_directory = str(executable.parent)
+    remaining_entries = [
+        entry for entry in entries if entry != executable_directory
+    ]
+    environment[path_key] = os.pathsep.join(
+        [executable_directory, *remaining_entries]
+    )
+    return environment
+
+
+def _resolve_user_codex() -> tuple[Path, dict[str, str], str]:
+    """Find, validate, and cache a user-installed Codex CLI executable.
+
+    Returns
+    -------
+    tuple[pathlib.Path, dict[str, str], str]
+        Executable, complete child environment, and reported CLI version.
+
+    Raises
+    ------
+    RuntimeError
+        If no candidate can execute ``codex --version`` successfully.
+    """
+
+    global _CODEX_CACHE
+
+    with _CODEX_CACHE_LOCK:
+        if _CODEX_CACHE is not None:
+            cached_path, cached_environment, cached_version = _CODEX_CACHE
+            if cached_path.is_file() and (
+                os.name == "nt" or os.access(cached_path, os.X_OK)
+            ):
+                return cached_path, cached_environment.copy(), cached_version
+            _CODEX_CACHE = None
+
+        failures: list[str] = []
+        for candidate in _candidate_codex_paths():
+            if not candidate.is_file():
+                continue
+            if os.name != "nt" and not os.access(candidate, os.X_OK):
+                failures.append(f"not executable: {candidate}")
+                continue
+            environment = _codex_environment(candidate)
+            try:
+                result = subprocess.run(
+                    [str(candidate), "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    env=environment,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                failures.append(f"{candidate}: {exc}")
+                continue
+            version = (result.stdout or result.stderr).strip().splitlines()
+            if result.returncode == 0 and version:
+                _CODEX_CACHE = (candidate, environment.copy(), version[0])
+                return candidate, environment, version[0]
+            failures.append(
+                f"{candidate}: version check exited with {result.returncode}"
+            )
+
+        detail = f" Checked: {'; '.join(failures)}" if failures else ""
+        raise RuntimeError(CODEX_INSTALL_MESSAGE + detail)
 
 
 @dataclass(frozen=True)
@@ -329,21 +479,32 @@ class OpenAICodexAdapter:
         """Start one SDK client and reuse existing Codex authentication."""
 
         try:
-            from openai_codex import ApprovalMode, AsyncCodex, Sandbox
+            from openai_codex import (
+                ApprovalMode,
+                AsyncCodex,
+                CodexConfig,
+                Sandbox,
+            )
             from openai_codex.types import ReasoningEffort
         except ImportError as exc:
             raise RuntimeError(
-                "The bundled Codex SDK is unavailable. Rebuild the App backend."
+                "The Codex SDK is unavailable. Rebuild the App backend."
             ) from exc
+        codex_bin, codex_environment, _version = _resolve_user_codex()
         self._approval_mode = ApprovalMode.deny_all
         self._sandbox = Sandbox.full_access
         self._reasoning_effort = ReasoningEffort
-        self._client = AsyncCodex()
+        self._client = AsyncCodex(
+            CodexConfig(
+                codex_bin=str(codex_bin),
+                env=codex_environment,
+            )
+        )
         await self._client.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
-        """Close the SDK client and its pinned local runtime."""
+        """Close the SDK client and its user-installed local runtime."""
 
         await self._client.__aexit__(exc_type, exc, traceback)
 

@@ -11,16 +11,17 @@ asynchronous timer used by the sample-app acceptance flow, and the first Phase
 
 - Node.js 20 or newer
 - Rust with the Tauri 2 platform prerequisites
-- Python 3.10–3.13 for the sidecar build
-- A prebuilt `xtalk` wheel
-- Either the pinned npm `xtalk-client` package or a verified package artifact
+- Python 3.12 for the locked sidecar build
+- Python's `build` package for creating the repository XTalk wheel
+- The root `frontend/` development dependencies declared by its lockfile
 
 The installed application does not require Python, Node.js, or Rust. They are
 build-time dependencies only.
 
-The locked npm dependency resolves the client from
-`resources/artifacts/xtalk-client-0.2.8.tgz`. Prepare that ignored artifact from
-a client build that exposes `Session.sendText()` before running `npm ci`.
+The App dependency points at the repository `frontend/` package. Release builds
+do not consume its existing `dist/`: the Tauri pre-build hook runs a clean
+frontend install and build, creates a fresh npm package, and replaces the App's
+installed client before Vite runs.
 
 ## Local checks
 
@@ -78,6 +79,10 @@ weights or local core model implementations to this directory.
 
 ## Artifact preparation
 
+Normal Tauri release builds prepare these artifacts automatically from the
+repository's current `src/` and `frontend/` trees. The commands below remain
+available for CI jobs that intentionally supply immutable prebuilt inputs.
+
 ```bash
 python scripts/prepare_artifacts.py \
   --xtalk-wheel /path/to/xtalk-VERSION.whl \
@@ -104,22 +109,18 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-For a build that supports managed SenseVoice, Matcha, and MOSS services, also
-stage their target-specific native runtimes. The sherpa libraries and the
-single ONNX Runtime 1.27 library must come from compatible target builds:
+For a build that supports managed SenseVoice, Matcha, and MOSS services,
+download and stage the locked native runtime for the current platform:
 
 ```bash
-python scripts/prepare_managed_runtime.py \
-  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
-  --sherpa-library-dir /path/to/sherpa/lib \
-  --ort-library /path/to/sherpa/lib/libonnxruntime.1.27.0.dylib
+python scripts/download_managed_runtime.py
 ```
 
-On Apple Silicon this also builds and stages the pinned Swift/MLX sidecar and
-its Metal shader bundle; install the build-host component with
-`xcodebuild -downloadComponent MetalToolchain`. CUDA builds additionally pass
-`--cuda-runtime-dir`, pointing to the matching ONNX Runtime 1.27 GPU library
-directory.
+The script selects the Rust host triple, downloads the corresponding official
+sherpa-onnx shared archive, verifies its locked SHA-256, and uses the Sherpa
+server and ONNX Runtime 1.27 from that same archive. It then builds and stages
+the App's native sidecars. The supported macOS, Linux, and Windows x64/ARM64
+archives are pinned in `resources/manifests/native-runtimes.lock.json`.
 
 Optional weights are not bundled. Their immutable revisions, paths, sizes, and
 SHA-256 values are pinned in
@@ -127,79 +128,80 @@ SHA-256 values are pinned in
 when a selected configuration references the service.
 
 The freezer collects the installed public `xtalk.models` namespace and package
-data so model discovery continues to be configuration-driven. It also collects
-the official `openai-codex` package and its pinned `openai-codex-cli-bin`
-runtime for the optional Codex built-in. Optional dependency groups are build
-inputs, not model-type branches in application
-code. `silero-vad` is mandatory because every desktop launch provides it as a
-top-level fallback when the selected configuration has no explicit `vad`.
+data so model discovery continues to be configuration-driven. All Python
+sidecar dependencies are constrained by `requirements/sidecar.lock`, except
+`openai-codex` and its matching `openai-codex-cli-bin`; those two intentionally
+resolve to the current compatible pair in the isolated build environment. The
+freezer excludes `openai-codex-cli-bin` from the App bundle: the optional Codex
+tool uses a user-installed CLI instead. Optional dependency groups are build
+inputs, not model-type branches in application code. `silero-vad` is mandatory
+because every desktop launch provides it as a top-level fallback when the
+selected configuration has no explicit `vad`.
 
 ## Building the desktop app
 
-The following sequence produces a self-contained desktop bundle. Run the
-commands from `app/` unless a command explicitly changes directory. Build
-inputs must match the target architecture; for example, an Apple Silicon build
-needs arm64 executables and libraries.
+Every package build expects a complete repository checkout in which `app/`,
+`src/`, and `frontend/` are siblings. `scripts/build_from_source.py` builds a
+wheel from root `src/`, runs `npm ci`, build, and pack in root `frontend/`,
+updates the artifact lock, installs that fresh client for Vite, and freezes the
+Python 3.12 sidecar from `requirements/sidecar.lock`.
 
-First build a fresh XTalk wheel from the repository root. Do not reuse an older
-wheel: `build_backend.py` rejects wheels that do not contain the managed
-SenseVoice, Matcha, and MOSS client modules.
+From a clean checkout, install build tools first, then install the App's locked
+Node dependencies:
 
 ```bash
-cd ..
-python3 -m build --wheel --outdir /tmp/xtalk-dist
+python3.12 -m pip install build==1.5.0 certifi==2026.7.22
+npm install --global npm@11.12.1
 cd app
+npm ci
 ```
 
-If `python3 -m build` is unavailable, install the Python `build` package in the
-build environment. Prepare the immutable core artifacts once per wheel or
-client-package update. Replace the paths and version strings with the exact
-files being packaged:
-
-```bash
-python scripts/prepare_artifacts.py \
-  --xtalk-wheel /tmp/xtalk-dist/xtalk-VERSION-py3-none-any.whl \
-  --xtalk-version VERSION \
-  --client-package /path/to/xtalk-client-VERSION.tgz \
-  --client-version VERSION
-```
-
-Freeze the Python application backend with every provider dependency required
-by the configurations that the release must support. The current sample and
-managed-local-model configurations require `ali` and the mandatory
-`silero-vad` extra:
-
-```bash
-python scripts/build_backend.py \
-  --python /path/to/python3.12 \
-  --xtalk-wheel /tmp/xtalk-dist/xtalk-VERSION-py3-none-any.whl \
-  --xtalk-extra ali \
-  --xtalk-extra silero-vad
-```
-
-Stage the managed-model runtimes. The sherpa server, shared sherpa libraries,
-and ONNX Runtime 1.27 library must all target the same platform as the App. The
-script builds both Rust TTS sidecars and stages one shared ORT copy for
-SenseVoice, Matcha, and MOSS. On Apple Silicon it also builds the Swift/MLX
-runtime and copies its Metal resources:
-
-```bash
-python scripts/prepare_managed_runtime.py \
-  --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
-  --sherpa-library-dir /path/to/sherpa/lib \
-  --ort-library /path/to/sherpa/lib/libonnxruntime.1.27.0.dylib
-```
-
-Before the first Apple Silicon build, install the Xcode Metal toolchain
-component:
+Apple Silicon additionally needs Xcode's Metal compiler before the first
+package build:
 
 ```bash
 xcodebuild -downloadComponent MetalToolchain
 ```
 
-CUDA release artifacts additionally pass
-`--cuda-runtime-dir /path/to/onnxruntime-gpu-1.27/lib`. That directory must
-contain the matching CUDA and shared ONNX Runtime provider libraries.
+Now create a local verification installer:
+
+```bash
+npm run package:macos:local
+```
+
+The packaging entrypoint first downloads and verifies the locked Sherpa/ORT
+archive for the build host and stages all managed runtimes. It then invokes
+Tauri, whose pre-build hook rebuilds the root Python and frontend sources. No
+native runtime path environment variable or manual staging command is needed.
+
+For a distributable Developer ID build, configure external Apple credentials
+and run the formal entrypoint:
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
+APPLE_NOTARY_KEYCHAIN_PROFILE="xtalk-release" \
+npm run package:macos
+```
+
+`package:macos` is the only supported distributable macOS packaging entrypoint.
+It runs Tauri, whose `beforeBuildCommand` invokes the complete source-input
+build, signs the App and DMG with a Developer ID identity, smoke-tests the
+frozen services, submits the installer to Apple's Notary Service, staples the
+ticket, and performs final Gatekeeper assessment. It fails before building if
+either external credential is absent, and removes incomplete outputs after any
+later failure.
+
+Create the notary profile once with `xcrun notarytool store-credentials`; the
+profile remains in Keychain and no signing secret enters this repository. The
+local command still regenerates all source inputs, seals every nested resource,
+smoke-tests the frozen services, creates a signed DMG, and verifies both
+outputs. It uses an ad-hoc signature and is therefore not a public release.
+Direct `tauri build --bundles app` output is only an intermediate Bundle and
+must not be installed or distributed on its own.
+
+`scripts/prepare_managed_runtime.py` remains a lower-level advanced command for
+an offline mirror or a custom CUDA distribution. Ordinary package builds must
+use the locked automatic download path so Sherpa and ORT stay ABI-compatible.
 
 Install the pinned frontend dependencies, verify all staged resources, and run
 the release checks:
@@ -212,21 +214,16 @@ npm run check
 cargo test --manifest-path src-tauri/Cargo.toml managed::tests --lib
 ```
 
-Build the macOS application with Tauri, then use the repository packager to
-normalize the PyInstaller framework layout, sign it, smoke-test the frozen
-backend, and create the disk image:
-
-```bash
-npm run tauri build -- --bundles app
-python scripts/package_macos_dmg.py
-```
+The lower-level `python scripts/package_macos_dmg.py` command still repackages
+an existing `.app`; it deliberately does not rebuild sources or protect callers
+from partial output after a failure. Use `npm run package:macos` for public
+release artifacts or `npm run package:macos:local` for local installation.
 
 The Apple Silicon output is
 `src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg`. The generated
-`.app` is under `src-tauri/target/release/bundle/macos/`. A locally built image
-uses an ad-hoc signature. Set `APPLE_SIGNING_IDENTITY` to an Apple Developer
-identity before running `package_macos_dmg.py` when producing a distributable
-release. Notarization remains a separate release step.
+`.app` is under `src-tauri/target/release/bundle/macos/`. The local command uses
+an ad-hoc signature. The formal `package:macos` result is Developer ID signed,
+notarized, and stapled.
 
 The packager rejects broken or external App-bundle symlinks and launches the
 signed Matcha sidecar without build-machine environment variables. This
@@ -235,14 +232,15 @@ ensures its sherpa and ONNX Runtime dependencies resolve from
 
 Do not replace all of `Contents/Frameworks` with links to the resource runtime.
 The PyInstaller bootloader loads `libpython` from `Frameworks`, and a hardened
-sidecar cannot map a differently signed copy through such a link. The packager
-links only top-level Python `*.dist-info` metadata directories, applies the
-sidecar's library-validation entitlement, explicitly signs both bundled Codex
-code-mode hosts with the V8 executable-memory entitlements from
-`src-tauri/CodexHostEntitlements.plist`, and verifies that the signed backend
-can load before creating the DMG. Do not distribute a `.app` produced by the
-raw Tauri command alone: its Codex host will fail when V8 creates the first
-isolate.
+sidecar cannot map a differently signed copy through such a link. Before
+signing, the packager verifies that the Frameworks and Resources runtime layouts
+match, removes duplicate code from Resources, and retains only top-level Python
+`*.dist-info` and `*.egg-info` metadata there. Frameworks metadata links to
+those retained resource directories. The packager applies the sidecar's
+library-validation entitlement and verifies that the signed backend can load
+before creating the DMG. User-installed Codex executables remain outside the
+App signature. Do not distribute a `.app` produced by the raw Tauri command
+alone because it has not completed this runtime normalization and verification.
 
 Verify the final bundle and disk image rather than only the intermediate
 sidecars:
@@ -250,6 +248,8 @@ sidecars:
 ```bash
 codesign --verify --deep --strict --verbose=2 \
   src-tauri/target/release/bundle/macos/XTalk.app
+codesign --verify --strict --verbose=2 \
+  src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg
 hdiutil verify \
   src-tauri/target/release/bundle/dmg/XTalk_VERSION_aarch64.dmg
 shasum -a 256 \
@@ -277,8 +277,33 @@ must remain available at the selected path for subsequent launches. The
 frozen sidecar can instantiate only providers whose dependency groups were
 included at build time.
 
-Use [`examples/local_models.json`](examples/local_models.json) for the fully
-managed local ASR/TTS configuration. Fill its empty LLM API key before use.
+## Tool service credentials
+
+Tool API keys are configured independently from tool bundles and model JSON.
+The **Service credentials** section in **Settings and diagnostics** persists a
+key only in the operating system credential manager: macOS Keychain, Windows
+Credential Manager, or Linux Secret Service. There is deliberately no
+session-only credential mode. On platforms without an accessible credential
+service, provide the documented environment variable before launching XTalk.
+
+Environment variables have higher precedence than stored credentials and are
+shown as read-only in the UI. The Serper-backed Web Search built-in accepts
+`SERPER_API_KEY` or `GOOGLE_SERPER_API_KEY`; the resolved value is injected as
+`SERPER_API_KEY` only into the managed Python sidecar process. Secret values
+never enter `xtalk_tool.json`, `resources/credentials.json`, AppData, the
+sidecar startup JSON, command-line arguments, or diagnostic output.
+
+`resources/credentials.json` is App-owned metadata that binds a stable
+credential ID to supported environment variables and the built-in tool that
+consumes it. Adding a credential-backed built-in requires updating this
+registry; tool implementation files remain free of storage and platform
+branches. Saving, replacing, or deleting a credential requires **Apply and
+restart local service** before a running Agent observes the new environment.
+
+Use
+[`examples/local_models_moss_tts.json`](examples/local_models_moss_tts.json)
+for the fully managed local ASR/TTS configuration. Fill its empty LLM API key
+before use.
 Tauri resolves its `managed://` values without modifying the example file. Add
 `?backend=cpu`, `?backend=cuda`, or `?backend=mlx` to force a backend; without
 it, selection order is CUDA, MLX, then CPU. The
@@ -370,9 +395,12 @@ additionally capped at 60% of the window height. See
 
 User-tool install, enable, disable, and delete operations update
 `AppData/tools/registry.json`. Built-ins are indexed by
-`resources/tools/builtin_tools.json`; they cannot be deleted, but their enabled
-overrides are persisted in `AppData/tool_preferences.json`. Select **Apply and
-restart local service** to rebuild the configured Agent with enabled tools.
+`resources/tools/builtin_tools.json`; they cannot be deleted, and optional
+built-ins persist enabled overrides in `AppData/tool_preferences.json`.
+The Current Time built-in is required and cannot be disabled. Web Search is an
+ordinary optional built-in, disabled by default, and can be enabled only when
+its external credential resolves successfully. Select **Apply and restart
+local service** to rebuild the configured Agent with enabled tools.
 When a user tool exports the same name as a built-in, the user implementation
 takes precedence.
 
@@ -389,6 +417,17 @@ model, reasoning effort, working directory, and `Sandbox.full_access`. It also
 uses the SDK's no-prompt approval mode, so arbitrary existing local directories
 are accepted as `cwd` values without an App approval step. Enable this bundle
 only when unrestricted local Codex access is intended.
+
+The Codex built-in does not ship a CLI. On first use it checks the inherited
+`PATH` and common Homebrew, npm, nvm, fnm, Volta, Bun, and system installation
+locations. Every candidate must execute `codex --version` successfully before
+the SDK receives its absolute path. The first valid location is cached for the
+sidecar process lifetime; discovery runs again only after that executable path
+disappears or is no longer executable. When none is usable, the tool asks the
+user to run
+`npm install -g @openai/codex` and restart XTalk. An npm shim's directory is
+prepended to the child `PATH` so `/usr/bin/env node` resolves the matching Node
+installation even when XTalk was launched from Finder.
 
 The App keeps only its thread index and compact routing metadata in
 `AppData/tool-data/codex/codex_sessions.sqlite3`; the Codex SDK remains the
@@ -408,8 +447,8 @@ settings-and-diagnostics drawer. The top bar is empty by default; while tools
 with live UI are running it shows a collapsed status summary that expands to
 the current live cards. The sidebar uses the public session APIs to start a new
 chat or switch among all persisted sessions. Its Tools button opens a centered
-configuration dialog that groups built-in and user tools. Both groups can be
-enabled or disabled; only user tools can be deleted.
+configuration dialog that groups built-in and user tools. Optional tools in
+both groups can be enabled or disabled; only user tools can be deleted.
 Conversation
 data remains in AppData-backed `chat_history.sqlite3`; the WebView does not
 maintain a duplicate message store. Immutable custom tool UI snapshots are

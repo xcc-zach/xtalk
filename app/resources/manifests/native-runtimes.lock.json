@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "sherpa_onnx_version": "1.13.4",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "archive": "sherpa-onnx-v1.13.4-osx-arm64-shared.tar.bz2",
+      "sha256": "809ab5d0c77bd8f358364a244e6ab17f2afecf9779eb9fd436fa469c3ff5375c",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-arm64-shared.tar.bz2"
+    },
+    "aarch64-pc-windows-msvc": {
+      "archive": "sherpa-onnx-v1.13.4-win-arm64-shared-MD-Release.tar.bz2",
+      "sha256": "3f53e8d6d3abb955a79757ab597d36f276eac1a27c38c399f988ae73399bbd8a",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-arm64-shared-MD-Release.tar.bz2"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "archive": "sherpa-onnx-v1.13.4-linux-aarch64-shared-cpu.tar.bz2",
+      "sha256": "36c5a3c942358ed635471488f50a28a96181331c935b0dce75a02b7f49913dc2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-linux-aarch64-shared-cpu.tar.bz2"
+    },
+    "x86_64-apple-darwin": {
+      "archive": "sherpa-onnx-v1.13.4-osx-x64-shared.tar.bz2",
+      "sha256": "6deec0a5477e521684c4511996703da4ad9a47bac72e5f64453568e59a8a579b",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-x64-shared.tar.bz2"
+    },
+    "x86_64-pc-windows-msvc": {
+      "archive": "sherpa-onnx-v1.13.4-win-x64-shared-MD-Release.tar.bz2",
+      "sha256": "d4dacc8be5afe03f22ade4d50cfd587c03a625eaca8c41f2d99a24d3db463eab",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-shared-MD-Release.tar.bz2"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "archive": "sherpa-onnx-v1.13.4-linux-x64-shared.tar.bz2",
+      "sha256": "18887dc13c7d313d0e0f6c164ed31715c27c1c2c4f71acd7c0147dc84cf02514",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-linux-x64-shared.tar.bz2"
+    }
+  }
+}

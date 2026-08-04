@@ -125,77 +125,6 @@ function finalizeSupersededAssistantMessages(
   });
 }
 
-/**
- * Collapse desktop-only replay artifacts into one assistant item per turn.
- *
- * The realtime SDK can briefly retain a cancelled assistant stream and replay
- * it after the interrupting user message. Async tool updates can also arrive
- * as adjacent assistant fragments. Neither transport detail should become a
- * second chat bubble in the desktop timeline.
- *
- * @param messages Raw desktop messages in server order.
- * @returns Messages with interrupted replays removed and adjacent assistant
- * fragments coalesced.
- */
-function coalesceDesktopAssistantTurns(
-  messages: DesktopMessage[],
-): DesktopMessage[] {
-  const result: DesktopMessage[] = [];
-  let interruptedAssistantContent: string | null = null;
-
-  for (const sourceMessage of messages) {
-    let message = sourceMessage;
-    if (message.role === "user") {
-      const previous = result[result.length - 1];
-      interruptedAssistantContent = previous?.role === "assistant" && !previous.final
-        ? previous.content
-        : null;
-      result.push(message);
-      continue;
-    }
-
-    if (message.role !== "assistant") {
-      result.push(message);
-      continue;
-    }
-
-    if (interruptedAssistantContent) {
-      if (interruptedAssistantContent.startsWith(message.content)) {
-        if (!message.final || message.content === interruptedAssistantContent) {
-          continue;
-        }
-      } else if (message.content.startsWith(interruptedAssistantContent)) {
-        const remainder = message.content
-          .slice(interruptedAssistantContent.length)
-          .trimStart();
-        if (!remainder) {
-          continue;
-        }
-        message = { ...message, content: remainder };
-      }
-      interruptedAssistantContent = null;
-    }
-
-    const previous = result[result.length - 1];
-    if (previous?.role !== "assistant") {
-      result.push(message);
-      continue;
-    }
-
-    if (message.content.startsWith(previous.content)) {
-      previous.content = message.content;
-    } else if (!previous.content.startsWith(message.content)) {
-      const separator = /[\s，。！？、；：,.!?;:]$/u.test(previous.content)
-        ? ""
-        : " ";
-      previous.content += `${separator}${message.content}`;
-    }
-    previous.final = message.final;
-  }
-
-  return result;
-}
-
 /** Force browser-native microphone noise suppression inside the desktop WebView. */
 function installDesktopNoiseSuppression(): void {
   if (desktopNoiseSuppressionInstalled) {
@@ -283,9 +212,7 @@ export class XtalkClientAdapter {
         sessionId: state.sessionId,
         userId: state.user?.id ?? null,
         muted: this.#session.muted,
-        messages: finalizeSupersededAssistantMessages(
-          coalesceDesktopAssistantTurns(messages),
-        ),
+        messages: finalizeSupersededAssistantMessages(messages),
       };
       this.#notify();
     });

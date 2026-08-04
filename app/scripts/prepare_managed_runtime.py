@@ -388,12 +388,12 @@ def build_mlx_runtime(debug: bool) -> tuple[Path, Path]:
         products / "xtalk-mlx-model-runtime",
         "MLX model runtime",
     )
-    bundles = list(products.rglob("mlx-swift_Cmlx.bundle"))
-    if len(bundles) != 1 or not bundles[0].is_dir():
+    bundle = products / "mlx-swift_Cmlx.bundle"
+    if not bundle.is_dir():
         raise FileNotFoundError(
-            f"expected one MLX Metal resource bundle below {products}"
+            f"expected the MLX Metal resource bundle at {bundle}"
         )
-    return executable, bundles[0]
+    return executable, bundle
 
 
 def copy_cuda_runtime(source: Path | None, destination: Path) -> None:

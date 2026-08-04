@@ -5,13 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from xtalk import Xtalk
-from xtalk.models.agents.tools import (
-    build_async_web_search_tool,
-    build_time_tool,
-)
-
 from .desktop_agent import DesktopDefaultAgent
+from .desktop_service import DesktopXtalk
 from .tool_registry import load_enabled_tools
 from .tool_ui import ToolUIBroker
 
@@ -40,7 +35,6 @@ def build_xtalk_runtime(
     builtin_tools_root: Path | None = None,
     anonymous_user_id: str | None = None,
     tool_ui_broker: ToolUIBroker | None = None,
-    web_search_enabled: bool = False,
 ) -> Any:
     """Build XTalk with App-managed built-in and user-installed tools.
 
@@ -56,9 +50,6 @@ def build_xtalk_runtime(
         Runtime-only stable identity for the built-in anonymous login.
     tool_ui_broker : ToolUIBroker | None, optional
         App-only observer for developer tools that declare a UI entrypoint.
-    web_search_enabled : bool, optional
-        Whether to register the asynchronous web-search tool.
-
     Returns
     -------
     Any
@@ -66,7 +57,7 @@ def build_xtalk_runtime(
     """
 
     _register_managed_model_clients()
-    builder = Xtalk.configure(config)
+    builder = DesktopXtalk.configure(config)
     if config.get("llm_agent") is not None:
         builder.set_model(DesktopDefaultAgent)
         if tools_root is None and builtin_tools_root is None:
@@ -82,11 +73,6 @@ def build_xtalk_runtime(
                 builtin_tools_root=builtin_tools_root,
                 tool_ui_broker=tool_ui_broker,
             )
-        tool_names = {getattr(tool, "name", None) for tool in tools}
-        if "get_time" not in tool_names:
-            tools.append(build_time_tool())
-        if web_search_enabled and "web_search" not in tool_names:
-            tools.append(build_async_web_search_tool())
         builder.add_agent_tools(tools)
     runtime = builder.build()
     if anonymous_user_id is not None:

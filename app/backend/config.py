@@ -69,8 +69,6 @@ class StartupConfig:
         Read-only bundled directory containing the App's built-in tool catalog.
     origins : tuple[str, ...]
         Exact WebView origins permitted to call the loopback service.
-    web_search_enabled : bool
-        Whether the trusted desktop parent enabled asynchronous web search.
     config_overlay : dict[str, Any]
         Generic configuration overlay recursively merged over the base JSON.
     anonymous_user_id : str | None, optional
@@ -86,7 +84,6 @@ class StartupConfig:
     data_dir: Path
     builtin_tools_root: Path | None
     origins: tuple[str, ...]
-    web_search_enabled: bool
     config_overlay: dict[str, Any]
     anonymous_user_id: str | None = None
     config_fallbacks: dict[str, Any] = field(default_factory=dict)
@@ -156,10 +153,6 @@ class StartupConfig:
             if normalized not in normalized_origins:
                 normalized_origins.append(normalized)
 
-        web_search_enabled = payload.get("web_search_enabled", False)
-        if not isinstance(web_search_enabled, bool):
-            raise ValueError("web_search_enabled must be a boolean")
-
         overlay_value = payload.get("config_overlay", {})
         if not isinstance(overlay_value, dict):
             raise ValueError("config_overlay must be a JSON object")
@@ -188,7 +181,6 @@ class StartupConfig:
                 else None
             ),
             origins=tuple(normalized_origins),
-            web_search_enabled=web_search_enabled,
             config_overlay=copy.deepcopy(overlay_value),
             anonymous_user_id=anonymous_user_id,
             config_fallbacks=copy.deepcopy(fallbacks_value),
