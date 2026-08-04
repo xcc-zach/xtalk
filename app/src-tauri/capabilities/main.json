@@ -10,6 +10,7 @@
     "allow-apply-model-config",
     "allow-ensure-backend-started",
     "allow-get-backend-connection",
+    "allow-get-web-search-settings",
     "allow-get-installed-tools",
     "allow-get-managed-model-plan",
     "allow-get-tool-ui-source",

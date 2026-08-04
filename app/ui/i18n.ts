@@ -113,6 +113,38 @@ const zhCN = {
   "tools.liveCount": "{{count}} 个工具正在运行",
   "tools.liveExpand": "展开正在运行的工具界面",
   "tools.liveCollapse": "收起正在运行的工具界面",
+  "webSearch.coreTools": "核心工具",
+  "webSearch.timeName": "当前时间",
+  "webSearch.timeDetail": "get_time · 始终启用",
+  "webSearch.name": "联网搜索",
+  "webSearch.detail": "web_search · 异步 Serper 搜索",
+  "webSearch.enableLabel": "启用联网搜索工具",
+  "webSearch.enterKey": "输入 Key",
+  "webSearch.modifyKey": "修改本次 Key",
+  "webSearch.loading": "正在读取联网搜索配置",
+  "webSearch.keyRequired": "请输入本次 App 会话使用的 Serper API Key",
+  "webSearch.keyPendingEnabled":
+    "已输入本次 App 使用的 Key；应用并重启本地服务后生效",
+  "webSearch.keyPendingDisabled":
+    "本次 App 使用的 Key 已修改；应用并重启本地服务后生效",
+  "webSearch.pending": "联网搜索配置已修改；应用并重启本地服务后生效",
+  "webSearch.missingDisabled": "未检测到环境变量；启用联网搜索时会要求输入 Key",
+  "webSearch.enabledEnvironment":
+    "联网搜索已启用，正在使用环境变量中的 Serper Key",
+  "webSearch.enabledSession":
+    "联网搜索已启用，正在使用本次 App 会话的 Serper Key",
+  "webSearch.disabledEnvironment":
+    "联网搜索已关闭，环境变量中的 Serper Key 可用",
+  "webSearch.disabledSession":
+    "联网搜索已关闭，本次 App 会话的 Serper Key 可用",
+  "webSearch.dialogTitle": "配置联网搜索 Key",
+  "webSearch.dialogDescription":
+    "Key 只在本次 App 运行期间保存在内存中，关闭 App 后失效，不会写入本地文件。",
+  "webSearch.keyLabel": "Serper API Key",
+  "webSearch.keyPlaceholder": "输入 Serper API Key",
+  "webSearch.keyValidation": "请输入 Serper API Key",
+  "webSearch.cancel": "取消",
+  "webSearch.useKey": "使用此 Key",
   "runtime.title": "运行状态",
   "runtime.connection": "连接",
   "runtime.stream": "音频流",
@@ -307,6 +339,40 @@ const en: Record<keyof typeof zhCN, string> = {
   "tools.liveCount": "{{count}} tools running",
   "tools.liveExpand": "Expand running tool UI",
   "tools.liveCollapse": "Collapse running tool UI",
+  "webSearch.coreTools": "Core tools",
+  "webSearch.timeName": "Current time",
+  "webSearch.timeDetail": "get_time · always enabled",
+  "webSearch.name": "Web search",
+  "webSearch.detail": "web_search · asynchronous Serper search",
+  "webSearch.enableLabel": "Enable the web-search tool",
+  "webSearch.enterKey": "Enter key",
+  "webSearch.modifyKey": "Change session key",
+  "webSearch.loading": "Loading web-search settings",
+  "webSearch.keyRequired": "Enter a Serper API key for this App session",
+  "webSearch.keyPendingEnabled":
+    "Session key entered; apply and restart the local service",
+  "webSearch.keyPendingDisabled":
+    "Session key changed; apply and restart the local service",
+  "webSearch.pending":
+    "Web-search settings changed; apply and restart the local service",
+  "webSearch.missingDisabled":
+    "No environment key found; enabling web search will request a key",
+  "webSearch.enabledEnvironment":
+    "Web search is enabled with the Serper key from the environment",
+  "webSearch.enabledSession":
+    "Web search is enabled with the Serper key for this App session",
+  "webSearch.disabledEnvironment":
+    "Web search is disabled; the environment Serper key is available",
+  "webSearch.disabledSession":
+    "Web search is disabled; the App session Serper key is available",
+  "webSearch.dialogTitle": "Configure web-search key",
+  "webSearch.dialogDescription":
+    "The key remains only in memory for this App run. It expires when the App closes and is never written to disk.",
+  "webSearch.keyLabel": "Serper API key",
+  "webSearch.keyPlaceholder": "Enter Serper API key",
+  "webSearch.keyValidation": "Enter a Serper API key",
+  "webSearch.cancel": "Cancel",
+  "webSearch.useKey": "Use this key",
   "runtime.title": "Runtime status",
   "runtime.connection": "Connection",
   "runtime.stream": "Stream",
