@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import PROTOCOL_VERSION, StartupConfig, build_effective_config
+from .desktop_tool_bridge import DesktopToolCallBridge
 from .security import STARTUP_TOKEN_HEADER, SidecarSecurityMiddleware
 from .tool_ui import ToolUIBroker
 from .xtalk_adapter import build_xtalk_runtime, mount_xtalk_routes
@@ -194,7 +195,11 @@ def build_application(
     """
 
     effective_config = build_effective_config(startup)
-    tool_ui_broker = ToolUIBroker()
+    tool_call_bridge = DesktopToolCallBridge()
+    effective_config.setdefault("service_config", {})[
+        "_desktop_tool_call_bridge"
+    ] = tool_call_bridge
+    tool_ui_broker = ToolUIBroker(bridge=tool_call_bridge)
     xtalk_runtime = build_xtalk_runtime(
         effective_config,
         tools_root=startup.data_dir / "tools",

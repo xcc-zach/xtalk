@@ -1,93 +1,74 @@
-"""Desktop-specific XTalk service composition."""
+"""Desktop XTalk runtime composition reusing the standard service stack."""
 
 from __future__ import annotations
 
-import logging
+import uuid
 from typing import Any
 
 from xtalk import Xtalk
-from xtalk.serving.events import TTSPlaybackFinished
-from xtalk.serving.modules.tts_playback_manager import TTSPlaybackManager
-from xtalk.serving.service import DefaultService
+from xtalk.serving.modules.output_gateway import OutputGateway
+from xtalk.serving.service import DefaultService, Service
 
-
-logger = logging.getLogger(__name__)
-
-
-class DesktopTTSPlaybackManager(TTSPlaybackManager):
-    """Finalize completed desktop playback with the full generated response.
-
-    The generic playback manager intentionally commits only text confirmed by
-    incremental audio alignment. Desktop output sessions already emit
-    ``TTSPlaybackFinished`` after every queued audio chunk has played, so using
-    a conservative intermediate alignment prefix at that point truncates chat
-    history and leaves the next model turn conditioned on an unfinished reply.
-
-    Interrupted playback continues to use the inherited stop path, which
-    commits only the text prefix that the user actually heard.
-    """
-
-    async def _publish_response_finish(
-        self,
-        event: TTSPlaybackFinished,
-    ) -> None:
-        """Commit the complete generated turn after normal playback finishes.
-
-        Parameters
-        ----------
-        event : TTSPlaybackFinished
-            Confirmation that the desktop output queue finished playing.
-        """
-
-        del event
-        if not self._received_audio:
-            logger.warning(
-                "Desktop TTS playback finished without generated audio; "
-                "discarding unplayed response - session: %s",
-                self.session_id,
-            )
-            self._reset_all_state()
-            return
-
-        played_text = self._build_reported_text()
-        if len(self._reported_text) > len(played_text):
-            played_text = self._reported_text
-        final_text = self._pending_text or played_text
-        if not final_text:
-            logger.warning(
-                "Desktop TTS playback finished without response text - session: %s",
-                self.session_id,
-            )
-            self._reset_all_state()
-            return
-
-        if played_text and final_text != played_text:
-            logger.debug(
-                "Desktop TTS normal completion promoted generated text - "
-                "session: %s, aligned_length: %s, generated_length: %s",
-                self.session_id,
-                len(played_text),
-                len(final_text),
-            )
-        try:
-            await self._commit_playback_text(final_text)
-        finally:
-            self._reset_all_state()
-
-
-class DesktopService(DefaultService):
-    """Use desktop playback finalization with the standard XTalk managers."""
-
-    MANAGER_CLASSES = [
-        DesktopTTSPlaybackManager
-        if manager_class is TTSPlaybackManager
-        else manager_class
-        for manager_class in DefaultService.MANAGER_CLASSES
-    ]
+from .desktop_gateway import DesktopTextProjectionGateway
 
 
 class DesktopXtalk(Xtalk):
-    """Build XTalk sessions around :class:`DesktopService`."""
+    """Build XTalk sessions around the desktop service pipeline.
+
+    The desktop sidecar deliberately reuses the generic XTalk serving
+    pipeline (agent, ASR/TTS managers, persistence, and playback
+    finalization) so conversation semantics stay identical to the sample
+    applications. The only desktop-specific difference is the text-projection
+    output gateway, which keeps the frontend text stream complete and
+    monotonic even when TTS playback tracking restarts mid-turn.
+    """
+
+    def __init__(
+        self,
+        *,
+        service_prototype: Service,
+        max_sessions: int | None = None,
+    ) -> None:
+        """Initialize the desktop runtime with an optional stable identity.
+
+        Parameters
+        ----------
+        service_prototype : Service
+            Prototype service used to clone per-session service instances.
+        max_sessions : int | None, optional
+            Maximum number of concurrent sessions. If omitted, no session
+            limit is enforced.
+        """
+
+        self._anonymous_user_id: str | None = None
+        super().__init__(
+            service_prototype=service_prototype,
+            max_sessions=max_sessions,
+        )
+
+    def _login(self) -> dict[str, Any]:
+        """Issue a login token for the desktop runtime identity.
+
+        Desktop launches bind a stable anonymous identity through the app
+        adapter; every login resolves to that identity so persisted sessions
+        survive restarts without exposing user management.
+
+        Returns
+        -------
+        dict[str, Any]
+            Access token and the user record it authenticates.
+        """
+
+        user_id = self._anonymous_user_id or str(uuid.uuid4())
+        user = (
+            self._persistence.ensure_user(user_id)
+            if self._persistence is not None
+            else {"id": user_id}
+        )
+        return {
+            "access_token": self._auth.issue_token(sub=user_id),
+            "user": user,
+        }
 
     @classmethod
     def _build_from_config_dict(cls, config: dict[str, Any]) -> DesktopXtalk:
@@ -101,7 +82,7 @@ class DesktopXtalk(Xtalk):
         Returns
         -------
         DesktopXtalk
-            Runtime whose sessions use desktop playback semantics.
+            Runtime whose sessions use the standard XTalk service pipeline.
         """
 
         models = cls.create_models_from_config(config_path_or_dict=config)
@@ -120,3 +101,82 @@ class DesktopXtalk(Xtalk):
             service_prototype=service_prototype,
             max_sessions=max_sessions,
         )
+
+
+class DesktopService(DefaultService):
+    """Default service stack with the desktop text-projection gateway."""
+
+    def __init__(
+        self,
+        *,
+        models: Any,
+        service_config: dict[str, Any] | None = None,
+        manager_classes: list[type] | None = None,
+        _websocket: Any = None,
+        _session_id: str | None = None,
+        _event_overrides: dict[type, Any] | None = None,
+    ) -> None:
+        """Build the standard stack and swap in the projection gateway.
+
+        Parameters
+        ----------
+        models : Models
+            Model container prototype cloned for the session.
+        service_config : dict[str, Any] | None, optional
+            Session configuration shared with managers and gateways.
+        manager_classes : list[type] | None, optional
+            Manager classes to instantiate for live sessions.
+        _websocket : WebSocket | None, optional
+            Live WebSocket handle for session clones.
+        _session_id : str | None, optional
+            Identifier used when cloning a live session.
+        _event_overrides : dict[type, Any] | None, optional
+            Internal event subscription overrides copied into clones.
+        """
+
+        super().__init__(
+            models=models,
+            service_config=service_config,
+            manager_classes=manager_classes,
+            _websocket=_websocket,
+            _session_id=_session_id,
+            _event_overrides=_event_overrides,
+        )
+        if _websocket is not None and hasattr(self, "output_gateway"):
+            self.output_gateway = _replace_output_gateway(self)
+
+
+def _replace_output_gateway(service: DefaultService) -> OutputGateway:
+    """Swap one live service's gateway for the desktop text projection.
+
+    The base ``Service`` hardcodes the generic :class:`OutputGateway`. This
+    helper unsubscribes its handlers from the session event bus and installs
+    the desktop projection gateway with the same websocket and overrides.
+
+    Parameters
+    ----------
+    service : DefaultService
+        Live session service whose output gateway should be replaced.
+
+    Returns
+    -------
+    OutputGateway
+        The newly installed desktop projection gateway.
+    """
+
+    previous = service.output_gateway
+    for base in reversed(previous.__class__.mro()):
+        for method_name, meta_list in getattr(base, "__event_handlers_meta__", []):
+            method = getattr(previous, method_name, None)
+            if method is None:
+                continue
+            for meta in meta_list:
+                service.event_bus.unsubscribe(meta["event_type"], method)
+
+    return DesktopTextProjectionGateway(
+        service.event_bus,
+        service.session_id,
+        previous.websocket,
+        config=service.service_config,
+        _event_overrides=service._event_overrides.get(OutputGateway),
+    )

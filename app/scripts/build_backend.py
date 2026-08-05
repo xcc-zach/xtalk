@@ -18,6 +18,8 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = APP_ROOT / ".build" / "backend"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 SIDECAR_LOCK = APP_ROOT / "requirements" / "sidecar.lock"
+MINIMUM_PYTHON_VERSION = (3, 10)
+LOCKED_PYTHON_VERSION = (3, 12)
 EXTRA_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 LOCKED_REQUIREMENT_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^=<>!~;\s]+$"
@@ -454,8 +456,19 @@ def main() -> int:
         raise ValueError("--xtalk-wheel must point to an existing wheel")
     python = args.python.expanduser().resolve()
     version = selected_python_version(python)
-    if version != (3, 12):
-        raise RuntimeError("locked sidecar builds require Python 3.12")
+    if version < MINIMUM_PYTHON_VERSION:
+        raise RuntimeError(
+            "locked sidecar builds require Python "
+            f"{MINIMUM_PYTHON_VERSION[0]}.{MINIMUM_PYTHON_VERSION[1]} or newer"
+        )
+    if version != LOCKED_PYTHON_VERSION:
+        print(
+            "warning: requirements/sidecar.lock is resolved for Python "
+            f"{LOCKED_PYTHON_VERSION[0]}.{LOCKED_PYTHON_VERSION[1]}; "
+            f"building with Python {version[0]}.{version[1]} may fail to "
+            "resolve locked dependencies",
+            file=sys.stderr,
+        )
     target = resolve_target_triple(args.target_triple)
     validate_required_extras(args.xtalk_extra)
     validate_required_wheel_modules(wheel)

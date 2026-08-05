@@ -742,6 +742,22 @@ summary,
   background: transparent;
 }
 
+.message-content-group {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-content-group .tool-ui-row {
+  width: 100%;
+}
+
+.message-content-group .tool-ui-frame,
+.message-content-group .tool-ui-fallback {
+  width: 100%;
+}
+
 .message-actions {
   display: flex;
   min-height: 30px;

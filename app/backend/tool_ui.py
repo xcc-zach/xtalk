@@ -12,6 +12,8 @@ from typing import Any, Literal
 from fastapi import WebSocket, WebSocketDisconnect
 from xtalk.models.agents.tools import AsyncTool, Finished, Running
 
+from .desktop_tool_bridge import DesktopToolCallBridge
+
 
 MAX_TOOL_UI_FRAME_BYTES = 2 * 1024 * 1024
 MAX_TOOL_UI_FRAME_TICKETS = 400
@@ -44,19 +46,42 @@ class _ToolUIFrameTicket:
 class ToolUIBroker:
     """Broadcast observed tool status and emit events to the trusted App UI."""
 
-    def __init__(self) -> None:
-        """Initialize empty connection and tool-call state."""
+    def __init__(
+        self,
+        bridge: DesktopToolCallBridge | None = None,
+    ) -> None:
+        """Initialize empty connection and tool-call state.
+
+        Parameters
+        ----------
+        bridge : DesktopToolCallBridge | None, optional
+            Shared bridge that maps tool calls to assistant-text offsets.
+        """
 
         self._clients: list[WebSocket] = []
+        self._bridge = bridge
         self._lock = asyncio.Lock()
         self._current_session_id: str | None = None
         self._call_sessions: dict[str, str | None] = {}
+        self._call_offsets: dict[str, int] = {}
         self._status_sequences: dict[str, int] = {}
         self._emit_sequences: dict[str, int] = {}
         self._last_status: dict[str, tuple[str, bool]] = {}
         self._live_status_payloads: dict[str, dict[str, Any]] = {}
         self._history_payloads: dict[str | None, list[dict[str, Any]]] = {}
         self._frame_tickets: dict[str, _ToolUIFrameTicket] = {}
+
+    def register_ui_tool(self, tool_name: str) -> None:
+        """Declare one tool whose timeline rows should carry text offsets.
+
+        Parameters
+        ----------
+        tool_name : str
+            Exported tool name used by the LLM tool-call marker.
+        """
+
+        if self._bridge is not None:
+            self._bridge.register_ui_tool(tool_name)
 
     async def serve(self, websocket: WebSocket) -> None:
         """Serve one authenticated read-only Tool UI WebSocket.
@@ -223,22 +248,32 @@ class ToolUIBroker:
 
         sequence = self._emit_sequences.get(call_id, 0) + 1
         self._emit_sequences[call_id] = sequence
-        payload = (
+        payload_base = (
             self._event_base(
                 event_type="tool_ui.emit",
                 binding=binding,
                 tool_name=tool_name,
                 call_id=call_id,
             )
-            | {
-                "sequence": sequence,
-                "message": str(message),
-                "status": str(status),
-                "running": running,
-                "outcome": resolved_outcome,
-                "emittedAt": _utc_now(),
-            }
         )
+        if self._bridge is not None and sequence == 1:
+            session_id = payload_base.get("sessionId")
+            if isinstance(session_id, str) and session_id:
+                offset = self._bridge.consume_tool_offset(
+                    session_id=session_id
+                )
+                if offset is not None:
+                    self._call_offsets[call_id] = offset
+        payload = payload_base | {
+            "sequence": sequence,
+            "message": str(message),
+            "status": str(status),
+            "running": running,
+            "outcome": resolved_outcome,
+            "emittedAt": _utc_now(),
+        }
+        if self._call_offsets.get(call_id) is not None:
+            payload["textOffset"] = self._call_offsets[call_id]
         self._retain_history_payload(payload)
         await self._broadcast(payload)
         if not running:
@@ -248,6 +283,7 @@ class ToolUIBroker:
         """Release broker bookkeeping after a terminal call observation."""
 
         self._call_sessions.pop(call_id, None)
+        self._call_offsets.pop(call_id, None)
         self._status_sequences.pop(call_id, None)
         self._emit_sequences.pop(call_id, None)
         self._last_status.pop(call_id, None)
@@ -409,12 +445,20 @@ def wrap_tools_with_ui(
         replaced by behavior-preserving subclasses.
     """
 
-    return [
-        _wrap_async_tool(tool, binding=binding, broker=broker)
-        if isinstance(tool, type) and issubclass(tool, AsyncTool)
-        else tool
-        for tool in tools
-    ]
+    wrapped: list[Any] = []
+    for tool in tools:
+        if isinstance(tool, type) and issubclass(tool, AsyncTool):
+            broker.register_ui_tool(tool.name or tool.__name__)
+            wrapped.append(
+                _wrap_async_tool(
+                    tool,
+                    binding=binding,
+                    broker=broker,
+                )
+            )
+        else:
+            wrapped.append(tool)
+    return wrapped
 
 
 def _wrap_async_tool(
