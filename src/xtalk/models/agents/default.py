@@ -88,7 +88,7 @@ class DefaultAgent(Agent):
         backchannel_source_dir: str | Path | None = None,
         tools: list[Tool | Callable[[], Tool]] | None = None,
         system_prompt: str = "",
-        proactive: bool = True,
+        proactive: bool = False,
     ) -> None:
         """Initialize the default agent.
 
