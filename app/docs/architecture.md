@@ -111,6 +111,21 @@ user has finished speaking. While the user is speaking, intermediate progress
 is ignored and only a final update is deferred, exactly as in the default
 Agent. Tool UI rendering remains an independent observer of those updates.
 
+### Whiteboard tool chain
+
+The bundled `whiteboard` tool reuses the same read-only Tool UI observation
+channel for structured content. `whiteboard_update` is an `AsyncTool` whose
+result message is the full normalized board snapshot JSON. The wrapper in
+`backend/tool_ui.py` parses that JSON into an optional `payload` field on
+`tool_ui.emit` events whenever the tool declares `structured_payload = True`;
+oversized payloads are dropped while the human-readable message is preserved.
+The sandboxed whiteboard frame renders `event.payload` (with a message-parse
+fallback), so every emit, history replay, or live update re-renders the same
+board state. The board snapshot is kept in the session tool-engine state, so
+later calls can apply incremental add/update/remove/clear operations against
+notes emitted by earlier calls; persistence across sidecar restarts is a later
+phase.
+
 Text input targets an already-open XTalk session. Since the public SDK's
 `open()` still initializes microphone capture, starting that session requires
 microphone permission even when the user subsequently types.

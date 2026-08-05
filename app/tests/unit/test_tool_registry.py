@@ -162,7 +162,11 @@ def test_repository_builtin_catalog_loads_without_backend_imports(
         builtin_tools_root=app_root / "resources" / "tools",
     )
 
-    assert {tool.name for tool in tools} == {"get_time", "timer"}
+    assert {tool.name for tool in tools} == {
+        "get_time",
+        "timer",
+        "whiteboard_update",
+    }
     timer = next(tool for tool in tools if tool.name == "timer")
     assert timer.__module__.startswith("_xtalk_desktop_tool_builtin_timer")
 

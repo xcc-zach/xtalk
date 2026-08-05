@@ -35,6 +35,11 @@ export interface ToolUIEmitEvent {
    * call happened. Absent for legacy events and events without a UI binding.
    */
   textOffset?: number;
+  /**
+   * Optional structured content emitted by an App-observed tool. Absent for
+   * legacy events and tools that do not declare structured payloads.
+   */
+  payload?: unknown;
   emittedAt: string;
 }
 
@@ -47,6 +52,7 @@ export type ToolUIListener = (event: ToolUIEvent) => void;
 const TOOL_UI_POLL_INTERVAL_MS = 350;
 const TOOL_UI_RETRY_INTERVAL_MS = 1_000;
 const MAX_DELIVERED_TOOL_UI_EVENTS = 1_000;
+const MAX_TOOL_UI_EMIT_PAYLOAD_BYTES = 256 * 1024;
 
 /**
  * Maintains the independent read-only Tool UI WebSocket.
@@ -262,9 +268,17 @@ function parseToolUIEvent(payload: unknown): ToolUIEvent {
     (payload.outcome === undefined ||
       payload.outcome === "running" ||
       payload.outcome === "complete" ||
-      payload.outcome === "cancelled")
+      payload.outcome === "cancelled") &&
+    (payload.payload === undefined || isRecord(payload.payload))
   ) {
-    return payload as unknown as ToolUIEmitEvent;
+    const event = payload as unknown as ToolUIEmitEvent;
+    if (
+      event.payload !== undefined &&
+      serializedUtf8Bytes(event.payload) > MAX_TOOL_UI_EMIT_PAYLOAD_BYTES
+    ) {
+      delete (event as { payload?: unknown }).payload;
+    }
+    return event;
   }
   throw new Error("Tool UI event type is not supported.");
 }
@@ -275,4 +289,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function serializedUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
 }

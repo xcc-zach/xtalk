@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -339,3 +340,53 @@ def test_tool_ui_event_snapshot_requires_token_and_replays_session_events(
         "tool_ui.status",
     ]
     assert all(event["sessionId"] == "session-1" for event in events)
+
+
+def test_tool_ui_event_snapshot_retains_structured_payload(
+    tmp_path: Path,
+) -> None:
+    """Deliver structured whiteboard content over the event channel."""
+
+    snapshot = {
+        "version": 1,
+        "call_id": "board-call",
+        "title": "计划",
+        "revision": 1,
+        "notes": [{"id": "n1", "text": "便签", "color": "yellow"}],
+        "updated_at": "now",
+    }
+
+    async def scenario() -> httpx.Response:
+        broker = ToolUIBroker()
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:whiteboard",
+                update_every_s=-1,
+            ),
+            tool_name="whiteboard_update",
+            call_id="board-call",
+            message=json.dumps(snapshot, ensure_ascii=False),
+            status="complete",
+            running=False,
+            payload=snapshot,
+        )
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+            tool_ui_broker=broker,
+        )
+        return await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert len(events) == 1
+    assert events[0]["payload"] == snapshot
+    assert events[0]["payload"]["notes"][0]["text"] == "便签"

@@ -1,0 +1,11 @@
+{
+  "display_name": {
+    "zh": "白板",
+    "en": "Whiteboard"
+  },
+  "entrypoint": "whiteboard_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": -1
+  }
+}

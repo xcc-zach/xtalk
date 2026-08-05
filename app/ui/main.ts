@@ -18,6 +18,7 @@ import {
   removeNativeInstalledTool,
   saveNativeCredential,
   setNativeToolEnabled,
+  type NativeBackendConnection,
   type NativeManagedModelProgress,
   type NativeCredentialDefinition,
   type NativeModelConfigSelection,
@@ -70,6 +71,9 @@ const BACKEND_SUMMARY_KEYS: Record<BackendState, TranslationKey> = {
   unconfigured: "service.summary.unconfigured",
 };
 
+const WHITEBOARD_TOOL_ID = "builtin:whiteboard";
+const WHITEBOARD_MAX_HEIGHT = 680;
+
 const elements = {
   app: requireElement<HTMLElement>("app"),
   backendStatusDot: requireElement<HTMLElement>("backend-status-dot"),
@@ -100,6 +104,16 @@ const elements = {
   ),
   credentialCancelButton: requireElement<HTMLButtonElement>(
     "credential-cancel-button",
+  ),
+  deleteSessionDialog: requireElement<HTMLDialogElement>(
+    "delete-session-dialog",
+  ),
+  deleteSessionForm: requireElement<HTMLFormElement>("delete-session-form"),
+  deleteSessionDialogBody: requireElement<HTMLElement>(
+    "delete-session-dialog-body",
+  ),
+  deleteSessionCancelButton: requireElement<HTMLButtonElement>(
+    "delete-session-cancel-button",
   ),
   applyCredentialChangesButton: requireElement<HTMLButtonElement>(
     "apply-credential-changes-button",
@@ -232,6 +246,8 @@ const toolUICapabilities = new Map<
 >();
 let persistedSessions: DesktopSessionSummary[] = [];
 let sessionListError: string | null = null;
+let backendConnection: NativeBackendConnection | null = null;
+let pendingDeleteSessionId: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
 let sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionActivityKey = "";
@@ -267,6 +283,28 @@ interface ToolUIRow {
   frame: ToolUIFrame | null;
   mode: "live" | "history";
 }
+
+interface MessageRowState {
+  row: HTMLElement;
+  body: HTMLElement;
+  contentHost: HTMLElement;
+  spans: HTMLSpanElement[];
+  actions: HTMLElement | null;
+}
+
+type MessageContentPart =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; id: string; element: HTMLElement };
+
+/**
+ * Reused message row elements keyed by stable desktop message identity.
+ *
+ * Tool UI rows are embedded inside assistant messages, and WKWebView reloads
+ * an iframe whenever its element is removed and reinserted into the document.
+ * Keeping message rows stable means embedded tool iframes stay mounted across
+ * snapshot renders instead of flashing on every text or status update.
+ */
+const messageRowStates = new Map<string, MessageRowState>();
 
 const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
 const MAX_TOOL_UI_HISTORY_ITEMS = 200;
@@ -658,6 +696,11 @@ function setMainView(view: "orb" | "chat"): void {
 function renderChatSessions(): void {
   const activeSessionId = latestSnapshot.sessionId;
   const rows = persistedSessions.map((session) => {
+    const row = document.createElement("div");
+    row.className = "chat-session-row";
+    row.dataset.sessionId = session.id;
+    row.classList.toggle("is-active", session.id === activeSessionId);
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-session-button";
@@ -686,7 +729,42 @@ function renderChatSessions(): void {
     button.addEventListener("click", () => {
       void switchChatSession(session.id);
     });
-    return button;
+    row.append(button);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "chat-session-delete";
+    deleteButton.setAttribute(
+      "aria-label",
+      t("sidebar.deleteSessionAria"),
+    );
+    deleteButton.title = t("sidebar.delete");
+    const trash = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    );
+    trash.setAttribute("viewBox", "0 0 24 24");
+    trash.setAttribute("aria-hidden", "true");
+    trash.setAttribute("fill", "none");
+    trash.setAttribute("stroke", "currentColor");
+    trash.setAttribute("stroke-width", "2");
+    trash.setAttribute("stroke-linecap", "round");
+    trash.setAttribute("stroke-linejoin", "round");
+    const trashPath = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    trashPath.setAttribute(
+      "d",
+      "M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+    );
+    trash.append(trashPath);
+    deleteButton.append(trash);
+    deleteButton.addEventListener("click", () => {
+      openDeleteSessionDialog(session.id, session.title);
+    });
+    row.append(deleteButton);
+    return row;
   });
 
   elements.chatSessionList.replaceChildren(...rows);
@@ -720,6 +798,66 @@ function updateSessionControls(): void {
     "button",
   )) {
     button.disabled = unavailable || sessionListOperation;
+  }
+}
+
+function openDeleteSessionDialog(
+  sessionId: string,
+  title: string | null,
+): void {
+  pendingDeleteSessionId = sessionId;
+  const displayTitle = title?.trim() || t("sidebar.newConversation");
+  elements.deleteSessionDialogBody.textContent = t(
+    "sidebar.deleteConfirm",
+    { title: displayTitle },
+  );
+  elements.deleteSessionDialog.showModal();
+  elements.deleteSessionCancelButton.focus();
+}
+
+function cancelDeleteSessionDialog(): void {
+  pendingDeleteSessionId = null;
+  elements.deleteSessionDialog.close();
+}
+
+async function deletePendingSession(): Promise<void> {
+  const sessionId = pendingDeleteSessionId;
+  pendingDeleteSessionId = null;
+  elements.deleteSessionDialog.close();
+  if (sessionId === null || backendConnection === null) {
+    return;
+  }
+  try {
+    const response = await fetch(
+      `${backendConnection.origin}/app/api/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          "X-XTalk-App-Token": backendConnection.launchToken,
+          Origin: "tauri://localhost",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    persistedSessions = persistedSessions.filter(
+      (session) => session.id !== sessionId,
+    );
+    try {
+      localStorage.removeItem(`${TOOL_UI_HISTORY_PREFIX}${sessionId}`);
+    } catch {
+      // Keep the in-memory cleanup even when storage is unavailable.
+    }
+    if (latestSnapshot.sessionId === sessionId) {
+      await switchChatSession(null);
+    } else {
+      renderChatSessions();
+    }
+  } catch (error) {
+    showError("sidebar.deleteFailed", { error });
+    renderChatSessions();
   }
 }
 
@@ -1053,15 +1191,10 @@ function handleToolUIEvent(event: ToolUIEvent): void {
     if (!event.running && sessionId === activeToolUISessionId) {
       toolUILive.delete(event.callId);
       removeToolUIRow(`live:${event.callId}`);
-      for (const historyItem of toolUIHistory) {
-        if (historyItem.event.callId === event.callId) {
-          removeToolUIRow(historyItem.id);
-        }
-      }
     }
     const item: ToolUIHistoryItem = {
       kind: "history",
-      id: `history:${event.callId}:${event.sequence}`,
+      id: `history:${event.callId}`,
       anchorMessageIndex,
       order: ++toolUIOrder,
       event: { ...event, sessionId },
@@ -1069,6 +1202,7 @@ function handleToolUIEvent(event: ToolUIEvent): void {
     const history = appendToolUIHistory(sessionId, item);
     if (sessionId === activeToolUISessionId) {
       toolUIHistory = history;
+      toolUIRows.get(item.id)?.frame?.emit(item.event);
     }
   } else if (sessionId === activeToolUISessionId) {
     const id = `live:${event.callId}`;
@@ -1122,6 +1256,7 @@ function findToolUIAnchorMessageIndex(messages: DesktopMessage[]): number {
 
 function switchToolUISession(sessionId: string | null): void {
   activeToolUISessionId = sessionId;
+  messageRowStates.clear();
   toolUILiveExpanded = false;
   toolUILive.clear();
   for (const row of toolUIRows.values()) {
@@ -1330,6 +1465,9 @@ async function hydrateToolUIRow(
           renderLiveToolPanel();
         }
       },
+      row.mode === "live" && item.event.toolId === WHITEBOARD_TOOL_ID
+        ? WHITEBOARD_MAX_HEIGHT
+        : undefined,
     );
     row.frame = frame;
     fallback.replaceWith(frame.element);
@@ -1395,7 +1533,24 @@ function appendToolUIHistory(
   item: ToolUIHistoryItem,
 ): ToolUIHistoryItem[] {
   const history = readToolUIHistory(sessionId);
-  if (history.some((candidate) => candidate.id === item.id)) {
+  const existingIndex = history.findIndex(
+    (candidate) => candidate.id === item.id,
+  );
+  if (existingIndex !== -1) {
+    const existing = history[existingIndex]!;
+    item.anchorMessageIndex = Math.min(
+      item.anchorMessageIndex,
+      existing.anchorMessageIndex,
+    );
+    history[existingIndex] = item;
+    try {
+      localStorage.setItem(
+        `${TOOL_UI_HISTORY_PREFIX}${sessionId}`,
+        JSON.stringify(history),
+      );
+    } catch {
+      // Keep the in-memory update even when persistence is unavailable.
+    }
     return history;
   }
   const callHistory = history.filter(
@@ -1516,63 +1671,19 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
 
   const embeddedToolItemIds = new Set<string>();
   const messageElements = snapshot.messages.map((message, messageIndex) => {
-    const row = document.createElement("article");
-    row.className = `message-row message-row-${message.role}`;
-    row.setAttribute("aria-label", messageRoleLabel(message.role));
-
-    const body = document.createElement("div");
-    body.className = `message message-${message.role}`;
-    body.dataset.final = String(message.final);
-
-    const embeddable = message.role === "assistant"
-      ? timelineItems.filter(
-          (item) =>
-            item.anchorMessageIndex === messageIndex &&
-            typeof item.event.textOffset === "number",
-        )
-      : [];
-    if (embeddable.length > 0) {
-      const group = document.createElement("div");
-      group.className = "message-content-group";
-      const ordered = [...embeddable].sort(
-        (left, right) =>
-          (left.event.textOffset ?? 0) - (right.event.textOffset ?? 0) ||
-          left.order - right.order,
-      );
-      let cursor = 0;
-      for (const item of ordered) {
-        const offset = clampMessageOffset(
-          item.event.textOffset ?? 0,
-          message.content.length,
-        );
-        if (offset > cursor) {
-          group.append(
-            createMessageContentSpan(
-              message.content.slice(cursor, offset),
-            ),
-          );
-          cursor = offset;
-        }
-        group.append(getOrCreateToolUIRow(item).element);
-        embeddedToolItemIds.add(item.id);
-      }
-      if (cursor < message.content.length) {
-        group.append(
-          createMessageContentSpan(message.content.slice(cursor)),
-        );
-      }
-      body.append(group);
-    } else {
-      body.append(createMessageContentSpan(message.content));
+    let state = messageRowStates.get(message.id);
+    if (state === undefined) {
+      state = createMessageRowState(message);
+      messageRowStates.set(message.id, state);
     }
-    row.append(body);
-    if (message.role === "assistant" && message.content.length > 0) {
-      const actions = document.createElement("div");
-      actions.className = "message-actions";
-      actions.append(createMessageCopyButton(message.id, message.content));
-      row.append(actions);
-    }
-    return row;
+    updateMessageRowState(
+      state,
+      message,
+      timelineItems,
+      messageIndex,
+      embeddedToolItemIds,
+    );
+    return state.row;
   });
 
   const timelineElements: HTMLElement[] = [];
@@ -1591,7 +1702,10 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   }
 
   reconcileStableChildren(elements.messages, timelineElements);
-  if (timelineElements.length > 0) {
+  if (
+    timelineElements.length > 0 &&
+    isScrolledNearBottom(elements.messages)
+  ) {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
   renderLiveToolPanel();
@@ -1602,6 +1716,22 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   if (shouldRefreshSessions) {
     scheduleChatSessionsRefresh();
   }
+}
+
+/**
+ * Returns whether a scroll container is at or near its bottom edge.
+ *
+ * Renders happen frequently while tools stream status updates. Auto-scrolling
+ * only when the user is already near the bottom prevents the chat from yanking
+ * the viewport down while they scroll up through earlier messages.
+ *
+ * @param container Scrollable messages container.
+ * @returns Whether the container is within the auto-scroll threshold.
+ */
+function isScrolledNearBottom(container: HTMLElement): boolean {
+  return (
+    container.scrollHeight - container.scrollTop - container.clientHeight < 64
+  );
 }
 
 /**
@@ -1629,6 +1759,170 @@ function clampMessageOffset(offset: number, length: number): number {
     return 0;
   }
   return Math.max(0, Math.min(length, Math.trunc(offset)));
+}
+
+/**
+ * Returns whether one character ends a spoken sentence.
+ *
+ * @param character Candidate sentence-terminating character.
+ * @returns Whether the character is a sentence boundary.
+ */
+function isSentenceBoundary(character: string): boolean {
+  return "。！？；!?;\n".includes(character);
+}
+
+/**
+ * Advances a tool-call offset to the end of the sentence containing it.
+ *
+ * Assistant text streams while a tool call is already emitted, so the exact
+ * recorded offset often lands mid-sentence. Rendering the tool card after the
+ * sentence keeps the chat readable: the acknowledgment is shown first, then
+ * the tool card, then the tool result.
+ *
+ * @param offset Recorded character offset inside the message.
+ * @param text Complete assistant message content.
+ * @returns Offset moved past the sentence boundary, when one exists.
+ */
+function advanceToSentenceBoundary(offset: number, text: string): number {
+  if (offset >= text.length) {
+    return text.length;
+  }
+  if (offset > 0 && isSentenceBoundary(text[offset - 1]!)) {
+    return offset;
+  }
+  let index = offset;
+  while (index < text.length) {
+    if (isSentenceBoundary(text[index]!)) {
+      return index + 1;
+    }
+    index += 1;
+  }
+  return text.length;
+}
+
+function createMessageRowState(message: DesktopMessage): MessageRowState {
+  const row = document.createElement("article");
+  row.className = `message-row message-row-${message.role}`;
+  row.setAttribute("aria-label", messageRoleLabel(message.role));
+
+  const body = document.createElement("div");
+  body.className = `message message-${message.role}`;
+
+  const contentHost = document.createElement("div");
+  contentHost.className = "message-content-group";
+
+  body.append(contentHost);
+  row.append(body);
+  return { row, body, contentHost, spans: [], actions: null };
+}
+
+function updateMessageRowState(
+  state: MessageRowState,
+  message: DesktopMessage,
+  timelineItems: ToolUITimelineItem[],
+  messageIndex: number,
+  embeddedToolItemIds: Set<string>,
+): void {
+  state.body.dataset.final = String(message.final);
+
+  const embeddable = message.role === "assistant"
+    ? timelineItems.filter(
+        (item): item is ToolUIHistoryItem =>
+          item.kind === "history" &&
+          item.anchorMessageIndex === messageIndex &&
+          typeof item.event.textOffset === "number",
+      )
+    : [];
+  const desiredParts: MessageContentPart[] = [];
+  if (embeddable.length > 0) {
+    const ordered = [...embeddable].sort(
+      (left, right) =>
+        (left.event.textOffset ?? 0) - (right.event.textOffset ?? 0) ||
+        left.order - right.order,
+    );
+    let cursor = 0;
+    for (const item of ordered) {
+      const offset = advanceToSentenceBoundary(
+        clampMessageOffset(
+          item.event.textOffset ?? 0,
+          message.content.length,
+        ),
+        message.content,
+      );
+      if (offset > cursor) {
+        desiredParts.push({
+          kind: "text",
+          text: message.content.slice(cursor, offset),
+        });
+        cursor = offset;
+      }
+      desiredParts.push({
+        kind: "tool",
+        id: item.id,
+        element: getOrCreateToolUIRow(item).element,
+      });
+      embeddedToolItemIds.add(item.id);
+    }
+    if (cursor < message.content.length) {
+      desiredParts.push({ kind: "text", text: message.content.slice(cursor) });
+    }
+  } else {
+    desiredParts.push({ kind: "text", text: message.content });
+  }
+  reconcileMessageContent(state, desiredParts);
+
+  if (message.role === "assistant" && message.content.length > 0) {
+    if (state.actions === null) {
+      state.actions = document.createElement("div");
+      state.actions.className = "message-actions";
+      state.row.append(state.actions);
+    }
+    state.actions.replaceChildren(
+      createMessageCopyButton(message.id, message.content),
+    );
+  } else if (state.actions !== null) {
+    state.actions.remove();
+    state.actions = null;
+  }
+}
+
+function reconcileMessageContent(
+  state: MessageRowState,
+  desiredParts: MessageContentPart[],
+): void {
+  const host = state.contentHost;
+  const remainingSpans = state.spans.slice();
+  const desiredElements: HTMLElement[] = [];
+  for (const part of desiredParts) {
+    if (part.kind === "text") {
+      const span = remainingSpans.shift() ?? createMessageContentSpan("");
+      span.textContent = part.text;
+      desiredElements.push(span);
+    } else {
+      desiredElements.push(part.element);
+    }
+  }
+  const usedSpans = desiredElements.filter(
+    (element): element is HTMLSpanElement =>
+      element.classList.contains("message-content"),
+  );
+  for (const span of remainingSpans) {
+    span.remove();
+  }
+  state.spans = usedSpans;
+
+  const desired = new Set(desiredElements);
+  for (const child of [...host.children]) {
+    if (!desired.has(child as HTMLElement)) {
+      child.remove();
+    }
+  }
+  for (const [index, element] of desiredElements.entries()) {
+    const current = host.children.item(index);
+    if (current !== element) {
+      host.insertBefore(element, current);
+    }
+  }
 }
 
 function createMessageActionIcon(kind: "copy" | "check"): SVGSVGElement {
@@ -2079,6 +2373,7 @@ async function discoverBackend(
 
   try {
     const connection = await getNativeBackendConnection();
+    backendConnection = connection;
     const nextAdapter = new XtalkClientAdapter(connection);
     const nextToolUIAdapter = new ToolUIAdapter(connection);
     toolUIAdapter = nextToolUIAdapter;
@@ -2645,6 +2940,17 @@ elements.credentialCancelButton.addEventListener("click", () => {
 elements.credentialDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   cancelCredentialDialog();
+});
+elements.deleteSessionForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void deletePendingSession();
+});
+elements.deleteSessionCancelButton.addEventListener("click", () => {
+  cancelDeleteSessionDialog();
+});
+elements.deleteSessionDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelDeleteSessionDialog();
 });
 elements.applyToolChangesButton.addEventListener("click", () => {
   void applyToolChanges();

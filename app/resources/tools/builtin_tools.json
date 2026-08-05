@@ -18,6 +18,12 @@
       "enabled_by_default": true
     },
     {
+      "id": "whiteboard",
+      "path": "whiteboard",
+      "enabled_by_default": true,
+      "can_disable": true
+    },
+    {
       "id": "codex",
       "path": "codex",
       "enabled_by_default": false
