@@ -656,6 +656,39 @@
           </div>
         </form>
       </dialog>
+
+      <dialog
+        id="delete-session-dialog"
+        class="settings-dialog"
+        aria-labelledby="delete-session-dialog-title"
+      >
+        <form id="delete-session-form" class="settings-dialog-card">
+          <header>
+            <h2 id="delete-session-dialog-title" data-i18n="sidebar.deleteTitle">
+              删除聊天
+            </h2>
+            <p id="delete-session-dialog-body"></p>
+          </header>
+          <div class="settings-dialog-actions">
+            <button
+              id="delete-session-cancel-button"
+              class="settings-dialog-button"
+              type="button"
+              data-i18n="sidebar.cancel"
+            >
+              取消
+            </button>
+            <button
+              id="delete-session-confirm-button"
+              class="settings-dialog-button settings-dialog-button-danger"
+              type="submit"
+              data-i18n="sidebar.delete"
+            >
+              删除
+            </button>
+          </div>
+        </form>
+      </dialog>
     </div>
 
     <script type="module" src="/main.ts"></script>

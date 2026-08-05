@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from .desktop_tool_bridge import DesktopToolCallBridge
 MAX_TOOL_UI_FRAME_BYTES = 2 * 1024 * 1024
 MAX_TOOL_UI_FRAME_TICKETS = 400
 MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS = 200
+MAX_TOOL_UI_EMIT_PAYLOAD_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -215,6 +217,7 @@ class ToolUIBroker:
         status: str,
         running: bool,
         outcome: Literal["running", "complete", "cancelled"] | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         """Publish one immutable tool emit observation.
 
@@ -235,6 +238,9 @@ class ToolUIBroker:
         outcome : {"running", "complete", "cancelled"} | None, optional
             Explicit lifecycle outcome. When omitted, it is derived from
             ``running`` for compatibility with existing callers.
+        payload : dict[str, Any] | None, optional
+            Optional structured content emitted by the tool. Payloads that
+            exceed the emit size limit are dropped while ``message`` is kept.
 
         Raises
         ------
@@ -264,7 +270,7 @@ class ToolUIBroker:
                 )
                 if offset is not None:
                     self._call_offsets[call_id] = offset
-        payload = payload_base | {
+        event: dict[str, Any] = payload_base | {
             "sequence": sequence,
             "message": str(message),
             "status": str(status),
@@ -272,10 +278,14 @@ class ToolUIBroker:
             "outcome": resolved_outcome,
             "emittedAt": _utc_now(),
         }
+        if payload is not None:
+            bounded_payload = _bounded_payload(payload)
+            if bounded_payload is not None:
+                event["payload"] = bounded_payload
         if self._call_offsets.get(call_id) is not None:
-            payload["textOffset"] = self._call_offsets[call_id]
-        self._retain_history_payload(payload)
-        await self._broadcast(payload)
+            event["textOffset"] = self._call_offsets[call_id]
+        self._retain_history_payload(event)
+        await self._broadcast(event)
         if not running:
             self.finish_call(call_id)
 
@@ -499,6 +509,7 @@ def _wrap_async_tool(
             message=result.content,
             status=status,
             running=True,
+            payload=_structured_payload(original, result.content),
         )
         return result
 
@@ -576,6 +587,7 @@ def _wrap_async_tool(
                     message=message,
                     status=status,
                     running=running,
+                    payload=_structured_payload(original, message),
                 )
                 yield result
                 if isinstance(result, Finished):
@@ -676,6 +688,63 @@ async def _safe_status(
         )
     except Exception as exc:
         return f"Status unavailable ({type(exc).__name__})"
+
+
+def _structured_payload(
+    original: type[AsyncTool],
+    message: str,
+) -> dict[str, Any] | None:
+    """Return one tool's structured emit payload when it declares one.
+
+    Parameters
+    ----------
+    original : type[AsyncTool]
+        Unwrapped tool class whose structured-content declaration is read.
+    message : str
+        Emit message produced by the tool.
+
+    Returns
+    -------
+    dict[str, Any] | None
+        Parsed JSON object payload, or ``None`` when the tool does not
+        declare structured content or the message is not a JSON object.
+    """
+
+    if not getattr(original, "structured_payload", False):
+        return None
+    try:
+        decoded = json.loads(message)
+    except (TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _bounded_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a payload that fits the emit limit, otherwise drop it.
+
+    Parameters
+    ----------
+    payload : dict[str, Any]
+        Structured tool emit payload.
+
+    Returns
+    -------
+    dict[str, Any] | None
+        The bounded payload, or ``None`` when it exceeds the size limit or
+        cannot be serialized.
+    """
+
+    try:
+        encoded = json.dumps(
+            payload,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    if len(encoded) > MAX_TOOL_UI_EMIT_PAYLOAD_BYTES:
+        return None
+    return payload
 
 
 def _utc_now() -> str:

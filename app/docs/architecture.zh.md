@@ -85,6 +85,17 @@ app 通过公共 runtime builder 注册已启用的内置与用户工具。随�
 更新都会唤醒普通的 Agent 异步报告循环；用户仍在说话时则忽略中间进度，仅延后最终
 更新，与默认 Agent 完全一致。工具 UI 仍通过独立观察通道显示这些更新。
 
+### 白板工具链路
+
+随包 `whiteboard` 工具复用同一条只读 Tool UI 观察通道承载结构化内容。
+`whiteboard_update` 是一个 `AsyncTool`，其结果消息就是完整规范化板面快照
+JSON。`backend/tool_ui.py` 中的包装器在工具声明 `structured_payload = True`
+时把该 JSON 解析为 `tool_ui.emit` 事件上的可选 `payload` 字段；超限 payload
+会被丢弃，而人类可读的 message 保留。沙箱白板 frame 渲染 `event.payload`
+（并回退解析 message），因此每次 emit、历史回放或实时更新都会重绘同一板面。
+板面快照保存在会话工具引擎状态中，后续调用可基于此前调用发出的便签增量执行
+add/update/remove/clear 操作；跨 sidecar 重启的持久化属于后续阶段。
+
 文本输入要求已有活动的 XTalk Session。公共 SDK 的 `open()` 仍会初始化麦克风采集，
 因此即使随后只输入文字，启动 Session 也需要麦克风权限。
 

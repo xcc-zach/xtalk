@@ -222,7 +222,6 @@ summary,
 }
 
 .new-chat-button:hover:not(:disabled),
-.chat-session-button:hover:not(:disabled),
 .new-chat-button.is-active,
 .chat-session-button.is-active {
   background: var(--surface-muted);
@@ -287,6 +286,60 @@ summary,
 
 .chat-session-list-status:empty {
   display: none;
+}
+
+.chat-session-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  border-radius: 11px;
+}
+
+.chat-session-row:hover,
+.chat-session-row:focus-within,
+.chat-session-row.is-active {
+  background: var(--surface-muted);
+}
+
+.chat-session-row .chat-session-button {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-session-delete {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin-right: 7px;
+  padding: 0;
+  place-items: center;
+  flex: 0 0 auto;
+  cursor: pointer;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: transparent;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease,
+    color 120ms ease;
+}
+
+.chat-session-row:hover .chat-session-delete,
+.chat-session-row:focus-within .chat-session-delete,
+.chat-session-delete:focus-visible {
+  opacity: 1;
+}
+
+.chat-session-delete:hover:not(:disabled),
+.chat-session-delete:focus-visible {
+  color: #e5484d;
+  background: rgb(229 72 77 / 12%);
+}
+
+.chat-session-delete svg {
+  width: 16px;
+  height: 16px;
 }
 
 .sidebar-backdrop {
@@ -822,7 +875,7 @@ summary,
   font-size: 13px;
 }
 
-.message[data-final="false"]::after {
+.message[data-final="false"] .message-content:last-of-type::after {
   display: inline-block;
   width: 4px;
   height: 1em;
@@ -1969,6 +2022,16 @@ summary,
 .settings-dialog-button-primary:hover:not(:disabled) {
   filter: brightness(1.08);
   background: var(--primary);
+}
+
+.settings-dialog-button-danger {
+  color: #fff;
+  background: #e5484d;
+}
+
+.settings-dialog-button-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: #e5484d;
 }
 
 .toast-region {

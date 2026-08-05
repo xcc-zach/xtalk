@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from xtalk.models.agents.tools import (
 )
 
 from backend.tool_ui import (
+    MAX_TOOL_UI_EMIT_PAYLOAD_BYTES,
     MAX_TOOL_UI_FRAME_TICKETS,
     ToolUIBinding,
     ToolUIBroker,
@@ -139,6 +141,109 @@ class _CancelledTool(AsyncTool):
 
         del cls, tool_input, tool_state, global_state
         return "Tool stopped"
+
+
+class _StructuredTool(AsyncTool):
+    """Asynchronous tool that emits JSON content and declares payloads."""
+
+    name = "structured"
+    structured_payload = True
+
+    @classmethod
+    def emit_initial(
+        cls,
+        tool_call_id: str,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> Running:
+        """Return the first JSON snapshot containing the call id."""
+
+        del cls, tool_input, tool_state, global_state
+        return Running(
+            json.dumps(
+                {
+                    "kind": "board",
+                    "call_id": tool_call_id,
+                    "revision": 1,
+                }
+            )
+        )
+
+    @classmethod
+    def emit_updates(
+        cls,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> Iterator[ToolResult[_Output]]:
+        """Yield one running and one finished JSON snapshot."""
+
+        del cls, tool_input, global_state
+        yield Running(
+            json.dumps(
+                {
+                    "kind": "board",
+                    "call_id": tool_state.call_id,
+                    "revision": 2,
+                }
+            )
+        )
+        yield Finished(
+            _Output(
+                value=json.dumps(
+                    {
+                        "kind": "board",
+                        "call_id": tool_state.call_id,
+                        "revision": 3,
+                    }
+                )
+            )
+        )
+
+    @classmethod
+    def status(
+        cls,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> str:
+        """Return a deterministic status string."""
+
+        del cls, tool_input, global_state
+        return f"revision={tool_state.progress}"
+
+
+class _MalformedStructuredTool(AsyncTool):
+    """Structured-declaring tool whose content is not valid JSON."""
+
+    name = "malformed_structured"
+    structured_payload = True
+
+    @classmethod
+    def emit_initial(
+        cls,
+        tool_call_id: str,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> Running:
+        """Return plain text that contains the required call id."""
+
+        del cls, tool_input, tool_state, global_state
+        return Running(f"Working on {tool_call_id}")
+
+    @classmethod
+    def emit_updates(
+        cls,
+        tool_input: _Input,
+        tool_state: _State,
+        global_state: Any,
+    ) -> Iterator[ToolResult[_Output]]:
+        """Yield one finished plain-text result."""
+
+        del cls, tool_input, tool_state, global_state
+        yield Finished(_Output(value="Finished without JSON"))
 
 
 class _RecordingBroker:
@@ -275,6 +380,157 @@ def test_wrapper_publishes_terminal_history_emit_when_cancelled() -> None:
         "running": False,
         "outcome": "cancelled",
     }
+
+
+def test_wrapper_attaches_structured_payload_when_declared() -> None:
+    """Expose parsed JSON content as a structured emit payload."""
+
+    async def scenario() -> _RecordingBroker:
+        broker = _RecordingBroker()
+        wrapped = wrap_tools_with_ui(
+            [_StructuredTool],
+            binding=ToolUIBinding(
+                tool_id="tool-structured",
+                update_every_s=-1,
+            ),
+            broker=broker,  # type: ignore[arg-type]
+        )[0]
+        tool_input = _Input(value="input")
+        tool_state = _State(call_id="structured-call")
+        await wrapped.aemit_initial(
+            "structured-call",
+            tool_input,
+            tool_state,
+            object(),
+        )
+        async for _ in wrapped.aemit_updates(
+            tool_input,
+            tool_state,
+            object(),
+        ):
+            pass
+        return broker
+
+    broker = asyncio.run(scenario())
+
+    assert [event["payload"] for event in broker.emits] == [
+        {"kind": "board", "call_id": "structured-call", "revision": 1},
+        {"kind": "board", "call_id": "structured-call", "revision": 2},
+        {"kind": "board", "call_id": "structured-call", "revision": 3},
+    ]
+    assert [event["message"] for event in broker.emits] == [
+        json.dumps({"kind": "board", "call_id": "structured-call", "revision": 1}),
+        json.dumps({"kind": "board", "call_id": "structured-call", "revision": 2}),
+        json.dumps({"kind": "board", "call_id": "structured-call", "revision": 3}),
+    ]
+
+
+def test_wrapper_degrades_when_structured_content_is_not_json() -> None:
+    """Keep plain-text emits intact without inventing a payload."""
+
+    async def scenario() -> _RecordingBroker:
+        broker = _RecordingBroker()
+        wrapped = wrap_tools_with_ui(
+            [_MalformedStructuredTool],
+            binding=ToolUIBinding(
+                tool_id="tool-malformed",
+                update_every_s=-1,
+            ),
+            broker=broker,  # type: ignore[arg-type]
+        )[0]
+        tool_input = _Input(value="input")
+        tool_state = _State(call_id="malformed-call")
+        await wrapped.aemit_initial(
+            "malformed-call",
+            tool_input,
+            tool_state,
+            object(),
+        )
+        async for _ in wrapped.aemit_updates(
+            tool_input,
+            tool_state,
+            object(),
+        ):
+            pass
+        return broker
+
+    broker = asyncio.run(scenario())
+
+    assert [event["message"] for event in broker.emits] == [
+        "Working on malformed-call",
+        "Finished without JSON",
+    ]
+    assert all(event.get("payload") is None for event in broker.emits)
+
+
+def test_broker_retains_structured_payload_in_history() -> None:
+    """Replay emits with their structured payloads after reconnects."""
+
+    async def scenario() -> list[dict[str, Any]]:
+        broker = ToolUIBroker()
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:whiteboard",
+                update_every_s=-1,
+            ),
+            tool_name="whiteboard_update",
+            call_id="board-call",
+            message=json.dumps(
+                {
+                    "kind": "board",
+                    "call_id": "board-call",
+                    "revision": 4,
+                }
+            ),
+            status="complete",
+            running=False,
+            payload={
+                "kind": "board",
+                "call_id": "board-call",
+                "revision": 4,
+            },
+        )
+        return await broker.snapshot("session-1")
+
+    events = asyncio.run(scenario())
+
+    assert events[0]["message"] == json.dumps(
+        {
+            "kind": "board",
+            "call_id": "board-call",
+            "revision": 4,
+        }
+    )
+    assert events[0]["payload"] == {
+        "kind": "board",
+        "call_id": "board-call",
+        "revision": 4,
+    }
+
+
+def test_broker_drops_oversized_payload_but_keeps_message() -> None:
+    """Bound structured content without losing the human-readable emit."""
+
+    async def scenario() -> list[dict[str, Any]]:
+        broker = ToolUIBroker()
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:whiteboard",
+                update_every_s=-1,
+            ),
+            tool_name="whiteboard_update",
+            call_id="large-call",
+            message="small message",
+            status="complete",
+            running=False,
+            payload={"blob": "x" * (MAX_TOOL_UI_EMIT_PAYLOAD_BYTES + 1)},
+        )
+        return await broker.snapshot("session-1")
+
+    events = asyncio.run(scenario())
+
+    assert events[0]["message"] == "small message"
+    assert "payload" not in events[0]
 
 
 async def _read_reloadable_frame() -> list[str | None]:
@@ -609,6 +865,109 @@ def test_history_tool_ui_can_embed_inside_assistant_message() -> None:
     assert "Math.max(0, Math.min(length, Math.trunc(offset)))" in clamp
 
 
+def test_tool_card_offsets_advance_to_sentence_boundary() -> None:
+    """Place tool cards after the sentence being spoken when the call fired."""
+
+    app_root = Path(__file__).parents[2]
+    logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+
+    boundary = logic.split(
+        "function advanceToSentenceBoundary(", maxsplit=1
+    )[1].split("function createMessageRowState", maxsplit=1)[0]
+    assert "offset >= text.length" in boundary
+    assert "isSentenceBoundary(text[offset - 1]!)" in boundary
+    assert "return index + 1;" in boundary
+    assert '"。！？；!?;\\n".includes(character)' in logic
+    assert "advanceToSentenceBoundary(" in logic
+
+    styles = (app_root / "ui" / "styles.css").read_text(encoding="utf-8")
+    assert (
+        '.message[data-final="false"] .message-content:last-of-type::after'
+        in styles
+    )
+    assert ".message[data-final=\"false\"]::after" not in styles
+
+
+def test_embedded_tool_rows_stay_mounted_across_renders() -> None:
+    """Reuse message rows so embedded tool iframes are not reloaded."""
+
+    logic = (
+        Path(__file__).parents[2] / "ui" / "main.ts"
+    ).read_text(encoding="utf-8")
+
+    render = logic.split(
+        "function renderSnapshot(", maxsplit=1
+    )[1].split("function createMessageRowState", maxsplit=1)[0]
+    assert "messageRowStates.get(message.id)" in render
+    assert "createMessageRowState(message)" in render
+    assert "updateMessageRowState(" in render
+
+    reconcile = logic.split(
+        "function reconcileMessageContent(", maxsplit=1
+    )[1].split("function createMessageActionIcon", maxsplit=1)[0]
+    assert "span.textContent = part.text" in reconcile
+    assert "host.insertBefore(element, current)" in reconcile
+    assert "getOrCreateToolUIRow(item).element" in logic
+
+    switch = logic.split(
+        "function switchToolUISession(", maxsplit=1
+    )[1].split("function resetToolUIRowsIfLanguageChanged", maxsplit=1)[0]
+    assert "messageRowStates.clear()" in switch
+
+
+def test_chat_auto_scroll_yields_to_user_scroll_position() -> None:
+    """Renders must not yank the viewport down while the user scrolls up."""
+
+    logic = (
+        Path(__file__).parents[2] / "ui" / "main.ts"
+    ).read_text(encoding="utf-8")
+
+    render = logic.split(
+        "function renderSnapshot(", maxsplit=1
+    )[1].split("function createMessageContentSpan", maxsplit=1)[0]
+    assert "isScrolledNearBottom(elements.messages)" in render
+    assert "elements.messages.scrollTop = elements.messages.scrollHeight" in render
+
+    helper = logic.split(
+        "function isScrolledNearBottom(", maxsplit=1
+    )[1].split("/**\n * Creates one plain-text content span", maxsplit=1)[0]
+    assert "scrollHeight - container.scrollTop - container.clientHeight < 64" in helper
+
+
+def test_sidebar_delete_flow_confirms_before_deleting() -> None:
+    """Hover delete buttons ask for confirmation before removing a chat."""
+
+    app_root = Path(__file__).parents[2]
+    logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
+    markup = (app_root / "ui" / "index.html").read_text(encoding="utf-8")
+    styles = (app_root / "ui" / "styles.css").read_text(encoding="utf-8")
+    i18n = (app_root / "ui" / "i18n.ts").read_text(encoding="utf-8")
+
+    render = logic.split(
+        "function renderChatSessions()", maxsplit=1
+    )[1].split("function updateSessionControls", maxsplit=1)[0]
+    assert 'className = "chat-session-row"' in render
+    assert 'row.classList.toggle("is-active"' in render
+    assert 'className = "chat-session-delete"' in render
+    assert "openDeleteSessionDialog(session.id, session.title)" in render
+
+    delete_logic = logic.split(
+        "async function deletePendingSession()", maxsplit=1
+    )[1].split("async function refreshChatSessions", maxsplit=1)[0]
+    assert 'method: "DELETE"' in delete_logic
+    assert "X-XTalk-App-Token" in delete_logic
+    assert "sidebar.deleteConfirm" in logic
+    assert "showModal()" in logic
+    assert "localStorage.removeItem" in delete_logic
+
+    assert 'id="delete-session-dialog"' in markup
+    assert 'id="delete-session-confirm-button"' in markup
+    assert "settings-dialog-button-danger" in markup
+    assert ".chat-session-delete" in styles
+    assert ".chat-session-row.is-active" in styles
+    assert '"sidebar.deleteConfirm"' in i18n
+
+
 def test_tool_ui_capabilities_settle_and_can_recover() -> None:
     """Do not destroy a frame on an intermediate hook-registration report."""
 
@@ -665,6 +1024,34 @@ def test_tool_ui_iframe_loads_only_after_entering_the_document() -> None:
     assert "fallback.replaceWith(frame.element);\n    frame.mount();" in app_logic
 
 
+def test_tool_ui_frame_redelivers_last_event_after_reload() -> None:
+    """A reloaded iframe must not fall back to the tool's initial HTML."""
+
+    frame_logic = (
+        Path(__file__).parents[2] / "ui" / "tool-ui-frame.ts"
+    ).read_text(encoding="utf-8")
+
+    status_logic = frame_logic.split(
+        "status(event: ToolUIStatusEvent): void {",
+        maxsplit=1,
+    )[1].split("emit(event: ToolUIEmitEvent): void {", maxsplit=1)[0]
+    emit_logic = frame_logic.split(
+        "emit(event: ToolUIEmitEvent): void {",
+        maxsplit=1,
+    )[1].split("/** Removes global listeners", maxsplit=1)[0]
+    assert "this.#lastStatus = event" in status_logic
+    assert "this.#lastEmit = event" in emit_logic
+
+    flush_logic = frame_logic.split(
+        "#flush(): void {",
+        maxsplit=1,
+    )[1]
+    assert "this.#lastStatus !== null" in flush_logic
+    assert "this.#lastEmit !== null" in flush_logic
+    assert 'type: "tool_ui.emit"' in flush_logic
+    assert 'type: "tool_ui.status"' in flush_logic
+
+
 def test_tool_ui_frame_measures_content_without_viewport_feedback() -> None:
     """Size history cards to body content instead of the iframe viewport."""
 
@@ -700,19 +1087,26 @@ def test_desktop_adapter_polls_authenticated_tool_ui_snapshots() -> None:
     assert "new WebSocket" not in adapter
 
 
-def test_terminal_history_emit_removes_matching_live_card() -> None:
-    """Do not leave a completed tool pinned in the top live status area."""
+def test_terminal_emit_updates_history_row_in_place() -> None:
+    """Keep one stable row per call so tool iframes never reload on emit."""
 
     app_root = Path(__file__).parents[2]
     logic = (app_root / "ui" / "main.ts").read_text(encoding="utf-8")
     emit_branch = logic.split(
         'if (event.type === "tool_ui.emit") {',
         maxsplit=1,
-    )[1].split("const item:", maxsplit=1)[0]
+    )[1].split("} else if (sessionId === activeToolUISessionId) {", maxsplit=1)[0]
 
     assert "if (!event.running" in emit_branch
     assert "toolUILive.delete(event.callId)" in emit_branch
     assert "removeToolUIRow(`live:${event.callId}`)" in emit_branch
-    assert "historyItem.event.callId === event.callId" in emit_branch
-    assert "removeToolUIRow(historyItem.id)" in emit_branch
-    assert "candidate.event.callId !== item.event.callId" in logic
+    assert "historyItem.event.callId === event.callId" not in emit_branch
+    assert 'id: `history:${event.callId}`' in emit_branch
+    assert "toolUIRows.get(item.id)?.frame?.emit(item.event)" in emit_branch
+
+    append = logic.split(
+        "function appendToolUIHistory(", maxsplit=1
+    )[1].split("function readToolUIHistory", maxsplit=1)[0]
+    assert "existingIndex !== -1" in append
+    assert "item.anchorMessageIndex = Math.min(" in append
+    assert "history[existingIndex] = item" in append

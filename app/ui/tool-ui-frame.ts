@@ -26,8 +26,11 @@ export class ToolUIFrame {
   #loaded = false;
   #pendingStatus: ToolUIStatusEvent | null = null;
   #pendingEmit: ToolUIEmitEvent | null = null;
+  #lastStatus: ToolUIStatusEvent | null = null;
+  #lastEmit: ToolUIEmitEvent | null = null;
   #retryTimer: number | null = null;
   #retryAttempts = 0;
+  readonly #maxHeight: number | undefined;
 
   /**
    * Creates a sandboxed frame from self-contained untrusted HTML.
@@ -37,6 +40,7 @@ export class ToolUIFrame {
    * @param mode Live or immutable history mode.
    * @param title Accessible iframe title.
    * @param onCapabilities Called when the UI registers display hooks.
+   * @param maxHeight Optional per-frame height cap replacing the mode default.
    */
   constructor(
     frameUrl: string,
@@ -44,11 +48,13 @@ export class ToolUIFrame {
     mode: ToolUIFrameMode,
     title: string,
     onCapabilities: (capabilities: ToolUICapabilities) => void,
+    maxHeight: number | undefined = undefined,
   ) {
     this.#frameUrl = frameUrl;
     this.#channelId = channelId;
     this.#mode = mode;
     this.#onCapabilities = onCapabilities;
+    this.#maxHeight = maxHeight;
     this.element = document.createElement("iframe");
     this.element.className = "tool-ui-frame";
     this.element.title = title;
@@ -73,6 +79,7 @@ export class ToolUIFrame {
    */
   status(event: ToolUIStatusEvent): void {
     this.#pendingStatus = event;
+    this.#lastStatus = event;
     this.#retryAttempts = 0;
     this.#flush();
   }
@@ -81,9 +88,12 @@ export class ToolUIFrame {
    * Delivers one immutable emit to a history UI.
    *
    * @param event Validated emit event.
+   * Tools that declare structured content can read it from
+   * `event.payload`; the raw JSON text remains available in `event.message`.
    */
   emit(event: ToolUIEmitEvent): void {
     this.#pendingEmit = event;
+    this.#lastEmit = event;
     this.#retryAttempts = 0;
     this.#flush();
   }
@@ -163,6 +173,15 @@ export class ToolUIFrame {
         },
         "*",
       );
+    } else if (this.#lastStatus !== null) {
+      this.element.contentWindow.postMessage(
+        {
+          channelId: this.#channelId,
+          type: "tool_ui.status",
+          event: this.#lastStatus,
+        },
+        "*",
+      );
     }
     if (this.#pendingEmit !== null) {
       this.element.contentWindow.postMessage(
@@ -170,6 +189,15 @@ export class ToolUIFrame {
           channelId: this.#channelId,
           type: "tool_ui.emit",
           event: this.#pendingEmit,
+        },
+        "*",
+      );
+    } else if (this.#lastEmit !== null) {
+      this.element.contentWindow.postMessage(
+        {
+          channelId: this.#channelId,
+          type: "tool_ui.emit",
+          event: this.#lastEmit,
         },
         "*",
       );
@@ -189,7 +217,8 @@ export class ToolUIFrame {
 
   #applyHeight(requestedHeight: number): void {
     const minimum = this.#mode === "live" ? 120 : 80;
-    const configuredMaximum = this.#mode === "live" ? 420 : 600;
+    const configuredMaximum =
+      this.#maxHeight ?? (this.#mode === "live" ? 420 : 600);
     const maximum = Math.min(
       configuredMaximum,
       Math.max(minimum, window.innerHeight * 0.6),
