@@ -22,10 +22,11 @@ from urllib.request import Request, urlopen
 import pytest
 import websockets
 
+from config_path import require_test_config_path, resolve_test_config_path
+
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = APP_ROOT.parent
-SAMPLE_CONFIG = REPOSITORY_ROOT / "server_configs" / "sample.json"
 VAD_MODEL = Path(
     os.environ.get(
         "XTALK_TEST_VAD_MODEL_PATH",
@@ -170,7 +171,7 @@ def _redaction_values(launch_token: str) -> set[str]:
             sensitive_values.add(value)
 
     try:
-        collect(json.loads(SAMPLE_CONFIG.read_text(encoding="utf-8")))
+        collect(json.loads(resolve_test_config_path().read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         pass
     collect(dict(os.environ))
@@ -327,8 +328,9 @@ def _start_sidecar(
     tmp_path: Path,
     *,
     launch_token: str,
+    config_path: Path,
 ) -> tuple[subprocess.Popen[str], str, _DiagnosticCapture]:
-    """Launch the sidecar with the sample models and return its loopback origin.
+    """Launch the sidecar with the given models and return its loopback origin.
 
     Parameters
     ----------
@@ -336,6 +338,8 @@ def _start_sidecar(
         Per-test writable data directory.
     launch_token : str
         Random per-process app authentication token.
+    config_path : pathlib.Path
+        Existing model configuration file to launch with.
 
     Returns
     -------
@@ -364,7 +368,7 @@ def _start_sidecar(
     launch = {
         "protocol_version": 1,
         "token": launch_token,
-        "config_path": str(SAMPLE_CONFIG),
+        "config_path": str(config_path),
         "data_dir": str(tmp_path),
         "origins": ["tauri://localhost"],
         "config_fallbacks": {
@@ -916,13 +920,13 @@ def test_text_message_invokes_timer_and_completes_conversation(
         pytest.skip(
             "set XTALK_RUN_MODEL_TESTS=1 to run the configured conversation"
         )
-    if not SAMPLE_CONFIG.is_file():
-        raise AssertionError("repository sample model configuration is missing")
+    config_path = require_test_config_path()
 
     launch_token = secrets.token_urlsafe(32)
     process, origin, diagnostics = _start_sidecar(
         tmp_path,
         launch_token=launch_token,
+        config_path=config_path,
     )
     shutdown_requested = False
     try:
@@ -985,7 +989,8 @@ def test_voice_audio_produces_asr_text_and_assistant_response(
         pytest.skip(
             "set XTALK_RUN_MODEL_TESTS=1 to run the configured conversation"
         )
-    for required_path in (SAMPLE_CONFIG, VAD_MODEL, VOICE_FIXTURE):
+    config_path = require_test_config_path()
+    for required_path in (VAD_MODEL, VOICE_FIXTURE):
         if not required_path.is_file():
             raise AssertionError(
                 f"required voice input is missing: {required_path.name}"
@@ -995,6 +1000,7 @@ def test_voice_audio_produces_asr_text_and_assistant_response(
     process, origin, diagnostics = _start_sidecar(
         tmp_path,
         launch_token=launch_token,
+        config_path=config_path,
     )
     shutdown_requested = False
     try:

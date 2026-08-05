@@ -129,6 +129,19 @@ def test_tauri_release_build_is_wired_to_repository_sources() -> None:
     assert tauri["build"]["beforeBuildCommand"] == "npm run build:source"
 
 
+def test_macos_local_build_entrypoint_checks_prerequisites() -> None:
+    """Require prerequisite validation before the packaging entrypoint."""
+
+    entrypoint = APP_ROOT / "scripts" / "build_macos_local.sh"
+    logic = entrypoint.read_text(encoding="utf-8")
+
+    assert logic.startswith("#!/usr/bin/env bash")
+    assert "--check-only" in logic
+    assert "npm run package:macos:local" in logic
+    assert "Toolchain components are never installed automatically" in logic
+    assert entrypoint.stat().st_mode & 0o111
+
+
 def test_distribution_packaging_requires_external_apple_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

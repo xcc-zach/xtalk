@@ -1,8 +1,9 @@
 //! Cross-platform system credential storage and sidecar environment binding.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     env,
+    sync::{Mutex, OnceLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,83 @@ trait CredentialStore: Send + Sync + 'static {
     fn delete(&self, credential_id: &str) -> Result<(), CredentialError>;
 }
 
+/// Process-local cache that limits each credential to one system store read.
+///
+/// macOS authorizes keychain access per application signature and prompts the
+/// user the first time a build reads an item. Several desktop flows look up
+/// the same credential during one launch (settings refresh, sidecar
+/// environment injection, tool enable checks), so reads are cached to prompt
+/// at most once per credential per process instead of once per lookup.
+struct CredentialValueCache {
+    values: Mutex<HashMap<String, Option<String>>>,
+}
+
+impl CredentialValueCache {
+    /// Create an empty process-local credential cache.
+    fn new() -> Self {
+        Self {
+            values: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Return the cached value, or ``None`` when the credential was not read yet.
+    fn get(&self, credential_id: &str) -> Option<Option<String>> {
+        self.values
+            .lock()
+            .expect("credential cache poisoned")
+            .get(credential_id)
+            .cloned()
+    }
+
+    /// Store one credential value, or ``None`` after a denied or failed read.
+    fn set(&self, credential_id: &str, value: Option<String>) {
+        self.values
+            .lock()
+            .expect("credential cache poisoned")
+            .insert(credential_id.to_owned(), value);
+    }
+
+    /// Drop one cached credential after it is deleted.
+    fn remove(&self, credential_id: &str) {
+        self.values
+            .lock()
+            .expect("credential cache poisoned")
+            .remove(credential_id);
+    }
+}
+
+static SYSTEM_CREDENTIAL_CACHE: OnceLock<CredentialValueCache> = OnceLock::new();
+
+fn system_credential_cache() -> &'static CredentialValueCache {
+    SYSTEM_CREDENTIAL_CACHE.get_or_init(CredentialValueCache::new)
+}
+
+/// Record one system credential read for local keychain-prompt debugging.
+///
+/// Enabled only when ``XTALK_DEBUG_CREDENTIALS`` is set so production builds
+/// stay silent. Writes one line per lookup to ``~/xtalk-credential-debug.log``.
+fn log_credential_read(credential_id: &str, cache_hit: bool) {
+    if std::env::var_os("XTALK_DEBUG_CREDENTIALS").is_none() {
+        return;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_owned());
+    let path = std::path::Path::new(&home).join("xtalk-credential-debug.log");
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            file,
+            "read credential_id={} cache_hit={} at={:?}",
+            credential_id,
+            cache_hit,
+            std::time::SystemTime::now()
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SystemCredentialStore;
 
@@ -122,23 +200,39 @@ impl SystemCredentialStore {
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 impl CredentialStore for SystemCredentialStore {
     fn read(&self, credential_id: &str) -> Result<Option<String>, CredentialError> {
-        match Self::entry(credential_id)?.get_password() {
+        let cached = system_credential_cache().get(credential_id);
+        log_credential_read(credential_id, cached.is_some());
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+
+        let result = match Self::entry(credential_id)?.get_password() {
             Ok(secret) if secret.trim().is_empty() => Ok(None),
             Ok(secret) => Ok(Some(secret)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(CredentialError::StoreUnavailable),
+        };
+        match &result {
+            Ok(secret) => system_credential_cache().set(credential_id, secret.clone()),
+            Err(_) => system_credential_cache().set(credential_id, None),
         }
+        result
     }
 
     fn save(&self, credential_id: &str, secret: &str) -> Result<(), CredentialError> {
         Self::entry(credential_id)?
             .set_password(secret)
-            .map_err(|_| CredentialError::StoreUnavailable)
+            .map_err(|_| CredentialError::StoreUnavailable)?;
+        system_credential_cache().set(credential_id, Some(secret.to_owned()));
+        Ok(())
     }
 
     fn delete(&self, credential_id: &str) -> Result<(), CredentialError> {
         match Self::entry(credential_id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                system_credential_cache().remove(credential_id);
+                Ok(())
+            }
             Err(_) => Err(CredentialError::StoreUnavailable),
         }
     }
@@ -443,7 +537,7 @@ mod tests {
     use super::{
         list_credentials_with, normalize_secret, validate_registry, CredentialBinding,
         CredentialDefinition, CredentialDisplayName, CredentialError, CredentialRegistry,
-        CredentialSource, CredentialStore,
+        CredentialSource, CredentialStore, CredentialValueCache,
     };
 
     #[derive(Default)]
@@ -546,5 +640,21 @@ mod tests {
             validate_registry(&invalid),
             Err(CredentialError::InvalidRegistry)
         ));
+    }
+
+    #[test]
+    fn credential_cache_serves_one_value_per_credential() {
+        let cache = CredentialValueCache::new();
+
+        assert_eq!(cache.get("serper"), None);
+
+        cache.set("serper", Some("secret".to_owned()));
+        assert_eq!(cache.get("serper"), Some(Some("secret".to_owned())));
+
+        cache.set("serper", None);
+        assert_eq!(cache.get("serper"), Some(None));
+
+        cache.remove("serper");
+        assert_eq!(cache.get("serper"), None);
     }
 }

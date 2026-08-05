@@ -1,114 +1,149 @@
-"""Tests for desktop-only conversation completion semantics."""
+"""Tests for desktop XTalk runtime composition."""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
-from backend.desktop_service import (
-    DesktopService,
-    DesktopTTSPlaybackManager,
-)
-from xtalk.serving.event_bus import EventBus
-from xtalk.serving.events import TTSPlaybackFinished
-from xtalk.serving.modules.tts_playback_manager import TTSPlaybackManager
-from xtalk.serving.service import DefaultService
+import pytest
+
+from backend.desktop_service import DesktopXtalk
 
 
-def _manager() -> DesktopTTSPlaybackManager:
-    """Create a desktop playback manager with no external models."""
+def test_desktop_runtime_builds_standard_default_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Reuse the generic XTalk service pipeline instead of desktop overrides."""
 
-    return DesktopTTSPlaybackManager(
-        event_bus=EventBus(),
-        session_id="desktop-test-session",
-        config={},
+    recorded: dict[str, Any] = {}
+
+    class FakeDefaultService:
+        """Record construction arguments like the standard service."""
+
+        def __init__(
+            self,
+            *,
+            models: Any,
+            service_config: dict[str, Any],
+        ) -> None:
+            """Store the service construction inputs."""
+
+            recorded["models"] = models
+            recorded["service_config"] = service_config
+            self.models = models
+            self.service_config = service_config
+
+    monkeypatch.setattr(
+        DesktopXtalk,
+        "create_models_from_config",
+        classmethod(lambda cls, **kwargs: object()),
+    )
+    monkeypatch.setattr(
+        "backend.desktop_service.DesktopService",
+        FakeDefaultService,
     )
 
+    config = {
+        "service_config": {
+            "data_dir": str(tmp_path),
+            "enable_persistence": False,
+        }
+    }
+    runtime = DesktopXtalk._build_from_config_dict(config)
 
-def _capture_commits(
-    manager: DesktopTTSPlaybackManager,
-) -> tuple[list[str], Callable[[str], Awaitable[None]]]:
-    """Replace response publication with an in-memory recorder.
-
-    Parameters
-    ----------
-    manager : DesktopTTSPlaybackManager
-        Manager whose commit method is replaced by the caller.
-
-    Returns
-    -------
-    tuple[list[str], Callable[[str], Awaitable[None]]]
-        Mutable commit log and compatible asynchronous recorder.
-    """
-
-    committed: list[str] = []
-
-    async def record(text: str) -> None:
-        """Record one response text without publishing an event."""
-
-        committed.append(text)
-
-    manager._commit_playback_text = record  # type: ignore[method-assign]
-    return committed, record
+    assert isinstance(runtime, DesktopXtalk)
+    assert recorded["service_config"] == config["service_config"]
 
 
-def test_normal_completion_commits_full_generated_text() -> None:
-    """Promote the complete LLM turn after all desktop audio has played."""
+def test_desktop_runtime_honors_max_connections(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Forward the optional session limit into the built runtime."""
 
-    manager = _manager()
-    manager._received_audio = True
-    manager._reported_text = "正在为您查 今天是2026年8月4日，国内方"
-    manager._pending_text = (
-        "正在为您查。今天是2026年8月4日，主要有这些新闻。"
-        "国际方面有新的进展，国内方面也有多项更新。"
+    class FakeDefaultService:
+        """Record construction arguments like the standard service."""
+
+        def __init__(
+            self,
+            *,
+            models: Any,
+            service_config: dict[str, Any],
+        ) -> None:
+            """Store the service construction inputs."""
+
+            self.models = models
+            self.service_config = service_config
+
+    monkeypatch.setattr(
+        DesktopXtalk,
+        "create_models_from_config",
+        classmethod(lambda cls, **kwargs: object()),
     )
-    committed, _ = _capture_commits(manager)
-
-    asyncio.run(
-        manager._publish_response_finish(
-            TTSPlaybackFinished(session_id=manager.session_id)
-        )
+    monkeypatch.setattr(
+        "backend.desktop_service.DesktopService",
+        FakeDefaultService,
     )
 
-    assert committed == [
-        "正在为您查。今天是2026年8月4日，主要有这些新闻。"
-        "国际方面有新的进展，国内方面也有多项更新。"
+    runtime = DesktopXtalk._build_from_config_dict(
+        {
+            "max_connections": 3,
+            "service_config": {
+                "data_dir": str(tmp_path),
+                "enable_persistence": False,
+            },
+        }
+    )
+
+    assert runtime._session_limiter is not None
+
+
+def test_desktop_login_uses_stable_anonymous_identity(tmp_path) -> None:
+    """Restore sessions under one stable desktop identity across restarts."""
+
+    service_prototype = SimpleNamespace(
+        service_config={
+            "data_dir": str(tmp_path),
+            "enable_persistence": True,
+        },
+        models=SimpleNamespace(),
+    )
+
+    first = DesktopXtalk(service_prototype=service_prototype)
+    first._anonymous_user_id = "xtalk-desktop-user"
+    assert first._login()["user"] == {"id": "xtalk-desktop-user"}
+
+    created = first._persistence.create_session("xtalk-desktop-user")
+    first._persistence.append_message(
+        user_id="xtalk-desktop-user",
+        session_id=created["session_id"],
+        role="user",
+        content="persist me",
+    )
+
+    restarted = DesktopXtalk(service_prototype=service_prototype)
+    restarted._anonymous_user_id = "xtalk-desktop-user"
+    assert restarted._login()["user"] == {"id": "xtalk-desktop-user"}
+    assert restarted._list_sessions("xtalk-desktop-user") == [
+        {"session_id": created["session_id"], "title": "persist me"}
     ]
 
 
-def test_interruption_keeps_playback_confirmed_prefix() -> None:
-    """Keep inherited stop handling from exposing unheard generated text."""
+def test_desktop_login_without_identity_uses_fresh_user(tmp_path) -> None:
+    """Fall back to a per-login identity when none is bound."""
 
-    manager = _manager()
-    manager._reported_text = "已经播放的前缀"
-    manager._pending_text = "已经播放的前缀以及没有播放的后半段"
-    committed, _ = _capture_commits(manager)
-
-    asyncio.run(manager._commit_stopped_playback())
-
-    assert committed == ["已经播放的前缀"]
-
-
-def test_desktop_service_replaces_only_playback_manager() -> None:
-    """Retain the default manager stack with one desktop specialization."""
-
-    assert DesktopTTSPlaybackManager in DesktopService.MANAGER_CLASSES
-    assert TTSPlaybackManager not in DesktopService.MANAGER_CLASSES
-    assert len(DesktopService.MANAGER_CLASSES) == len(
-        DefaultService.MANAGER_CLASSES
+    service_prototype = SimpleNamespace(
+        service_config={
+            "data_dir": str(tmp_path),
+            "enable_persistence": True,
+        },
+        models=SimpleNamespace(),
     )
+    runtime = DesktopXtalk(service_prototype=service_prototype)
 
+    first_user = runtime._login()["user"]["id"]
+    second_user = runtime._login()["user"]["id"]
 
-def test_desktop_playback_finish_has_one_inherited_subscription() -> None:
-    """Avoid publishing the final response twice through duplicate handlers."""
-
-    event_bus = EventBus()
-    DesktopTTSPlaybackManager(
-        event_bus=event_bus,
-        session_id="desktop-test-session",
-        config={},
-    )
-
-    handlers: list[Any] = event_bus._handlers[TTSPlaybackFinished.TYPE]
-    assert len(handlers) == 1
+    assert first_user
+    assert first_user != second_user

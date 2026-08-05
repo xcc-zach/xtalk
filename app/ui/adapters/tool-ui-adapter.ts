@@ -30,6 +30,11 @@ export interface ToolUIEmitEvent {
   running: boolean;
   /** Explicit lifecycle outcome; absent only in legacy persisted events. */
   outcome?: "running" | "complete" | "cancelled";
+  /**
+   * Character offset inside the anchored assistant message where the tool
+   * call happened. Absent for legacy events and events without a UI binding.
+   */
+  textOffset?: number;
   emittedAt: string;
 }
 

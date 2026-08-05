@@ -18,6 +18,8 @@ REPOSITORY_ROOT = APP_ROOT.parent
 FRONTEND_ROOT = REPOSITORY_ROOT / "frontend"
 SOURCE_BUILD_ROOT = APP_ROOT / ".build" / "source-inputs"
 DEFAULT_XTALK_EXTRAS = ("ali", "silero-vad")
+MINIMUM_PYTHON_VERSION = (3, 10)
+BUILD_PACKAGE_REQUIREMENT = "build==1.5.0"
 
 
 def run(
@@ -101,7 +103,11 @@ def python_version(python: Path) -> tuple[int, int]:
 
 
 def resolve_sidecar_python(explicit: Path | None) -> Path:
-    """Select the Python 3.12 interpreter used by the sidecar lock.
+    """Select the interpreter used to build the sidecar inputs.
+
+    The locked sidecar dependencies are resolved for Python 3.12, so that
+    interpreter is preferred when present. Any Python 3.10 or newer
+    interpreter that can build the XTalk wheel is accepted.
 
     Parameters
     ----------
@@ -111,7 +117,7 @@ def resolve_sidecar_python(explicit: Path | None) -> Path:
     Returns
     -------
     pathlib.Path
-        Validated Python 3.12 interpreter path.
+        Validated Python interpreter path.
 
     Raises
     ------
@@ -126,17 +132,28 @@ def resolve_sidecar_python(explicit: Path | None) -> Path:
     candidates = (
         [configured]
         if configured is not None
-        else [Path(path)]
-        if (path := shutil.which("python3.12")) is not None
-        else []
+        else [
+            Path(path)
+            for path in (
+                shutil.which("python3.12"),
+                shutil.which("python3.13"),
+                shutil.which("python3.11"),
+                shutil.which("python3"),
+                sys.executable,
+            )
+            if path
+        ]
     )
     for candidate in candidates:
         absolute = Path(os.path.abspath(candidate.expanduser()))
-        if absolute.is_file() and python_version(absolute) == (3, 12):
+        if (
+            absolute.is_file()
+            and python_version(absolute) >= MINIMUM_PYTHON_VERSION
+        ):
             return absolute
     raise RuntimeError(
-        "source packaging requires Python 3.12 to match "
-        "requirements/sidecar.lock; set XTALK_SIDECAR_PYTHON or pass --python"
+        "source packaging requires Python 3.10 or newer; "
+        "set XTALK_SIDECAR_PYTHON or pass --python"
     )
 
 
@@ -171,13 +188,36 @@ def wheel_version(wheel: Path) -> str:
     return version
 
 
+def venv_python(environment: Path) -> Path:
+    """Return the Python executable inside a virtual environment.
+
+    Parameters
+    ----------
+    environment : pathlib.Path
+        Virtual-environment root.
+
+    Returns
+    -------
+    pathlib.Path
+        Interpreter path.
+    """
+
+    if sys.platform == "win32":
+        return environment / "Scripts" / "python.exe"
+    return environment / "bin" / "python"
+
+
 def build_xtalk_wheel(python: Path) -> Path:
-    """Build a fresh XTalk wheel with the selected Python 3.12.
+    """Build a fresh XTalk wheel in an isolated build environment.
+
+    The base interpreter only needs the standard ``venv`` module. This step
+    creates a dedicated environment, installs the pinned ``build`` package
+    there, and builds the repository wheel through PEP 517 isolation.
 
     Parameters
     ----------
     python : pathlib.Path
-        Locked sidecar build interpreter with the ``build`` package.
+        Python 3.10+ interpreter used to seed the wheel build environment.
 
     Returns
     -------
@@ -185,11 +225,26 @@ def build_xtalk_wheel(python: Path) -> Path:
         Fresh repository XTalk wheel.
     """
 
+    environment = SOURCE_BUILD_ROOT / "wheel-venv"
+    run([str(python), "-m", "venv", str(environment)], cwd=APP_ROOT)
+    interpreter = venv_python(environment)
+    run(
+        [
+            str(interpreter),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            BUILD_PACKAGE_REQUIREMENT,
+        ],
+        cwd=APP_ROOT,
+    )
     wheel_directory = SOURCE_BUILD_ROOT / "wheel"
     wheel_directory.mkdir(parents=True, exist_ok=True)
     run(
         [
-            str(python),
+            str(interpreter),
             "-m",
             "build",
             "--wheel",

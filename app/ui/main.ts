@@ -235,6 +235,7 @@ let sessionListError: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
 let sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionActivityKey = "";
+const ACTIVE_SESSION_STORAGE_KEY = "xtalk.desktop.active-session.v1";
 let backendStatusKey: TranslationKey = "service.starting";
 let visibleError:
   | {
@@ -403,6 +404,7 @@ function setSidebarOpen(open: boolean, moveFocus = true): void {
 function setDiagnosticsOpen(open: boolean): void {
   if (open) {
     setToolsDialogOpen(false, false);
+    void refreshCredentials().catch(() => undefined);
   }
   diagnosticsOpen = open;
   elements.debugDrawer.classList.toggle("is-open", open);
@@ -794,6 +796,7 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
   updateControls(activeAdapter.snapshot);
   try {
     await activeAdapter.switchSession(sessionId);
+    persistActiveSessionId(sessionId);
     setMainView(sessionId === null ? "orb" : "chat");
     await refreshChatSessions();
     if (isCompactLayout()) {
@@ -809,6 +812,29 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
     updateControls(adapter?.snapshot ?? latestSnapshot);
     renderChatSessions();
   }
+}
+
+/**
+ * Reads the app-owned active session independently of the sidecar's random port.
+ *
+ * @returns The last selected persisted session, or `null` for a new chat.
+ */
+function readActiveSessionId(): string | null {
+  const sessionId = localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+  return sessionId?.trim() || null;
+}
+
+/**
+ * Persists the selected session across full application and sidecar restarts.
+ *
+ * @param sessionId Persisted session identifier, or `null` for a new chat.
+ */
+function persistActiveSessionId(sessionId: string | null): void {
+  if (sessionId === null) {
+    localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
 }
 
 function updateNetworkStatus(): void {
@@ -1463,6 +1489,9 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     nextSessionActivityKey !== sessionActivityKey;
   sessionActivityKey = nextSessionActivityKey;
   latestSnapshot = snapshot;
+  if (snapshot.sessionId !== null) {
+    persistActiveSessionId(snapshot.sessionId);
+  }
   toolUIAdapter?.bindSession(snapshot.sessionId);
   if (activeToolUISessionId !== snapshot.sessionId) {
     switchToolUISession(snapshot.sessionId);
@@ -1479,7 +1508,14 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   elements.sessionDetail.textContent = snapshot.sessionId ?? "--";
   elements.userDetail.textContent = snapshot.userId ?? "--";
 
-  const messageElements = snapshot.messages.map((message) => {
+  const timelineItems = [...toolUIHistory].sort(
+    (left, right) =>
+      left.anchorMessageIndex - right.anchorMessageIndex ||
+      left.order - right.order,
+  );
+
+  const embeddedToolItemIds = new Set<string>();
+  const messageElements = snapshot.messages.map((message, messageIndex) => {
     const row = document.createElement("article");
     row.className = `message-row message-row-${message.role}`;
     row.setAttribute("aria-label", messageRoleLabel(message.role));
@@ -1488,11 +1524,47 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     body.className = `message message-${message.role}`;
     body.dataset.final = String(message.final);
 
-    const content = document.createElement("span");
-    content.className = "message-content";
-    content.textContent = message.content;
-
-    body.append(content);
+    const embeddable = message.role === "assistant"
+      ? timelineItems.filter(
+          (item) =>
+            item.anchorMessageIndex === messageIndex &&
+            typeof item.event.textOffset === "number",
+        )
+      : [];
+    if (embeddable.length > 0) {
+      const group = document.createElement("div");
+      group.className = "message-content-group";
+      const ordered = [...embeddable].sort(
+        (left, right) =>
+          (left.event.textOffset ?? 0) - (right.event.textOffset ?? 0) ||
+          left.order - right.order,
+      );
+      let cursor = 0;
+      for (const item of ordered) {
+        const offset = clampMessageOffset(
+          item.event.textOffset ?? 0,
+          message.content.length,
+        );
+        if (offset > cursor) {
+          group.append(
+            createMessageContentSpan(
+              message.content.slice(cursor, offset),
+            ),
+          );
+          cursor = offset;
+        }
+        group.append(getOrCreateToolUIRow(item).element);
+        embeddedToolItemIds.add(item.id);
+      }
+      if (cursor < message.content.length) {
+        group.append(
+          createMessageContentSpan(message.content.slice(cursor)),
+        );
+      }
+      body.append(group);
+    } else {
+      body.append(createMessageContentSpan(message.content));
+    }
     row.append(body);
     if (message.role === "assistant" && message.content.length > 0) {
       const actions = document.createElement("div");
@@ -1503,11 +1575,6 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     return row;
   });
 
-  const timelineItems = [...toolUIHistory].sort(
-    (left, right) =>
-      left.anchorMessageIndex - right.anchorMessageIndex ||
-      left.order - right.order,
-  );
   const timelineElements: HTMLElement[] = [];
   for (let index = 0; index <= messageElements.length; index += 1) {
     if (index > 0) {
@@ -1515,6 +1582,7 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     }
     for (const item of timelineItems) {
       if (
+        !embeddedToolItemIds.has(item.id) &&
         Math.min(item.anchorMessageIndex, messageElements.length) === index
       ) {
         timelineElements.push(getOrCreateToolUIRow(item).element);
@@ -1534,6 +1602,33 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   if (shouldRefreshSessions) {
     scheduleChatSessionsRefresh();
   }
+}
+
+/**
+ * Creates one plain-text content span for an assistant message part.
+ *
+ * @param text Text rendered inside the span.
+ * @returns Span element carrying the message-content class.
+ */
+function createMessageContentSpan(text: string): HTMLSpanElement {
+  const content = document.createElement("span");
+  content.className = "message-content";
+  content.textContent = text;
+  return content;
+}
+
+/**
+ * Clamps a tool-call character offset into the current message bounds.
+ *
+ * @param offset Raw offset delivered by the backend.
+ * @param length Current message content length.
+ * @returns Integer offset between zero and the message length.
+ */
+function clampMessageOffset(offset: number, length: number): number {
+  if (!Number.isFinite(offset)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(length, Math.trunc(offset)));
 }
 
 function createMessageActionIcon(kind: "copy" | "check"): SVGSVGElement {
@@ -1959,7 +2054,9 @@ async function detachCurrentAdapter(): Promise<void> {
   }
 }
 
-async function discoverBackend(): Promise<void> {
+async function discoverBackend(
+  sessionIdToRestore?: string | null,
+): Promise<void> {
   if (discoveringBackend) {
     return;
   }
@@ -1990,10 +2087,33 @@ async function discoverBackend(): Promise<void> {
     adapter = nextAdapter;
     unsubscribe = nextAdapter.subscribe(renderSnapshot);
 
+    let restoredSessionId = sessionIdToRestore;
+    if (restoredSessionId === undefined) {
+      restoredSessionId =
+        latestSnapshot.sessionId ?? readActiveSessionId();
+      if (restoredSessionId === null) {
+        const sessions = await nextAdapter.getSessions();
+        restoredSessionId = sessions[0]?.id ?? null;
+      }
+    }
+
+    let sessionRestoreError: unknown = null;
+    if (restoredSessionId !== null) {
+      try {
+        await nextAdapter.switchSession(restoredSessionId);
+        persistActiveSessionId(restoredSessionId);
+      } catch (error) {
+        sessionRestoreError = error;
+      }
+    }
+
     elements.backendDetail.textContent = nextAdapter.diagnostics.origin;
     elements.websocketDetail.textContent = nextAdapter.diagnostics.websocketURL;
     setBackendStatus("ready", "service.ready");
     await refreshChatSessions();
+    if (sessionRestoreError !== null) {
+      showError("sidebar.switchFailed", { error: sessionRestoreError });
+    }
   } catch (error) {
     adapter = null;
     setBackendStatus("offline", "service.unavailable");
@@ -2007,6 +2127,7 @@ async function discoverBackend(): Promise<void> {
 }
 
 async function applyModelConfigPath(selectedPath: string): Promise<void> {
+  const sessionIdToRestore = latestSnapshot.sessionId;
   let stopManagedProgress: (() => void) | null = null;
   let managedProgressOpened = false;
 
@@ -2032,7 +2153,7 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     elements.modelConfigStatus.textContent = selection.configPath
       ? t("model.appliedRestarted")
       : t("model.applied");
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
     if (managedProgressOpened) {
       closeManagedProgress();
     }
@@ -2041,7 +2162,7 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     if (modelConfigPath === null) {
       setBackendStatus("unconfigured", "service.chooseConfig");
     } else {
-      await discoverBackend();
+      await discoverBackend(sessionIdToRestore);
     }
     elements.modelConfigStatus.textContent = t("model.applyFailed");
     showError("model.applyFailedDetail", { error });
@@ -2303,6 +2424,7 @@ async function applyToolChanges(): Promise<void> {
     return;
   }
 
+  const sessionIdToRestore = latestSnapshot.sessionId;
   toolOperation = true;
   showError(null);
   updateCredentialStatus(t("tools.restarting"));
@@ -2317,11 +2439,11 @@ async function applyToolChanges(): Promise<void> {
     credentialChangesPending = false;
     await refreshCredentials();
     updateDeveloperToolsStatus(t("tools.applied"));
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
   } catch (error) {
     updateCredentialStatus(t("tools.applyFailed"));
     updateDeveloperToolsStatus(t("tools.applyFailed"));
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
     showError("tools.applyFailedDetail", { error });
     setDiagnosticsOpen(true);
   } finally {
@@ -2332,7 +2454,6 @@ async function applyToolChanges(): Promise<void> {
 
 async function initializeApplication(): Promise<void> {
   try {
-    await refreshCredentials();
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {

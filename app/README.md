@@ -11,8 +11,10 @@ asynchronous timer used by the sample-app acceptance flow, and the first Phase
 
 - Node.js 20 or newer
 - Rust with the Tauri 2 platform prerequisites
-- Python 3.12 for the locked sidecar build
-- Python's `build` package for creating the repository XTalk wheel
+- Python 3.10 or newer (the locked sidecar dependencies are resolved for
+  Python 3.12, which remains the preferred build interpreter)
+- Network access to PyPI: the wheel step creates its own isolated build
+  environment and installs the pinned `build` package there
 - The root `frontend/` development dependencies declared by its lockfile
 
 The installed application does not require Python, Node.js, or Rust. They are
@@ -34,8 +36,9 @@ npm run build
 python scripts/verify_boundaries.py
 ```
 
-Model-backed integration checks intentionally read
-`../server_configs/sample.json`; they do not copy its credentials into `app/`.
+Model-backed integration checks read the model configuration pointed to by
+`XTALK_TEST_CONFIG_PATH` (defaulting to `../server_configs/sample.json`) and
+skip when the file is absent; they do not copy its credentials into `app/`.
 Pass a detector configuration through `XTALK_TEST_CONFIG_OVERLAY` when running
 the generic detector integration check. The implementation does not contain a
 detector type whitelist.
@@ -103,7 +106,7 @@ the wheel's `ali` provider dependencies:
 
 ```bash
 python scripts/build_backend.py \
-  --python /path/to/python3.12 \
+  --python /path/to/python3 \
   --xtalk-wheel /path/to/xtalk-VERSION.whl \
   --xtalk-extra ali \
   --xtalk-extra silero-vad
@@ -144,30 +147,36 @@ Every package build expects a complete repository checkout in which `app/`,
 `src/`, and `frontend/` are siblings. `scripts/build_from_source.py` builds a
 wheel from root `src/`, runs `npm ci`, build, and pack in root `frontend/`,
 updates the artifact lock, installs that fresh client for Vite, and freezes the
-Python 3.12 sidecar from `requirements/sidecar.lock`.
+sidecar from `requirements/sidecar.lock` (resolved for Python 3.12).
 
-From a clean checkout, install build tools first, then install the App's locked
-Node dependencies:
+From a clean checkout, install the toolchain prerequisites listed above (none
+are installed automatically), then run the single checked entrypoint, which
+verifies every prerequisite and aborts with remediation hints when any is
+missing:
 
 ```bash
-python3.12 -m pip install build==1.5.0 certifi==2026.7.22
-npm install --global npm@11.12.1
-cd app
-npm ci
+./scripts/build_macos_local.sh
 ```
+
+The script checks the repository layout, Node.js (`^20.19.0 || >=22.12.0`),
+npm, Python 3.10+, the Rust toolchain, Xcode Command Line Tools, and (on
+Apple Silicon) the Metal toolchain. It never installs any of them; use
+`--check-only` to run just the checks:
+
+```bash
+./scripts/build_macos_local.sh --check-only
+```
+
+When the checks pass it runs `npm ci` and `npm run package:macos:local`,
+which downloads and stages the locked native runtimes and builds the local
+verification installer. The wheel build runs inside a dedicated virtual
+environment, so the base interpreter needs no Python packages preinstalled.
+Keep Python 3.12 as the selected interpreter when possible because the
+sidecar lock is resolved for it.
 
 Apple Silicon additionally needs Xcode's Metal compiler before the first
-package build:
-
-```bash
-xcodebuild -downloadComponent MetalToolchain
-```
-
-Now create a local verification installer:
-
-```bash
-npm run package:macos:local
-```
+package build; if it is missing, the script stops with the exact command to
+install it (`xcodebuild -downloadComponent MetalToolchain`).
 
 The packaging entrypoint first downloads and verifies the locked Sherpa/ORT
 archive for the build host and stages all managed runtimes. It then invokes

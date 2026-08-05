@@ -150,6 +150,12 @@ class _RecordingBroker:
         self.statuses: list[dict[str, Any]] = []
         self.emits: list[dict[str, Any]] = []
         self.finished_calls: list[str] = []
+        self.ui_tool_names: set[str] = set()
+
+    def register_ui_tool(self, tool_name: str) -> None:
+        """Record the wrapped tool name like the production broker."""
+
+        self.ui_tool_names.add(tool_name)
 
     async def publish_status(self, **payload: Any) -> None:
         """Record one status payload."""
@@ -578,6 +584,29 @@ def test_history_tool_ui_is_anchored_before_the_current_assistant_reply() -> Non
     assert 'messages[index]?.role === "assistant"' in anchor_logic
     assert "return index;" in anchor_logic
     assert "item.anchorMessageIndex = Math.min(" in logic
+
+
+def test_history_tool_ui_can_embed_inside_assistant_message() -> None:
+    """Render tool rows inside a message at the recorded generation offset."""
+
+    logic = (
+        Path(__file__).parents[2] / "ui" / "main.ts"
+    ).read_text(encoding="utf-8")
+
+    render = logic.split(
+        "function renderSnapshot(", maxsplit=1
+    )[1].split("function createMessageActionIcon", maxsplit=1)[0]
+    assert "message-content-group" in render
+    assert 'typeof item.event.textOffset === "number"' in render
+    assert "embeddedToolItemIds" in render
+    assert "clampMessageOffset(" in render
+    assert "!embeddedToolItemIds.has(item.id)" in render
+    assert "createMessageContentSpan(" in render
+
+    clamp = logic.split(
+        "function clampMessageOffset(", maxsplit=1
+    )[1].split("function createMessageCopyButton", maxsplit=1)[0]
+    assert "Math.max(0, Math.min(length, Math.trunc(offset)))" in clamp
 
 
 def test_tool_ui_capabilities_settle_and_can_recover() -> None:
