@@ -103,6 +103,21 @@ PCM audio from a MOSS-TTS-Realtime service.
 
 </details>
 
+<details markdown="1">
+<summary>SherpaOnnxTTS</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
+
+An HTTP client for the local sherpa-onnx Matcha Chinese-English TTS service. It posts text to `/v1/audio/speech` and returns 48 kHz mono PCM16 audio.
+
+**Config params:** only `base_url`.
+
+[Original Repository](https://github.com/k2-fsa/sherpa-onnx)
+
+</details>
+
 ### Forced Alignment
 
 The forced aligner maps confirmed TTS playback time back to character or word

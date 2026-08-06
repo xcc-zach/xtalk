@@ -103,6 +103,21 @@ PCM 音频。
 
 </details>
 
+<details markdown="1">
+<summary>SherpaOnnxTTS</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
+
+本地 sherpa-onnx Matcha 中英 TTS 服务的 HTTP 客户端。向 `/v1/audio/speech` 提交文本，输出固定为 48 kHz 单声道 PCM16。
+
+**配置参数：** 仅 `base_url`。
+
+[原始仓库](https://github.com/k2-fsa/sherpa-onnx)
+
+</details>
+
 ### 强制对齐
 
 用于把 TTS 已播放的音频时间映射回回复文本中的字/词位置，从而让前端更准确地跟踪“当前说到哪个字”。其音频输入固定为 48 kHz、单声道、有符号 16 位 PCM，调用方不再传入采样率。
