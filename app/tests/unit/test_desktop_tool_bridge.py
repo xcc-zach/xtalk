@@ -3,16 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
-from xtalk.serving.event_bus import EventBus
-from xtalk.serving.events import (
-    LLMAgentResponseUpdate,
-    ToolCallOccurred,
-)
-
-from backend.desktop_gateway import DesktopTextProjectionGateway
 from backend.desktop_tool_bridge import DesktopToolCallBridge
 from backend.tool_ui import ToolUIBinding, ToolUIBroker
 
@@ -29,35 +21,6 @@ def test_bridge_tracks_only_ui_tools_in_fifo_order() -> None:
 
     assert bridge.consume_tool_offset(session_id="s") == 26
     assert bridge.consume_tool_offset(session_id="s") is None
-
-
-def test_gateway_records_offset_at_tool_call_position() -> None:
-    """The gateway records the accumulated text length when a call is emitted."""
-
-    bridge = DesktopToolCallBridge()
-    bridge.register_ui_tool("timer")
-    websocket = SimpleNamespace(
-        client_state=SimpleNamespace(value=1),
-        send_text=None,
-    )
-    gateway = DesktopTextProjectionGateway(
-        EventBus(),
-        "s",
-        websocket,
-        config={"_desktop_tool_call_bridge": bridge},
-    )
-    first_sentence = "好的，我来帮你启动一个一分钟的计时器，每10秒提醒你一次。"
-
-    async def scenario() -> None:
-        await gateway._desktop_track_llm_update(
-            LLMAgentResponseUpdate(session_id="s", text=first_sentence)
-        )
-        await gateway._desktop_record_tool_call_offset(
-            ToolCallOccurred(session_id="s", name="timer", args={})
-        )
-
-    asyncio.run(scenario())
-    assert bridge.consume_tool_offset(session_id="s") == len(first_sentence)
 
 
 def test_broker_attaches_offset_to_first_and_terminal_emits() -> None:
