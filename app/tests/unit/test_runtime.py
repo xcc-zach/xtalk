@@ -151,6 +151,60 @@ def test_shutdown_requires_token_and_invokes_callback(tmp_path: Path) -> None:
     assert authorized.json() == {"status": "shutting_down"}
 
 
+def test_delete_session_removes_persisted_desktop_session(
+    tmp_path: Path,
+) -> None:
+    """Delete one desktop-owned session and require the launch token."""
+
+    from xtalk.persistence import PersistenceStore
+
+    store = PersistenceStore(tmp_path / "data" / "chat_history.sqlite3")
+    user_id = "desktop-user"
+    session_id = store.create_session(user_id)["session_id"]
+
+    class _Runtime:
+        """Fake runtime exposing the desktop-owned persistence fields."""
+
+        _anonymous_user_id = user_id
+        _persistence = store
+        _service_manager = None
+
+        def mount_routes(self, app: Any) -> None:
+            """No-op: the delete route is mounted by the sidecar itself."""
+
+    app = create_application(
+        startup=_startup(tmp_path),
+        xtalk_runtime=_Runtime(),
+        shutdown_callback=lambda: None,
+    )
+
+    unauthorized = asyncio.run(
+        _request(app, "DELETE", f"/app/api/sessions/{session_id}")
+    )
+    deleted = asyncio.run(
+        _request(
+            app,
+            "DELETE",
+            f"/app/api/sessions/{session_id}",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+    )
+    missing = asyncio.run(
+        _request(
+            app,
+            "DELETE",
+            f"/app/api/sessions/{session_id}",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+    )
+
+    assert unauthorized.status_code == 401
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "ok"}
+    assert store.get_session(user_id, session_id) is None
+    assert missing.status_code == 404
+
+
 def test_application_rejects_non_loopback_and_unlisted_origin(
     tmp_path: Path,
 ) -> None:
