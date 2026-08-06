@@ -7,7 +7,7 @@
 <details markdown="1">
 <summary>SherpaOnnx [推荐]</summary>
 
-**依赖：** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+**依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **实现路径：** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
@@ -27,6 +27,37 @@
 **路径：** [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)
 
 [详情](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/qwen3-asr-flash)
+
+</details>
+
+<details markdown="1">
+<summary>AgenticASR</summary>
+
+**依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**路径：** [`src/xtalk/models/asr/agentic_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/agentic_asr.py)
+
+结合 sherpa-onnx WebSocket ASR 与 AgenticASR K=3 滑窗精修的语音识别封装。
+`streaming` 模式使用 sherpa-onnx 在线 WebSocket 服务；`offline` 模式通过
+`MockStreamRecognizer` 包装离线 WebSocket 服务来模拟流式。Refiner 为
+OpenAI 兼容的 chat-completions 服务。
+
+**配置参数：** `asr_base_url`（sherpa-onnx WebSocket 服务地址）、
+`refiner_base_url`（OpenAI 兼容的 Refiner 服务地址）、`asr_mode`
+（`"streaming"` 或 `"offline"`，默认 `"offline"`）。
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "ws://127.0.0.1:6006",
+    "refiner_base_url": "http://127.0.0.1:8000/v1",
+    "asr_mode": "offline"
+  }
+}
+```
+
+[原始仓库](https://github.com/AnXMuy/AgenticASR)
 
 </details>
 
