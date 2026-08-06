@@ -3,12 +3,16 @@ import MLX
 import MLXAudioCore
 import MLXAudioSTT
 import MLXAudioTTS
+import MLXLLM
+import MLXLMCommon
+import Tokenizers
 
 actor ModelRuntime {
     let service: ManagedModelService
 
     private let senseVoice: SenseVoiceModel?
     private let mossTTS: MossTTSNanoModel?
+    private let refiner: ModelContainer?
 
     init(service: ManagedModelService, modelRoot: URL) async throws {
         self.service = service
@@ -16,10 +20,69 @@ actor ModelRuntime {
         case .senseVoice:
             senseVoice = try SenseVoiceModel.fromDirectory(modelRoot)
             mossTTS = nil
+            refiner = nil
         case .mossTTSNano:
             senseVoice = nil
             mossTTS = try await MossTTSNanoModel.fromModelDirectory(modelRoot)
+            refiner = nil
+        case .agenticASRRefiner:
+            senseVoice = nil
+            mossTTS = nil
+            refiner = try await loadModelContainer(
+                from: modelRoot,
+                using: RefinerTokenizerLoader()
+            )
         }
+    }
+
+    /// Refine one OpenAI-compatible chat request using greedy no-thinking decoding.
+    func refine(
+        messages: [RefinerMessage],
+        maxTokens: Int
+    ) async throws -> RefinerGenerationResult {
+        guard let refiner else {
+            throw ModelRuntimeError.wrongService
+        }
+        let inputMessages: [Message] = messages.map { message in
+            ["role": message.role, "content": message.content]
+        }
+        let input = UserInput(
+            messages: inputMessages,
+            additionalContext: ["enable_thinking": false]
+        )
+        let prepared = try await refiner.prepare(input: input)
+        let stream = try await refiner.generate(
+            input: prepared,
+            parameters: GenerateParameters(
+                maxTokens: maxTokens,
+                temperature: 0
+            )
+        )
+        var text = ""
+        var promptTokenCount = 0
+        var generationTokenCount = 0
+        var finishReason = "length"
+        for await generation in stream {
+            switch generation {
+            case .chunk(let chunk):
+                text.append(chunk)
+            case .info(let info):
+                promptTokenCount = info.promptTokenCount
+                generationTokenCount = info.generationTokenCount
+                finishReason = switch info.stopReason {
+                case .stop: "stop"
+                case .length, .cancelled: "length"
+                }
+            case .toolCall:
+                continue
+            }
+        }
+        return RefinerGenerationResult(
+            text: cleanRefinerOutput(text),
+            promptTokenCount: promptTokenCount,
+            generationTokenCount: generationTokenCount,
+            finishReason: finishReason
+        )
     }
 
     func transcribe(_ packet: OfflineAudioPacket) throws -> String {
@@ -160,6 +223,83 @@ actor ModelRuntime {
             ),
             textChunks: generationChunks
         )
+    }
+}
+
+/// One chat message accepted by the local Refiner service.
+struct RefinerMessage: Codable, Sendable {
+    let role: String
+    let content: String
+}
+
+/// Generated Refiner text plus OpenAI-compatible token metadata.
+struct RefinerGenerationResult: Sendable {
+    let text: String
+    let promptTokenCount: Int
+    let generationTokenCount: Int
+    let finishReason: String
+}
+
+/// Strip any chat terminators emitted before the configured stop token is observed.
+func cleanRefinerOutput(_ text: String) -> String {
+    text.replacingOccurrences(of: "<|im_end|>", with: "")
+        .replacingOccurrences(of: "</s>", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private struct RefinerTokenizerLoader: MLXLMCommon.TokenizerLoader {
+    func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
+        let tokenizer = try await Tokenizers.AutoTokenizer.from(
+            modelFolder: directory
+        )
+        return RefinerTokenizerBridge(tokenizer)
+    }
+}
+
+private struct RefinerTokenizerBridge: MLXLMCommon.Tokenizer {
+    private let upstream: any Tokenizers.Tokenizer
+
+    init(_ upstream: any Tokenizers.Tokenizer) {
+        self.upstream = upstream
+    }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        upstream.encode(text: text, addSpecialTokens: addSpecialTokens)
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        upstream.decode(
+            tokens: tokenIds,
+            skipSpecialTokens: skipSpecialTokens
+        )
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        upstream.convertTokenToId(token)
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        upstream.convertIdToToken(id)
+    }
+
+    var bosToken: String? { upstream.bosToken }
+    var eosToken: String? { upstream.eosToken }
+    var unknownToken: String? { upstream.unknownToken }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        do {
+            return try upstream.applyChatTemplate(
+                messages: messages,
+                tools: tools,
+                additionalContext: additionalContext
+            )
+        } catch Tokenizers.TokenizerError.missingChatTemplate {
+            throw MLXLMCommon.TokenizerError.missingChatTemplate
+        }
     }
 }
 

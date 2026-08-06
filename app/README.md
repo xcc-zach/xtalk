@@ -267,7 +267,8 @@ shasum -a 256 \
 
 The release contains ONNX Runtime 1.27, the native service executables, the
 frozen Python backend, and the Silero VAD model. SenseVoice Small,
-matcha-icefall-zh-en, and MOSS-TTS-Nano weights are deliberately excluded; they
+AgenticASR Refiner, matcha-icefall-zh-en, and MOSS-TTS-Nano weights are
+deliberately excluded; they
 are downloaded and verified in AppData only after a selected configuration
 references their `managed://` URLs. Model configuration files and provider
 credentials are also external and must never be copied into the bundle.
@@ -315,7 +316,10 @@ for the fully managed local ASR/TTS configuration. Fill its empty LLM API key
 before use.
 Tauri resolves its `managed://` values without modifying the example file. Add
 `?backend=cpu`, `?backend=cuda`, or `?backend=mlx` to force a backend; without
-it, selection order is CUDA, MLX, then CPU. The
+it, Apple Silicon macOS selects MLX, CUDA-capable Windows/Linux selects CUDA,
+and other systems select CPU. Use
+[`examples/local_models_agentic_asr.json`](examples/local_models_agentic_asr.json)
+to have Tauri download and start both SenseVoice and the AgenticASR Refiner. The
 [`examples/local_models_mlx.json`](examples/local_models_mlx.json) variant
 forces MLX. Use
 [`examples/local_models_matcha.json`](examples/local_models_matcha.json) to

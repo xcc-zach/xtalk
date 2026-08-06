@@ -41,7 +41,10 @@ A speech recognition wrapper that combines the sherpa-onnx WebSocket ASR with
 AgenticASR's K=3 sliding-window refinement. In `streaming` mode it uses the
 online sherpa-onnx WebSocket server; in `offline` mode it simulates streaming
 through `MockStreamRecognizer` over the offline WebSocket server. The Refiner
-is an OpenAI-compatible chat-completions service.
+is an OpenAI-compatible chat-completions service. XTalk Desktop can manage both
+services locally with `managed://sensevoice-small` and
+`managed://agentic-asr-refiner`. Without a `backend` query, it uses MLX on
+Apple Silicon, CUDA on supported Windows/Linux hosts, and ONNX CPU elsewhere.
 
 **Config params:** `asr_base_url` (sherpa-onnx WebSocket server),
 `refiner_base_url` (OpenAI-compatible Refiner service), `asr_mode`
@@ -53,6 +56,19 @@ is an OpenAI-compatible chat-completions service.
   "params": {
     "asr_base_url": "ws://127.0.0.1:6006",
     "refiner_base_url": "http://127.0.0.1:8000/v1",
+    "asr_mode": "offline"
+  }
+}
+```
+
+Managed desktop configuration:
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "managed://sensevoice-small",
+    "refiner_base_url": "managed://agentic-asr-refiner",
     "asr_mode": "offline"
   }
 }

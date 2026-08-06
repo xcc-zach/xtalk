@@ -20,6 +20,8 @@ NATIVE_RUNTIME_MANIFEST_PATH = (
     APP_ROOT / "resources" / "manifests" / "native-runtimes.lock.json"
 )
 REQUIRED_MANAGED_MODEL_IDS = {
+    "agentic-asr-refiner",
+    "agentic-asr-refiner-mlx",
     "matcha-icefall-zh-en",
     "sensevoice-small",
     "sensevoice-small-mlx",

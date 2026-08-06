@@ -3,6 +3,7 @@
 mod audio;
 mod manifest;
 mod moss;
+mod refiner;
 mod text;
 mod wav;
 
@@ -37,30 +38,43 @@ const MAX_PROMPT_AUDIO_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(author, version, about)]
-struct Args {
-    /// Directory containing the two MOSS ONNX model snapshot directories.
+pub(crate) struct Args {
+    /// Native model service to host.
+    #[arg(long, value_enum, default_value_t = RuntimeService::MossTtsNano)]
+    pub(crate) service: RuntimeService,
+
+    /// Directory containing the selected model snapshot.
     #[arg(long)]
-    model_root: PathBuf,
+    pub(crate) model_root: PathBuf,
 
     /// ONNX Runtime dynamic library bundled with the desktop application.
     #[arg(long)]
-    ort_dylib: PathBuf,
+    pub(crate) ort_dylib: PathBuf,
 
     /// ONNX Runtime execution backend.
     #[arg(long, value_enum, default_value_t = OnnxBackend::Cpu)]
-    backend: OnnxBackend,
+    pub(crate) backend: OnnxBackend,
 
     /// Loopback host used by the private HTTP service.
     #[arg(long, default_value = "127.0.0.1")]
-    host: IpAddr,
+    pub(crate) host: IpAddr,
 
     /// HTTP port. Zero requests an OS-assigned port.
     #[arg(long, default_value_t = 0)]
-    port: u16,
+    pub(crate) port: u16,
 
     /// ONNX Runtime intra-op CPU thread count.
     #[arg(long, default_value_t = 2)]
-    cpu_threads: usize,
+    pub(crate) cpu_threads: usize,
+}
+
+/// Native ONNX service exposed by this sidecar.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum RuntimeService {
+    /// Host MOSS-TTS-Nano speech synthesis.
+    MossTtsNano,
+    /// Host the AgenticASR transcript Refiner.
+    AgenticAsrRefiner,
 }
 
 /// Execution provider selected for all MOSS ONNX sessions.
@@ -193,6 +207,13 @@ async fn main() -> Result<()> {
         })?
         .commit();
     ort::environment::Environment::current()?.set_log_level(ort::logging::LogLevel::Warning);
+    match args.service {
+        RuntimeService::MossTtsNano => run_moss(args).await,
+        RuntimeService::AgenticAsrRefiner => refiner::run(args).await,
+    }
+}
+
+async fn run_moss(args: Args) -> Result<()> {
     info!(model_root = %args.model_root.display(), "loading MOSS ONNX runtime");
     let engine = MossEngine::load(&args.model_root, args.cpu_threads, args.backend)?;
     let voices = engine

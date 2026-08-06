@@ -243,6 +243,112 @@
           "url": "https://raw.githubusercontent.com/OpenMOSS/MOSS-TTS-Nano/cc7bdf19c7639c0870dab22045a33b442760f6be/assets/audio/zh_1.wav"
         }
       ]
+    },
+    {
+      "id": "agentic-asr-refiner",
+      "version": "e41ca3654e2fc325f4e015b9127763d4b5ded5b8",
+      "files": [
+        {
+          "path": "model.onnx",
+          "size": 1144846,
+          "sha256": "602b5e2192cf05f9656f419fe9a9cc7a45c23ced3659aa5441fbef8ba8387f85",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/onnx-int4/model.onnx"
+        },
+        {
+          "path": "model.onnx.data",
+          "size": 1352472576,
+          "sha256": "b93ed739800441b1e11563b8cf10bb0643e4db5e7cd82c35b305e1af55a7ed83",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/onnx-int4/model.onnx.data"
+        },
+        {
+          "path": "config.json",
+          "size": 775,
+          "sha256": "7bf6e052ebfcb873704eb9f2221ae4547c0a8e053da07d060cd9e2543c06a192",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/onnx-int4/config.json"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 221,
+          "sha256": "ee70df59b2850f2b8f202772adc5b6941913f18e09c33c4a84b6d0f2bd6673bf",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/onnx-int4/generation_config.json"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 9894271,
+          "sha256": "3e065a558a034185fe299917b398685c1facd0169a9eea1e629eb30c171fed81",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/tokenizer.json"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 580,
+          "sha256": "5f7439fd04b43e98d6ec7ed386367f5c464d6bd1b52eb1f5f4de29eed11c0fbc",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/tokenizer_config.json"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 9062,
+          "sha256": "7451a05cf1e28a79d97d7c0bc951028c0b1915119bf9046acd06a0e3d931f47c",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/chat_template.jinja"
+        }
+      ],
+      "required_paths": [
+        "model.onnx",
+        "model.onnx.data",
+        "tokenizer.json"
+      ]
+    },
+    {
+      "id": "agentic-asr-refiner-mlx",
+      "version": "e41ca3654e2fc325f4e015b9127763d4b5ded5b8",
+      "files": [
+        {
+          "path": "model.safetensors",
+          "size": 675711614,
+          "sha256": "5f99fc91b86cc8fe7e22194059c88706fdcfa0f6620166e0aa6456ad5c5cc616",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/model.safetensors"
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 39380,
+          "sha256": "b892a7333526cd1812513bcc4c5744a4ae6d7830fc84f4047f7a35a9c9c25785",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/model.safetensors.index.json"
+        },
+        {
+          "path": "config.json",
+          "size": 1039,
+          "sha256": "8aed50ec8aa94f457aa7a6fc2e5c4463b3414964570fac005f1ca8d8ef8dc9bc",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/config.json"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 220,
+          "sha256": "e7feb60aa6fc1f051c1ac1b780a21598b067f196ba7205e304c024703078af99",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/generation_config.json"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 9894271,
+          "sha256": "3e065a558a034185fe299917b398685c1facd0169a9eea1e629eb30c171fed81",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/tokenizer.json"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 609,
+          "sha256": "e00d566a4ca85cd0bf0d3ef7325d56dc179bc592a5b80e474446484fcad75d11",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/tokenizer_config.json"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 9062,
+          "sha256": "7451a05cf1e28a79d97d7c0bc951028c0b1915119bf9046acd06a0e3d931f47c",
+          "url": "https://huggingface.co/Andrew0425/AgenticASR-Refiner/resolve/e41ca3654e2fc325f4e015b9127763d4b5ded5b8/mlx-int4/chat_template.jinja"
+        }
+      ],
+      "required_paths": [
+        "model.safetensors",
+        "tokenizer.json",
+        "chat_template.jinja"
+      ]
     }
   ]
 }

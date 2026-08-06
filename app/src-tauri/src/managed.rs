@@ -36,11 +36,14 @@ const MLX_SIDECAR_NAME: &str = "mlx-model-runtime";
 const SHERPA_SIDECAR_NAME: &str = "sherpa-onnx-offline-websocket-server";
 const SENSEVOICE_ID: &str = "sensevoice-small";
 const SENSEVOICE_MLX_ID: &str = "sensevoice-small-mlx";
+const REFINER_ID: &str = "agentic-asr-refiner";
+const REFINER_MLX_ID: &str = "agentic-asr-refiner-mlx";
 const MOSS_TTS_ID: &str = "moss-tts-nano";
 const MOSS_TTS_MLX_ID: &str = "moss-tts-nano-mlx";
 const MATCHA_TTS_ID: &str = "matcha-icefall-zh-en";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
+const REFINER_URL: &str = "managed://agentic-asr-refiner";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
 const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
 const DEFAULT_MOSS_VOICE_URL: &str = "managed://moss-tts-nano/voices/zh_1.wav";
@@ -87,6 +90,8 @@ struct ManagedServicesInner {
 #[derive(Default)]
 struct ManagedRequest {
     sensevoice: Option<ManagedBackend>,
+    refiner: Option<ManagedBackend>,
+    agentic_asr: bool,
     moss_tts: Option<ManagedBackend>,
     matcha_tts: Option<ManagedBackend>,
     moss_voices: Vec<ManagedVoice>,
@@ -103,6 +108,7 @@ enum ManagedBackend {
 #[derive(Clone, Copy)]
 enum ManagedServiceKind {
     SenseVoice,
+    Refiner,
     MossTts,
     MatchaTts,
 }
@@ -212,6 +218,7 @@ impl ManagedServices {
     ) -> Result<(Self, Value), ManagedError> {
         let request = parse_managed_request(config_path)?;
         let active = request.sensevoice.is_some()
+            || request.refiner.is_some()
             || request.moss_tts.is_some()
             || request.matcha_tts.is_some();
         let (failure_sender, _) = watch::channel(false);
@@ -275,6 +282,7 @@ impl ManagedServices {
     ) -> Result<Value, ManagedError> {
         let mut overlay = json!({});
         let service_count = usize::from(request.sensevoice.is_some())
+            + usize::from(request.refiner.is_some())
             + usize::from(request.moss_tts.is_some())
             + usize::from(request.matcha_tts.is_some());
         let mut service_index = 0;
@@ -337,12 +345,83 @@ impl ManagedServices {
                 0,
                 None,
             );
-            overlay["asr"] = json!({
-                "params": {
-                    "base_url": format!("ws://127.0.0.1:{port}"),
-                    "mode": "offline"
+            if request.agentic_asr {
+                overlay["asr"] = json!({
+                    "params": {
+                        "asr_base_url": format!("ws://127.0.0.1:{port}"),
+                        "asr_mode": "offline"
+                    }
+                });
+            } else {
+                overlay["asr"] = json!({
+                    "params": {
+                        "base_url": format!("ws://127.0.0.1:{port}"),
+                        "mode": "offline"
+                    }
+                });
+            }
+        }
+
+        if let Some(requested_backend) = request.refiner {
+            service_index += 1;
+            let backend = resolve_backend(app, requested_backend, ManagedServiceKind::Refiner)?;
+            let service_manifest = find_service(
+                manifest,
+                match backend {
+                    ManagedBackend::Mlx => REFINER_MLX_ID,
+                    _ => REFINER_ID,
+                },
+            )?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = match backend {
+                ManagedBackend::Mlx => start_mlx(app, REFINER_ID, &model_root).await?,
+                ManagedBackend::Cpu | ManagedBackend::Cuda => {
+                    start_refiner(app, &model_root, backend).await?
                 }
-            });
+                ManagedBackend::Auto => unreachable!("auto backend must be resolved"),
+            };
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["asr"]["params"]["refiner_base_url"] =
+                json!(format!("http://127.0.0.1:{port}/v1"));
         }
 
         if let Some(requested_backend) = request.moss_tts {
@@ -515,6 +594,9 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     if request.sensevoice.is_some() {
         services.push(SENSEVOICE_ID.to_owned());
     }
+    if request.refiner.is_some() {
+        services.push(REFINER_ID.to_owned());
+    }
     if request.moss_tts.is_some() {
         services.push(MOSS_TTS_ID.to_owned());
     }
@@ -528,14 +610,33 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
     let config: Value = serde_json::from_slice(&fs::read(config_path)?)?;
     let mut request = ManagedRequest::default();
 
-    if let Some(base_url) = model_base_url(&config, "asr")? {
+    let asr_type = model_type(&config, "asr")?;
+    if asr_type == Some("AgenticASR") {
+        request.agentic_asr = true;
+        if let Some(base_url) = model_param(&config, "asr", "asr_base_url")? {
+            request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
+        }
+        if let Some(base_url) = model_param(&config, "asr", "refiner_base_url")? {
+            request.refiner = parse_managed_backend(base_url, REFINER_URL, "Refiner")?;
+        }
+        if request.sensevoice.is_some() {
+            match model_param(&config, "asr", "asr_mode")? {
+                None | Some("offline") => {}
+                Some(mode) => {
+                    return Err(ManagedError::InvalidConfiguration(format!(
+                        "managed AgenticASR requires `asr.params.asr_mode` to be `offline`, got `{mode}`"
+                    )));
+                }
+            }
+        }
+    } else if let Some(base_url) = model_param(&config, "asr", "base_url")? {
         request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
         if request.sensevoice.is_some() {
             require_model_type(&config, "asr", "SherpaOnnxASR")?;
         }
     }
 
-    if let Some(base_url) = model_base_url(&config, "tts")? {
+    if let Some(base_url) = model_param(&config, "tts", "base_url")? {
         if is_service_url(base_url, MOSS_TTS_URL) {
             request.moss_tts = parse_managed_backend(base_url, MOSS_TTS_URL, "TTS")?;
             require_model_type(&config, "tts", "MossTTSNano")?;
@@ -639,7 +740,11 @@ fn cuda_is_available(app: &AppHandle, service: ManagedServiceKind) -> Result<boo
         .is_ok_and(|output| output.status.success()))
 }
 
-fn model_base_url<'a>(config: &'a Value, section: &str) -> Result<Option<&'a str>, ManagedError> {
+fn model_param<'a>(
+    config: &'a Value,
+    section: &str,
+    parameter: &str,
+) -> Result<Option<&'a str>, ManagedError> {
     let Some(section_value) = config.get(section) else {
         return Ok(None);
     };
@@ -652,12 +757,27 @@ fn model_base_url<'a>(config: &'a Value, section: &str) -> Result<Option<&'a str
     let params_object = params.as_object().ok_or_else(|| {
         ManagedError::InvalidConfiguration(format!("`{section}.params` must be an object"))
     })?;
-    match params_object.get("base_url") {
+    match params_object.get(parameter) {
         None => Ok(None),
         Some(value) => value.as_str().map(Some).ok_or_else(|| {
             ManagedError::InvalidConfiguration(format!(
-                "`{section}.params.base_url` must be a string"
+                "`{section}.params.{parameter}` must be a string"
             ))
+        }),
+    }
+}
+
+fn model_type<'a>(config: &'a Value, section: &str) -> Result<Option<&'a str>, ManagedError> {
+    let Some(section_value) = config.get(section) else {
+        return Ok(None);
+    };
+    let section_object = section_value.as_object().ok_or_else(|| {
+        ManagedError::InvalidConfiguration(format!("`{section}` must be an object"))
+    })?;
+    match section_object.get("type") {
+        None => Ok(None),
+        Some(value) => value.as_str().map(Some).ok_or_else(|| {
+            ManagedError::InvalidConfiguration(format!("`{section}.type` must be a string"))
         }),
     }
 }
@@ -1119,6 +1239,47 @@ async fn start_moss_tts(
         .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
     let ort_library = find_ort_library(&runtime_dir)?;
     let command = app.shell().sidecar(TTS_SIDECAR_NAME)?.args([
+        "--service".to_owned(),
+        MOSS_TTS_ID.to_owned(),
+        "--model-root".to_owned(),
+        model_root.to_string_lossy().into_owned(),
+        "--ort-dylib".to_owned(),
+        ort_library.to_string_lossy().into_owned(),
+        "--backend".to_owned(),
+        onnx_backend_name(backend).to_owned(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "--port".to_owned(),
+        "0".to_owned(),
+    ]);
+    let command = configure_library_path(command, &runtime_dir);
+    let (mut events, child) = command.spawn()?;
+    let port = match receive_model_ready(&mut events).await {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
+async fn start_refiner(
+    app: &AppHandle,
+    model_root: &Path,
+    backend: ManagedBackend,
+) -> Result<StartedService, ManagedError> {
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    let ort_library = find_ort_library(&runtime_dir)?;
+    let command = app.shell().sidecar(TTS_SIDECAR_NAME)?.args([
+        "--service".to_owned(),
+        REFINER_ID.to_owned(),
         "--model-root".to_owned(),
         model_root.to_string_lossy().into_owned(),
         "--ort-dylib".to_owned(),
@@ -1365,7 +1526,8 @@ mod tests {
         extract_service_archives, inspect_model_config, parse_managed_request, resolve_moss_voices,
         safe_join, select_backend, verify_installed_service, write_install_marker,
         ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend, ManagedServiceManifest,
-        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, SENSEVOICE_ID,
+        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, REFINER_ID,
+        SENSEVOICE_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
@@ -1485,6 +1647,57 @@ mod tests {
         assert_eq!(request.moss_tts, Some(ManagedBackend::Mlx));
         let plan = inspect_model_config(&config_path).expect("inspect config");
         assert_eq!(plan.services, [SENSEVOICE_ID, MOSS_TTS_ID]);
+    }
+
+    #[test]
+    fn parses_managed_agentic_asr_services_in_dependency_order() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "AgenticASR",
+                    "params": {
+                        "asr_base_url": "managed://sensevoice-small",
+                        "refiner_base_url": "managed://agentic-asr-refiner",
+                        "asr_mode": "offline"
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert!(request.agentic_asr);
+        assert_eq!(request.sensevoice, Some(ManagedBackend::Auto));
+        assert_eq!(request.refiner, Some(ManagedBackend::Auto));
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [SENSEVOICE_ID, REFINER_ID]);
+    }
+
+    #[test]
+    fn rejects_streaming_mode_for_managed_agentic_sensevoice() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "AgenticASR",
+                    "params": {
+                        "asr_base_url": "managed://sensevoice-small",
+                        "refiner_base_url": "managed://agentic-asr-refiner?backend=cpu",
+                        "asr_mode": "streaming"
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        assert!(parse_managed_request(&config_path).is_err());
     }
 
     #[test]

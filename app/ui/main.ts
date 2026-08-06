@@ -536,6 +536,10 @@ function managedServiceName(serviceId: string): string {
       return "SenseVoice Small";
     case "sensevoice-small-mlx":
       return "SenseVoice Small (MLX)";
+    case "agentic-asr-refiner":
+      return "AgenticASR Refiner";
+    case "agentic-asr-refiner-mlx":
+      return "AgenticASR Refiner (MLX)";
     case "moss-tts-nano":
       return "MOSS-TTS-Nano";
     case "moss-tts-nano-mlx":
