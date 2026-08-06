@@ -450,7 +450,12 @@ impl MossEngine {
     }
 }
 
-fn create_session(path: &Path, cpu_threads: usize, backend: OnnxBackend) -> Result<Session> {
+/// Create an optimized ONNX session for one managed model graph.
+pub(crate) fn create_session(
+    path: &Path,
+    cpu_threads: usize,
+    backend: OnnxBackend,
+) -> Result<Session> {
     let builder = Session::builder()?;
     let builder = match backend {
         OnnxBackend::Cpu => builder,

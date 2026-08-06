@@ -22,6 +22,14 @@ let package = Package(
             url: "https://github.com/apple/swift-nio.git",
             exact: "2.99.0"
         ),
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-lm.git",
+            exact: "3.31.4"
+        ),
+        .package(
+            url: "https://github.com/huggingface/swift-transformers.git",
+            exact: "1.3.3"
+        ),
     ],
     targets: [
         .executableTarget(
@@ -30,6 +38,9 @@ let package = Package(
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),

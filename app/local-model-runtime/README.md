@@ -1,9 +1,9 @@
 # XTalk Local Model Runtime
 
 This crate is the native ONNX sidecar for optional desktop models. The first
-implemented engine is MOSS-TTS-Nano. It uses ONNX Runtime and SentencePiece
-directly and does not depend on Python, PyTorch, Transformers, FastAPI, or
-Uvicorn.
+implemented engines are MOSS-TTS-Nano and the AgenticASR Refiner. It uses ONNX
+Runtime and native tokenizers directly and does not depend on Python, PyTorch,
+Transformers, FastAPI, or Uvicorn.
 
 ## Run the MOSS HTTP service
 
@@ -42,3 +42,23 @@ the `audio_base64` JSON field. Uploaded reference audio is decoded and
 converted to 48 kHz before ONNX codec encoding. Generated audio is always
 48 kHz mono PCM16 WAV. The older built-in-voice `/v1/audio/speech` endpoint
 remains available for compatibility.
+
+## Run the AgenticASR Refiner
+
+The Refiner snapshot must contain `model.onnx`, `model.onnx.data`, and
+`tokenizer.json`. It exposes the OpenAI-compatible model and chat-completions
+subset used by `AgenticASR`:
+
+```bash
+cargo run --release -- \
+  --service agentic-asr-refiner \
+  --ort-dylib /path/to/libonnxruntime.dylib \
+  --model-root /path/to/AgenticASR-Refiner/onnx-int4 \
+  --port 18084
+
+curl http://127.0.0.1:18084/v1/models
+```
+
+The runtime always uses greedy decoding and the model's no-thinking chat
+template. `POST /v1/chat/completions` accepts `model`, `messages`, and
+`max_tokens`, and advertises the stable model ID `agentic-asr-refiner`.

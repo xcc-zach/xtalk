@@ -24,6 +24,18 @@ struct ProtocolTests {
         ])
         #expect(options.service == .senseVoice)
         #expect(options.port == 0)
+
+        let refinerOptions = try RuntimeOptions.parse([
+            "--service", "agentic-asr-refiner",
+            "--model-root", root.path,
+        ])
+        #expect(refinerOptions.service == .agenticASRRefiner)
+        #expect(refinerOptions.service.sampleRate == 0)
+    }
+
+    @Test
+    func stripsRefinerChatTerminators() {
+        #expect(cleanRefinerOutput(" 纠正结果<|im_end|></s>\n") == "纠正结果")
     }
 
     @Test

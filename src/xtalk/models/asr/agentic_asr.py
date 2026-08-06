@@ -37,11 +37,6 @@ SYSTEM_PROMPT = (
     "重要易错实体在末尾追加 <KEY>[词1、词2]；没有则不加。"
 )
 
-# Model name sent to the OpenAI-compatible Refiner service. The class exposes
-# only ``asr_base_url`` / ``refiner_base_url`` / ``asr_mode``, so this is the
-# single knob for servers that validate the ``model`` field (for example vLLM
-# ``--served-model-name refiner``).
-_REFINER_MODEL = "refiner"
 _MAX_REFINER_TOKENS = 512
 _REFINER_TIMEOUT_SECONDS = 60.0
 
@@ -63,6 +58,14 @@ def _resolve_chat_completions_url(base_url: str) -> str:
     if normalized.endswith("/chat/completions"):
         return normalized
     return f"{normalized}/chat/completions"
+
+
+def _resolve_models_url(base_url: str) -> str:
+    """Resolve a Refiner base URL to its sibling ``/models`` endpoint."""
+
+    chat_completions_url = _resolve_chat_completions_url(base_url)
+    prefix = chat_completions_url.removesuffix("/chat/completions")
+    return f"{prefix}/models"
 
 
 def _run_coro(coro):
@@ -95,6 +98,27 @@ def _extract_message_content(data) -> str:
     return "" if content is None else str(content)
 
 
+def _extract_model_id(data) -> str:
+    """Extract the first advertised model ID from an OpenAI models body."""
+
+    try:
+        models = data["data"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"refiner returned an unexpected models response: {data!r}"
+        ) from exc
+
+    if not isinstance(models, list):
+        raise RuntimeError(f"refiner returned an unexpected models response: {data!r}")
+    for model_data in models:
+        if not isinstance(model_data, dict):
+            continue
+        model_id = model_data.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            return model_id
+    raise RuntimeError(f"refiner did not advertise any models: {data!r}")
+
+
 class _OpenAICompatibleRefiner:
     """Minimal OpenAI-compatible chat-completions client for the Refiner."""
 
@@ -105,7 +129,9 @@ class _OpenAICompatibleRefiner:
         timeout: float = _REFINER_TIMEOUT_SECONDS,
     ) -> None:
         self.chat_completions_url = _resolve_chat_completions_url(base_url)
+        self.models_url = _resolve_models_url(base_url)
         self.timeout = timeout
+        self._model_id: str | None = None
 
     def refine(self, text: str) -> str:
         """Refine one raw transcript window (synchronous)."""
@@ -114,16 +140,6 @@ class _OpenAICompatibleRefiner:
 
     async def async_refine(self, text: str) -> str:
         """Refine one raw transcript window."""
-
-        payload = {
-            "model": _REFINER_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            "temperature": 0.0,
-            "max_tokens": _MAX_REFINER_TOKENS,
-        }
         try:
             import aiohttp
         except ImportError as exc:  # pragma: no cover - dependency missing
@@ -132,7 +148,31 @@ class _OpenAICompatibleRefiner:
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.chat_completions_url, json=payload) as response:
+                model_id = self._model_id
+                if model_id is None:
+                    async with session.get(self.models_url) as response:
+                        if response.status != 200:
+                            body = await response.text()
+                            raise RuntimeError(
+                                "refiner model discovery returned HTTP "
+                                f"{response.status}: {body[:300]}"
+                            )
+                        model_id = _extract_model_id(await response.json())
+                        self._model_id = model_id
+
+                payload = {
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": text},
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": _MAX_REFINER_TOKENS,
+                }
+                async with session.post(
+                    self.chat_completions_url,
+                    json=payload,
+                ) as response:
                     if response.status != 200:
                         body = await response.text()
                         raise RuntimeError(
@@ -309,7 +349,8 @@ class AgenticASR(ASR):
     refiner_base_url : str
         Base URL of the OpenAI-compatible Refiner service, for example
         ``http://127.0.0.1:8000/v1``. ``/chat/completions`` is appended when
-        the URL does not already end with it.
+        the URL does not already end with it. The first model advertised by
+        the sibling ``/models`` endpoint is selected automatically.
     asr_mode : str, optional
         ``"streaming"`` or ``"offline"``. Defaults to ``"offline"``.
     """

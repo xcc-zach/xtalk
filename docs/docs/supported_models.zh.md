@@ -40,7 +40,10 @@
 结合 sherpa-onnx WebSocket ASR 与 AgenticASR K=3 滑窗精修的语音识别封装。
 `streaming` 模式使用 sherpa-onnx 在线 WebSocket 服务；`offline` 模式通过
 `MockStreamRecognizer` 包装离线 WebSocket 服务来模拟流式。Refiner 为
-OpenAI 兼容的 chat-completions 服务。
+OpenAI 兼容的 chat-completions 服务。XTalk Desktop 可通过
+`managed://sensevoice-small` 和 `managed://agentic-asr-refiner` 自动下载并
+托管两个本地服务。不指定 `backend` 查询参数时，Apple Silicon 使用 MLX，
+受支持的 Windows/Linux CUDA 设备使用 CUDA，其他平台使用 ONNX CPU。
 
 **配置参数：** `asr_base_url`（sherpa-onnx WebSocket 服务地址）、
 `refiner_base_url`（OpenAI 兼容的 Refiner 服务地址）、`asr_mode`
@@ -52,6 +55,19 @@ OpenAI 兼容的 chat-completions 服务。
   "params": {
     "asr_base_url": "ws://127.0.0.1:6006",
     "refiner_base_url": "http://127.0.0.1:8000/v1",
+    "asr_mode": "offline"
+  }
+}
+```
+
+Desktop 托管配置：
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "managed://sensevoice-small",
+    "refiner_base_url": "managed://agentic-asr-refiner",
     "asr_mode": "offline"
   }
 }
