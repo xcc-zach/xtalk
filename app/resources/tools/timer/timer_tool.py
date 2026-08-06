@@ -62,7 +62,11 @@ class TimerOutput(ToolOutput):
 
 
 class TimerTool(AsyncTool):
-    """Start a background timer with optional periodic progress reminders."""
+    """Start a background timer with optional periodic progress reminders.
+
+    No extra reply is needed before calling this tool, such as "Let me set a
+    timer for you".
+    """
 
     name = "timer"
     subscribe_by_default = False
