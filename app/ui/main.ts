@@ -989,6 +989,11 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
   try {
     await activeAdapter.switchSession(sessionId);
     persistActiveSessionId(sessionId);
+    // Switching conversations collapses the whiteboard so the previous
+    // conversation's board never follows into the newly opened chat. The
+    // first whiteboard tool emit in the new conversation auto-opens it again.
+    whiteboardAutoShown = false;
+    await setWhiteboardVisible(false);
     setMainView(sessionId === null ? "orb" : "chat");
     await refreshChatSessions();
     if (isCompactLayout()) {
