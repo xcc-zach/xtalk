@@ -51,6 +51,10 @@ Hard constraints:
   persisted in `localStorage` and restored when a conversation is reloaded.
 - Closing the window hides it (the webview survives), and Rust emits
   `whiteboard-window-hidden` so the dock button stays in sync.
+- Switching to another conversation (including a brand-new one) collapses the
+  window (and remembers that choice), so the previous board never follows
+  into the newly opened chat; the first whiteboard tool emit there auto-opens
+  it again.
 - The first whiteboard tool emit auto-opens the window; later emits only keep
   an already-open window in place.
 
@@ -145,7 +149,8 @@ tools see for that conversation:
 ## 7. Roadmap
 
 - **Done in this plan:** global text store, four tools, API endpoint,
-  independent window, dock toggle, Markdown rendering, persistence.
+  independent window, dock toggle, Markdown rendering, persistence, and
+  collapsing the window when switching conversations.
 - **Future:** user editing of the board (needs a write endpoint and a
   security review), or per-session boards if a single global board is no
   longer sufficient.
