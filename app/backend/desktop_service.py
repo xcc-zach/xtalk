@@ -6,10 +6,7 @@ import uuid
 from typing import Any
 
 from xtalk import Xtalk
-from xtalk.serving.modules.output_gateway import OutputGateway
 from xtalk.serving.service import DefaultService, Service
-
-from .desktop_gateway import DesktopTextProjectionGateway
 
 
 class DesktopXtalk(Xtalk):
@@ -18,9 +15,8 @@ class DesktopXtalk(Xtalk):
     The desktop sidecar deliberately reuses the generic XTalk serving
     pipeline (agent, ASR/TTS managers, persistence, and playback
     finalization) so conversation semantics stay identical to the sample
-    applications. The only desktop-specific difference is the text-projection
-    output gateway, which keeps the frontend text stream complete and
-    monotonic even when TTS playback tracking restarts mid-turn.
+    applications. The stock output gateway is kept unchanged, so
+    frontend-facing text follows the standard playback-driven updates.
     """
 
     def __init__(
@@ -104,79 +100,9 @@ class DesktopXtalk(Xtalk):
 
 
 class DesktopService(DefaultService):
-    """Default service stack with the desktop text-projection gateway."""
+    """Standard service stack used by desktop sessions.
 
-    def __init__(
-        self,
-        *,
-        models: Any,
-        service_config: dict[str, Any] | None = None,
-        manager_classes: list[type] | None = None,
-        _websocket: Any = None,
-        _session_id: str | None = None,
-        _event_overrides: dict[type, Any] | None = None,
-    ) -> None:
-        """Build the standard stack and swap in the projection gateway.
-
-        Parameters
-        ----------
-        models : Models
-            Model container prototype cloned for the session.
-        service_config : dict[str, Any] | None, optional
-            Session configuration shared with managers and gateways.
-        manager_classes : list[type] | None, optional
-            Manager classes to instantiate for live sessions.
-        _websocket : WebSocket | None, optional
-            Live WebSocket handle for session clones.
-        _session_id : str | None, optional
-            Identifier used when cloning a live session.
-        _event_overrides : dict[type, Any] | None, optional
-            Internal event subscription overrides copied into clones.
-        """
-
-        super().__init__(
-            models=models,
-            service_config=service_config,
-            manager_classes=manager_classes,
-            _websocket=_websocket,
-            _session_id=_session_id,
-            _event_overrides=_event_overrides,
-        )
-        if _websocket is not None and hasattr(self, "output_gateway"):
-            self.output_gateway = _replace_output_gateway(self)
-
-
-def _replace_output_gateway(service: DefaultService) -> OutputGateway:
-    """Swap one live service's gateway for the desktop text projection.
-
-    The base ``Service`` hardcodes the generic :class:`OutputGateway`. This
-    helper unsubscribes its handlers from the session event bus and installs
-    the desktop projection gateway with the same websocket and overrides.
-
-    Parameters
-    ----------
-    service : DefaultService
-        Live session service whose output gateway should be replaced.
-
-    Returns
-    -------
-    OutputGateway
-        The newly installed desktop projection gateway.
+    No gateway override is applied: every session uses the original
+    ``xtalk.serving.modules.output_gateway.OutputGateway`` exactly like the
+    generic XTalk pipeline.
     """
-
-    previous = service.output_gateway
-    for base in reversed(previous.__class__.mro()):
-        for method_name, meta_list in getattr(base, "__event_handlers_meta__", []):
-            method = getattr(previous, method_name, None)
-            if method is None:
-                continue
-            for meta in meta_list:
-                service.event_bus.unsubscribe(meta["event_type"], method)
-
-    return DesktopTextProjectionGateway(
-        service.event_bus,
-        service.session_id,
-        previous.websocket,
-        config=service.service_config,
-        _event_overrides=service._event_overrides.get(OutputGateway),
-    )
