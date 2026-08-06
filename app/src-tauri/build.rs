@@ -15,6 +15,10 @@ const APP_COMMANDS: &[&str] = &[
     "save_credential",
     "set_tool_enabled",
     "shutdown_backend",
+    "show_whiteboard_window",
+    "hide_whiteboard_window",
+    "set_whiteboard_window_visible",
+    "is_whiteboard_window_visible",
 ];
 
 fn main() {

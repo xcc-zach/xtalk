@@ -1,175 +1,132 @@
-# 白板工具方案
+# 文本白板方案
 
 ## 1. 目标与范围
 
-对话过程中，AI 常常需要把不断演进的结构化内容摆在用户面前：计划、头脑风暴
-板、清单或会议大纲。现有工具 UI 链路（`timer`、`codex`）渲染的是“状态卡”，
-不适合承载 AI 在多个回合里逐步更新的结构化内容。
-
-本方案新增一个内置**白板**工具：对话中 AI 通过工具调用，把便签内容的规范化
-快照推送到与会话绑定的白板视图，白板实时重绘。
+桌面白板为**每场对话维护独立的 Markdown 文本板**。AI 通过四个文本工具按会话
+读写各自的文档；当前对话的白板以 Markdown 形式渲染在**独立白板窗口**中，窗口
+保持在 XTalk 主窗口之上，第一次被调用时自动弹出，切换对话时自动跟随显示，同时
+开启对话键右侧增加一个白板按钮用于显示/隐藏窗口，且显示/隐藏状态在对话重新
+加载后仍然保持。
 
 硬约束：
 
 - 所有改动只发生在 `app/` 下；`frontend/` 与 `src/` 不动。
 - 只使用已批准的 `xtalk.*` 公共 API（沿用 `app/scripts/verify_boundaries.py`
   白名单）。
-- Phase 1 中白板对用户是只读视图；用户编辑留到后续阶段。
+- 窗口对用户只读；编辑仍由模型驱动。
 
 ## 2. 关键设计决策
 
-### 2.1 复用 Tool UI 只读观察通道（推荐，方案 A）
+### 2.1 按会话隔离的 store
 
-现有链路已经完成了最困难的部分：
+`app/backend/whiteboard_store.py` 按会话维护独立文档：
 
-AI 调用 `AsyncTool` → `wrap_tools_with_ui` 包装 → `ToolUIBroker.publish_emit`
-→ 内存历史 / WebSocket → UI 轮询 `/app/api/tool-ui/events` → 沙箱
-`ToolUIFrame` 通过 postMessage 收到 `tool_ui.emit`。
+- 注册表把会话 id 映射到各自的 `text`、`revision`、`updated_at`，每个会话
+  持久化为工具数据目录下的 `whiteboards/<session>.json`，sidecar 重启后内容
+  仍在，且不同会话之间互不干扰。
+- `add_text` 用单个换行连接文本块；`delete_text` 与 `update_text` 删除或替换
+  所有精确匹配，并规整残留的换行。
+- 工具 UI 包装器把当前绑定的会话写入工具调用状态，只读 sidecar 端点也读取
+  同一个按会话隔离的 store，窗口内容不依赖 emit 通道。
 
-白板只需要两个向后兼容的小改动：
+### 2.2 独立窗口 + 停靠按钮
 
-1. emit 事件增加可选的结构化 `payload` 字段。
-2. 白板工具声明 `structured_payload = True`，包装器把 emit 的 JSON 内容解析为
-   `payload`。
+- Tauri `WebviewWindow`（label 为 `whiteboard`）加载 `whiteboard.html`，作为
+  主窗口的子窗口创建以保持在其之上，轮询
+  `GET /app/api/whiteboard?session_id=...`（launch token + Origin），用小型
+  无依赖渲染器渲染返回的 Markdown。窗口从主窗口持久化的活动会话键读取当前
+  对话，并跟随会话切换。
+- 窗口内不再显示标题与版本徽标；原生窗口标题通过 i18n 使用
+  `t("whiteboard.windowTitle")`。
+- 主窗口在开启对话键右侧新增白板按钮；点击切换窗口显示/隐藏，可见性写入
+  `localStorage`，对话重新加载时恢复。
+- 关闭窗口只隐藏（webview 保留），Rust 侧发出 `whiteboard-window-hidden`
+  事件，让停靠按钮状态保持同步。
+- 白板工具第一次 emit 时自动弹出窗口；之后的 emit 只在窗口已打开时保持现状。
 
-优点：改动面最小，安全边界不变（frame 仍只读、CSP 不变、无新端点），会话隔离
-与历史回放天然免费获得。
+## 3. 工具契约
 
-代价：frame 高度上限限制白板尺寸；内存事件在 sidecar 重启后丢失；用户不能编辑。
+四个工具共用一个描述，暂定为：
 
-### 2.2 专用白板服务（方案 B，后续阶段）
+> 在需要教学、演示的场景考虑调用该工具。
+> Consider using this tool when teaching or demonstrating.
 
-新增 `app/backend/whiteboard_store.py`（按会话持久化到 sqlite/JSON）、带认证的
-`GET/POST /app/api/whiteboard/{session_id}` 端点（launch token + Origin），并
-由 trusted UI 面板直接渲染大画布。可获得跨重启持久化、更大画布与用户编辑，代价
-是新增端点和面板。
+### 3.1 工具 schema
 
-路线为“先 A 后 B”。
-
-## 3. 数据契约
-
-### 3.1 工具输入（LLM 看到的 schema）
-
-`whiteboard_update` 接受操作列表（v1 子集）：
-
-| op | 字段 | 说明 |
+| 工具 | 输入 | 行为 |
 | --- | --- | --- |
-| `set_title` | `title` | 设置标题 |
-| `add_note` | `note {id?, text, color?}` | 新增便签；`id` 缺省时自动生成 |
-| `update_note` | `id`、`text?`/`color?` | 更新既有便签 |
-| `remove_note` | `id` | 删除便签 |
-| `clear` | - | 清空白板 |
+| `fetch_text` | - | 返回白板全文与 revision |
+| `add_text` | `text` | 在末尾追加一段 Markdown 文本 |
+| `delete_text` | `text` | 删除所有精确匹配；不存在时报错 |
+| `update_text` | `from`, `to` | 把所有精确匹配的 `from` 替换为 `to`；不存在时报错 |
 
-限制：便签 ≤ 200 条，单条文本 ≤ 2000 字符，单次调用 ops ≤ 50，序列化后 payload
-≤ 256 KiB。
+限制：单次操作 ≤ 50 000 字符，emit payload ≤ 256 KiB。每次调用都返回完整
+规范化快照 `{action, success, text, revision, message}`。
 
-### 3.2 emit 内容（幂等快照）
+### 3.2 API 快照
 
-每次 emit 的 `message` 都是完整规范化快照，同一对象同时作为 `payload` 附带：
+`GET /app/api/whiteboard?session_id=...` 返回对应会话与工具所见一致的文档：
 
 ```json
 {
   "version": 1,
-  "title": "本周计划",
+  "text": "# 本周计划\n- 目标",
   "revision": 3,
-  "notes": [{"id": "n1", "text": "…", "color": "yellow"}],
   "updated_at": "…"
 }
 ```
 
-全量快照语义让渲染端无状态：任意一次 emit、回放或 history frame 都能独立完整
-渲染。
-
 ## 4. 分文件改动清单
 
-### 4.1 工具本体（新增）
-
-- `app/resources/tools/whiteboard/xtalk_tool.json` — 显示名
-  `{zh: "白板", en: "Whiteboard"}`，entrypoint `whiteboard_tool:create_tools`，
-  `ui: {entrypoint: "ui/index.html", update_every_s: -1}`（不轮询 status，内容
-  通过 emit 到达）。
-- `app/resources/tools/whiteboard/whiteboard_tool.py` — pydantic op/快照模型、
-  ops 应用、revision 计数、上限校验，以及一个 `AsyncTool`：`name =
-  "whiteboard_update"`、`subscribe_by_default = False`、`structured_payload =
-  True`。`emit_initial` 应用 ops 后返回 `Running(snapshot_json)`；
-  `emit_updates` 立即 yield `Finished(snapshot_json)`。
-- `app/resources/tools/whiteboard/ui/index.html` — 自包含沙箱 frame（见 4.3）。
-- `app/resources/tools/builtin_tools.json` — 注册 `whiteboard`
-  （`enabled_by_default: true`、`can_disable: true`）。
-
-注意：必须用 `AsyncTool` 而不是 `SyncTool`，因为 UI 观察器只包装 `AsyncTool`
-子类。
-
-### 4.2 传输协议（小改，向后兼容）
-
-- `app/backend/tool_ui.py`
-  - `ToolUIBroker.publish_emit(..., payload=None)` 增加可选 keyword-only
-    `dict` 字段。
-  - `_wrap_async_tool` 在 `getattr(original, "structured_payload", False)` 且
-    content 能解析为 JSON 对象时附带 `payload`；否则降级为无 payload（message
-    不变）。
-  - 新增 `MAX_TOOL_UI_EMIT_PAYLOAD_BYTES = 256 * 1024`，超限丢弃 payload、保留
-    message。
-  - 历史保留逻辑本就拷贝整个 dict，payload 自动随行。
-- `app/ui/adapters/tool-ui-adapter.ts`
-  - `ToolUIEmitEvent` 增加 `payload?: unknown`；`parseToolUIEvent` 接受
-    `undefined` 或普通对象，并校验尺寸上限。
-- `app/ui/tool-ui-frame.ts`
-  - 协议零改动；补充注释说明 frame 通过 `event.payload` 读取结构化内容。
-  - 可选 UX 调整：为白板放宽 live frame 高度上限（否则 frame 内部滚动）。
-
-### 4.3 渲染（新增 frame）
-
-`ui/index.html` 完全自包含：
-
-- 从 `window.xtalkToolUI.emit` 事件渲染；优先 `event.payload`，回退解析
-  `event.message`。
-- v1 布局：标题 + 便签网格（CSS grid 卡片，支持颜色）、revision/数量徽标、
-  空状态。
-- 安全：所有便签文本一律用 `textContent` 渲染（绝不 `innerHTML`）；CSP 与
-  沙箱不变；自动 `reportHeight`。
-- 内置 zh/en 文案，跟随 `context.language`。
-
-### 4.4 注册与挂载
-
-无需改 `main.ts`/`index.html`：白板 emit 自动出现在现有 live tool panel 与
-时间线工具行中；history 行渲染该次调用的最终快照（emit payload 无状态，天然
-支持）。
+- `app/backend/whiteboard_store.py`（新增）—— 全局 store、JSON 持久化、
+  单例辅助函数。
+- `app/backend/whiteboard_tool.py` —— 供单测导入的镜像副本。
+- `app/resources/tools/whiteboard/whiteboard_tool.py` —— 四个共享上述描述的
+  `AsyncTool` 类，`structured_payload = True`。
+- `app/resources/tools/whiteboard/ui/index.html` —— 极简沙箱兜底页，渲染文本
+  快照（窗口才是主界面）。
+- `app/backend/runtime.py` —— 新增 `GET /app/api/whiteboard`，与其他
+  `/app/api` 路由一样受 launch token 保护；`session_id` 查询参数选择会话。
+- `app/src-tauri/src/whiteboard.rs`（新增）+ `lib.rs` —— 显示/隐藏/设置/查询
+  命令、窗口创建（挂到主窗口之下）、关闭请求拦截。
+- `app/src-tauri/build.rs` + `capabilities/main.json` + 新增
+  `capabilities/whiteboard.json` + `tauri.conf.json` —— 四个窗口命令与白板
+  窗口轮询所需的 ACL 权限。
+- `app/backend/tool_ui.py` —— 把当前绑定的会话写入工具调用状态，让白板工具
+  访问正确的会话 store。
+- `app/ui/whiteboard.html` + `whiteboard.ts`（新增）—— 窗口页面，轮询端点并
+  渲染 Markdown（窗口隐藏时暂停）。
+- `app/ui/markdown.ts`（新增）—— 安全、无依赖的 Markdown 渲染器。
+- `app/ui/whiteboard-window.ts`（新增）—— Tauri invoke/事件封装与可见性偏好。
+- `app/ui/index.html` + `main.ts` + `styles.css` —— 白板停靠按钮、首次 emit
+  自动弹出、隐藏事件同步、可见性恢复。
+- `app/ui/i18n.ts` —— 白板文案（中英文）。
+- `app/vite.config.ts` —— 增加 `whiteboard.html` 多页入口。
 
 ## 5. 测试计划
 
-- 新增 `app/tests/unit/test_whiteboard_tool.py`：ops 应用矩阵、revision 递增、
-  自动 id、上限与非法输入、快照幂等。
-- 扩展 `app/tests/unit/test_tool_ui.py`：`structured_payload` 解析、payload 随
-  emit/history 保留、非法 JSON 降级、无 payload 的旧事件仍然有效。
-- 扩展 `app/tests/unit/test_runtime.py`：`/app/api/tool-ui/events` 快照包含
+- 重写 `app/tests/unit/test_whiteboard_tool.py`：追加/删除/更新语义、按会话
+  隔离、store 重启后的 JSON 持久化、`from` 别名校验、限制、结构化 emit
   payload。
-- 门槛：`python scripts/verify_boundaries.py`、`npm run check`、
-  `python -m pytest`。
-- 手工验收：让 AI 跨回合新增/修改/删除便签，确认 live 面板实时更新、会话之间
-  隔离、history 行渲染正确的最终快照。
+- `app/tests/unit/test_tool_registry.py` 期望四个新工具名。
+- `app/tests/unit/test_runtime.py` 覆盖白板端点鉴权（无 launch token 返回
+  401）。
+- 门禁：`python -m pytest`、`npm run check`、`npm run build`、`cargo check`。
+- 手工验收：让 AI 跨轮次增删改文本；第一次调用自动弹出窗口，按钮可切换，
+  Markdown 正常渲染，对话重新加载后可见性与内容仍然保持。
 
 ## 6. 安全与边界
 
-- 一切改动在 `app/` 内；只使用批准的 `xtalk.models.agents.tools` API。
-- iframe 保持 `allow-scripts` only、CSP `connect-src 'none'`、点击/提交禁用
-  （v1 只读）。
-- payload 与便签文本均有上限；文本用 `textContent` 渲染防 XSS。
-- 任何新端点（Phase 2）都必须走 launch token + Origin 认证。
+- 所有改动在 `app/` 内；只使用已批准的 `xtalk.models.agents.tools` API。
+- Markdown 渲染器先转义所有原始字符，再仅回填已转义的占位内容；链接只允许
+  `http(s)`，白板文本绝不当 HTML 处理。
+- 白板端点受 launch token 与 Origin 校验；窗口是受信 App 页面，不是非受信
+  工具 frame。
+- 单次操作与 emit payload 均有大小上限。
 
-## 7. 分阶段路线
+## 7. 路线图
 
-- **Phase 1（本方案）：** 工具 + 结构化 payload + frame，端到端可用。
-- **Phase 2：** `whiteboard_store.py`、按会话持久化、带认证的
-  `GET /app/api/whiteboard/{session_id}`、更大的专属面板，使白板跨重启保留并
-  获得更多空间。
-- **Phase 3（可选）：** 用户编辑。推荐改为 trusted UI 直接渲染画布（不走
-  iframe）；或在仅针对该受信任内置放宽的沙箱上增加受认证写端点，需单独安全
-  评审。
-
-## 8. 验收标准
-
-- 代码与测试全部位于 `app/` 下；`verify_boundaries.py` 通过。
-- AI 可跨回合增量更新同一白板；不同会话之间互不影响。
-- 便签文本永不按 HTML 处理。
-- live 与 history 渲染一致。
+- **本方案已完成：** 全局文本 store、四个工具、API 端点、独立窗口、停靠按钮、
+  Markdown 渲染、持久化。
+- **后续：** 用户编辑白板（需要写端点并做安全评审）；若单一全局板不再够用，
+  再考虑按会话分板。

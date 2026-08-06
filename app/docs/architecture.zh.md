@@ -87,14 +87,19 @@ app 通过公共 runtime builder 注册已启用的内置与用户工具。随�
 
 ### 白板工具链路
 
-随包 `whiteboard` 工具复用同一条只读 Tool UI 观察通道承载结构化内容。
-`whiteboard_update` 是一个 `AsyncTool`，其结果消息就是完整规范化板面快照
-JSON。`backend/tool_ui.py` 中的包装器在工具声明 `structured_payload = True`
-时把该 JSON 解析为 `tool_ui.emit` 事件上的可选 `payload` 字段；超限 payload
-会被丢弃，而人类可读的 message 保留。沙箱白板 frame 渲染 `event.payload`
-（并回退解析 message），因此每次 emit、历史回放或实时更新都会重绘同一板面。
-板面快照保存在会话工具引擎状态中，后续调用可基于此前调用发出的便签增量执行
-add/update/remove/clear 操作；跨 sidecar 重启的持久化属于后续阶段。
+随包 `whiteboard` 工具为**每场对话维护独立的 Markdown 文本文档**。
+`backend/whiteboard_store.py` 持有按会话索引的注册表，并把每块白板以 JSON
+持久化到工具数据目录。四个 `AsyncTool`——`fetch_text`、`add_text`、
+`delete_text`、`update_text`——操作当前会话的文档，每次返回完整规范化快照
+`{action, success, text, revision, message}`；工具 UI 包装器把当前绑定的会话
+写入调用状态，工具据此访问正确的 store。store 同时支撑
+`GET /app/api/whiteboard?session_id=...`，专属 Tauri 白板窗口跟随主窗口的
+活动会话轮询该端点并以 Markdown 渲染。窗口作为主窗口的子窗口创建以保持在其
+之上，窗口内不再显示标题与版本徽标，原生标题走 i18n。Tool UI 观察通道只保留
+触发作用：`structured_payload = True` 仍会把快照挂到 `tool_ui.emit` 上，主
+窗口在第一次白板 emit 时打开白板窗口。开启对话键右侧的停靠按钮切换窗口
+显示/隐藏；关闭窗口只隐藏 webview 并发出 `whiteboard-window-hidden` 事件，
+保持按钮状态同步。
 
 文本输入要求已有活动的 XTalk Session。公共 SDK 的 `open()` 仍会初始化麦克风采集，
 因此即使随后只输入文字，启动 Session 也需要麦克风权限。

@@ -113,18 +113,23 @@ Agent. Tool UI rendering remains an independent observer of those updates.
 
 ### Whiteboard tool chain
 
-The bundled `whiteboard` tool reuses the same read-only Tool UI observation
-channel for structured content. `whiteboard_update` is an `AsyncTool` whose
-result message is the full normalized board snapshot JSON. The wrapper in
-`backend/tool_ui.py` parses that JSON into an optional `payload` field on
-`tool_ui.emit` events whenever the tool declares `structured_payload = True`;
-oversized payloads are dropped while the human-readable message is preserved.
-The sandboxed whiteboard frame renders `event.payload` (with a message-parse
-fallback), so every emit, history replay, or live update re-renders the same
-board state. The board snapshot is kept in the session tool-engine state, so
-later calls can apply incremental add/update/remove/clear operations against
-notes emitted by earlier calls; persistence across sidecar restarts is a later
-phase.
+The bundled `whiteboard` tool keeps **one Markdown text document per
+conversation**. `backend/whiteboard_store.py` owns a session-keyed registry and
+persists each board as JSON under the tool data directory. Four `AsyncTool`s
+operate on the active session's document — `fetch_text`, `add_text`,
+`delete_text`, and `update_text` — each returning the full normalized
+`{action, success, text, revision, message}` snapshot; the tool UI wrapper
+stamps the bound conversation into each call's state so the tools address the
+right store. The store also backs `GET /app/api/whiteboard?session_id=...`,
+which the dedicated Tauri whiteboard window polls (following the main window's
+active session) and renders as Markdown. The window is created as a child of
+the main window so it stays above it, and has no in-page title or revision
+badge; its native title follows i18n. The Tool UI observation channel is
+retained only as a trigger: `structured_payload = True` still attaches the
+snapshot to `tool_ui.emit`, and the main window opens the whiteboard window on
+the first whiteboard emit. A dock button to the right of the start-conversation
+button toggles the window; closing it hides the webview and emits
+`whiteboard-window-hidden` so the button stays in sync.
 
 Text input targets an already-open XTalk session. Since the public SDK's
 `open()` still initializes microphone capture, starting that session requires

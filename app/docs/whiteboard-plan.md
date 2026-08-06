@@ -1,193 +1,151 @@
-# Whiteboard Tool Plan
+# Text Whiteboard Plan
 
 ## 1. Goal and scope
 
-During a conversation the AI often needs to keep a structured, evolving
-artifact in front of the user: a plan, a brainstorm board, a checklist, or a
-meeting outline. The existing tool UI channel (`timer`, `codex`) renders a
-status card, not structured content the AI can update across multiple turns.
-
-This plan adds a built-in **whiteboard** tool: the AI calls a tool during the
-conversation, and each call pushes a normalized snapshot of sticky-note
-content into a session-scoped whiteboard view that re-renders in real time.
+The desktop whiteboard gives **every conversation its own Markdown text
+board**. The AI maintains one document per conversation by calling four
+text-oriented tools. The active conversation's board is rendered as Markdown
+in an **independent whiteboard window** that stays above the XTalk main
+window, pops up the first time the AI writes to it, and switches content
+automatically when the user changes conversations. A dock button to the right
+of the start-conversation button shows or hides the window, and the visibility
+choice survives conversation reloads.
 
 Hard constraints:
 
 - Every change stays under `app/`; `frontend/` and `src/` are untouched.
 - Only the approved `xtalk.*` public APIs are imported (the existing
   `app/scripts/verify_boundaries.py` allowlist).
-- In phase 1 the whiteboard is a read-only view for the user; user editing is
-  deferred to a later phase.
+- The window is read-only for the user; editing stays model-driven.
 
-## 2. Key design decision
+## 2. Key design decisions
 
-### 2.1 Reuse the Tool UI observation channel (recommended, option A)
+### 2.1 Per-conversation store
 
-The current pipeline already does exactly the hard part:
+`app/backend/whiteboard_store.py` keeps one store per conversation:
 
-AI calls an `AsyncTool` -> `wrap_tools_with_ui` -> `ToolUIBroker.publish_emit`
--> in-memory history / WebSocket -> UI polls `/app/api/tool-ui/events` ->
-sandboxed `ToolUIFrame` receives `tool_ui.emit` via postMessage.
+- A registry maps a session id to its own `text`, `revision`, and
+  `updated_at`, each persisted as `whiteboards/<session>.json` under the tool
+  data directory, so boards survive sidecar restarts and never mix between
+  conversations.
+- `add_text` joins blocks with a single newline; `delete_text` and
+  `update_text` remove or replace every exact match and normalize the
+  resulting newlines.
+- The tool UI wrapper stamps the currently bound conversation into each tool
+  call's state, and the read-only sidecar endpoint serves the same
+  session-keyed store, so the window never depends on the emit channel for
+  content.
 
-The whiteboard needs only two small, backward-compatible additions:
+### 2.2 Independent window plus a dock toggle
 
-1. The emit event gains an optional structured `payload` field.
-2. The whiteboard tool declares `structured_payload = True`; the wrapper then
-   JSON-decodes the tool's emit content into `payload`.
+- A Tauri `WebviewWindow` labelled `whiteboard` loads `whiteboard.html`, is
+  created as a child of the main window so it stays above it, polls
+  `GET /app/api/whiteboard?session_id=...` (launch token + Origin), and renders
+  the returned Markdown with a small dependency-free renderer. The window
+  reads the active conversation from the main window's persisted session key
+  and follows conversation switches.
+- The window has no in-page title or revision badge; the native window title
+  follows `t("whiteboard.windowTitle")` through i18n.
+- The main window shows a whiteboard button immediately to the right of the
+  start-conversation button. Clicking it toggles the window; the visibility is
+  persisted in `localStorage` and restored when a conversation is reloaded.
+- Closing the window hides it (the webview survives), and Rust emits
+  `whiteboard-window-hidden` so the dock button stays in sync.
+- The first whiteboard tool emit auto-opens the window; later emits only keep
+  an already-open window in place.
 
-Advantages: minimal surface, the security boundary is unchanged (frame stays
-read-only, CSP unchanged, no new endpoints), session isolation and history
-replay come for free.
+## 3. Tool contract
 
-Trade-offs: the frame height cap limits the board size, in-memory events do not
-survive a sidecar restart, and users cannot edit.
+All four tools share one description, currently:
 
-### 2.2 Dedicated whiteboard service (option B, later phases)
+> 在需要教学、演示的场景考虑调用该工具。
+> Consider using this tool when teaching or demonstrating.
 
-Add `app/backend/whiteboard_store.py` (per-session persistence in
-sqlite/JSON), authenticated `GET/POST /app/api/whiteboard/{session_id}`
-endpoints (launch token + Origin), and a trusted UI panel that renders a large
-canvas directly. This enables restart persistence, a bigger canvas, and user
-editing at the cost of new endpoints and a new panel.
+### 3.1 Tool schemas
 
-The roadmap is "A first, then B".
-
-## 3. Data contract
-
-### 3.1 Tool input (the schema the LLM sees)
-
-`whiteboard_update` accepts a list of operations (v1 subset):
-
-| op | fields | notes |
+| tool | input | behavior |
 | --- | --- | --- |
-| `set_title` | `title` | set the board title |
-| `add_note` | `note {id?, text, color?}` | add a sticky note; `id` is auto-generated when absent |
-| `update_note` | `id`, `text?`/`color?` | update an existing note |
-| `remove_note` | `id` | remove a note |
-| `clear` | - | clear the board |
+| `fetch_text` | - | return the full document text and revision |
+| `add_text` | `text` | append one Markdown block to the end |
+| `delete_text` | `text` | delete every exact match; error when absent |
+| `update_text` | `from`, `to` | replace every exact `from` match with `to`; error when absent |
 
-Limits: ≤ 200 notes, ≤ 2000 characters per note text, ≤ 50 ops per call, and
-the serialized payload must stay ≤ 256 KiB.
+Limits: ≤ 50 000 characters per operation, and the emit payload must stay
+≤ 256 KiB. Every call returns the full normalized snapshot
+`{action, success, text, revision, message}`.
 
-### 3.2 Emit content (idempotent snapshot)
+### 3.2 API snapshot
 
-Every emit carries the full normalized snapshot as its `message` and attaches
-the same object as `payload`:
+`GET /app/api/whiteboard?session_id=...` returns the same document as the
+tools see for that conversation:
 
 ```json
 {
   "version": 1,
-  "title": "Weekly plan",
+  "text": "# 本周计划\n- 目标",
   "revision": 3,
-  "notes": [{"id": "n1", "text": "…", "color": "yellow"}],
   "updated_at": "…"
 }
 ```
 
-The full-snapshot semantics keep the renderer stateless: any emit, replay, or
-history frame can render completely on its own.
-
 ## 4. File-by-file changes
 
-### 4.1 Tool bundle (new)
-
-- `app/resources/tools/whiteboard/xtalk_tool.json` — display name
-  `{zh: "白板", en: "Whiteboard"}`, entrypoint `whiteboard_tool:create_tools`,
-  `ui: {entrypoint: "ui/index.html", update_every_s: -1}` (no status polling;
-  content arrives as emits).
-- `app/resources/tools/whiteboard/whiteboard_tool.py` — pydantic op/snapshot
-  models, op application, revision counter, limits, and an `AsyncTool` with
-  `name = "whiteboard_update"`, `subscribe_by_default = False`, and
-  `structured_payload = True`. `emit_initial` applies ops and returns
-  `Running(snapshot_json)`; `emit_updates` yields `Finished(snapshot_json)`.
-- `app/resources/tools/whiteboard/ui/index.html` — self-contained sandboxed
-  frame (see 4.3).
-- `app/resources/tools/builtin_tools.json` — register `whiteboard`
-  (`enabled_by_default: true`, `can_disable: true`).
-
-Note: `AsyncTool` is required, not `SyncTool`, because the UI observer wraps
-only `AsyncTool` subclasses.
-
-### 4.2 Transport protocol (small, backward-compatible changes)
-
-- `app/backend/tool_ui.py`
-  - `ToolUIBroker.publish_emit(..., payload=None)` adds an optional
-    keyword-only `dict` field.
-  - `_wrap_async_tool` attaches `payload` when
-    `getattr(original, "structured_payload", False)` and the content parses as
-    a JSON object; otherwise it degrades to no payload (message unchanged).
-  - Add `MAX_TOOL_UI_EMIT_PAYLOAD_BYTES = 256 * 1024`; oversized payloads are
-    dropped while the message is kept.
-  - History retention already copies the whole dict, so `payload` rides along
-    for free.
-- `app/ui/adapters/tool-ui-adapter.ts`
-  - `ToolUIEmitEvent` gains `payload?: unknown`; `parseToolUIEvent` accepts
-    `undefined` or a plain object and enforces the size limit.
-- `app/ui/tool-ui-frame.ts`
-  - Protocol unchanged; add a doc note that frames read structured content
-    from `event.payload`.
-  - Optional UX tweak: a taller live-frame cap for the whiteboard tool so the
-    board can use the space (the frame itself scrolls otherwise).
-
-### 4.3 Rendering (new frame)
-
-`ui/index.html` is fully self-contained:
-
-- Renders from `window.xtalkToolUI.emit` events; prefers `event.payload`,
-  falls back to parsing `event.message`.
-- v1 layout: title plus a sticky-note grid (CSS grid cards with colors), a
-  revision/count badge, and an empty state.
-- Safety: all note text is rendered with `textContent` (never `innerHTML`);
-  CSP and sandbox remain unchanged; auto `reportHeight`.
-- Built-in zh/en copy driven by `context.language`.
-
-### 4.4 Registration and mounting
-
-No `main.ts`/`index.html` changes are needed: whiteboard emits automatically
-appear in the existing live tool panel and as timeline tool rows; history rows
-render the final snapshot of that call because emit payloads are stateless.
+- `app/backend/whiteboard_store.py` (new) — global store, JSON persistence,
+  singleton helpers.
+- `app/backend/whiteboard_tool.py` — mirrored copy used by unit tests.
+- `app/resources/tools/whiteboard/whiteboard_tool.py` — four `AsyncTool`
+  classes sharing the description above; `structured_payload = True`.
+- `app/resources/tools/whiteboard/ui/index.html` — minimal sandboxed fallback
+  that renders the text snapshot (the window is the primary surface).
+- `app/backend/runtime.py` — `GET /app/api/whiteboard`, protected by the
+  launch token like the other `/app/api` routes; the `session_id` query
+  parameter selects the conversation's board.
+- `app/src-tauri/src/whiteboard.rs` (new) + `lib.rs` — show/hide/set/query
+  commands, window creation (parented to the main window), close-request
+  interception.
+- `app/src-tauri/build.rs` + `capabilities/main.json` + new
+  `capabilities/whiteboard.json` + `tauri.conf.json` — ACL permissions for the
+  four window commands and the whiteboard window's backend polling.
+- `app/backend/tool_ui.py` — stamps the bound conversation id into tool-call
+  state so whiteboard tools address the right session store.
+- `app/ui/whiteboard.html` + `whiteboard.ts` (new) — window page that polls the
+  endpoint and renders Markdown (paused while hidden).
+- `app/ui/markdown.ts` (new) — safe, dependency-free Markdown renderer.
+- `app/ui/whiteboard-window.ts` (new) — Tauri invoke/event helpers and the
+  visibility preference.
+- `app/ui/index.html` + `main.ts` + `styles.css` — whiteboard dock button,
+  first-emit auto-open, hidden-event sync, visibility restore.
+- `app/ui/i18n.ts` — whiteboard labels (zh/en).
+- `app/vite.config.ts` — second `whiteboard.html` entry.
 
 ## 5. Testing
 
-- New `app/tests/unit/test_whiteboard_tool.py`: op-application matrix,
-  revision increments, auto-generated ids, limits and invalid input, idempotent
-  snapshots.
-- Extend `app/tests/unit/test_tool_ui.py`: `structured_payload` parsing,
-  payload retained in emits and history, invalid JSON degrades, legacy events
-  without payload stay valid.
-- Extend `app/tests/unit/test_runtime.py`: `/app/api/tool-ui/events` snapshots
-  include `payload`.
-- Gates: `python scripts/verify_boundaries.py`, `npm run check`,
-  `python -m pytest`.
-- Manual acceptance: ask the AI to add/update/remove notes across turns and
-  confirm the live panel updates, sessions are isolated, and history rows
-  render correct final snapshots.
+- Rewritten `app/tests/unit/test_whiteboard_tool.py`: append/delete/update
+  semantics, per-session isolation, JSON persistence across store restarts,
+  `from` alias validation, limits, structured emit payload.
+- `app/tests/unit/test_tool_registry.py` expects the four new tool names.
+- `app/tests/unit/test_runtime.py` covers the authenticated whiteboard
+  endpoint (401 without the launch token).
+- Gates: `python -m pytest`, `npm run check`, `npm run build`, `cargo check`.
+- Manual acceptance: ask the AI to add/update/delete text across turns; the
+  window pops on the first call, the button toggles it, Markdown renders, and
+  the visibility/content persist across conversation reloads.
 
 ## 6. Security and boundaries
 
 - Everything stays under `app/`; only the approved `xtalk.models.agents.tools`
   API is used.
-- The iframe keeps `allow-scripts` only, CSP `connect-src 'none'`, and click /
-  submit blocking (read-only in v1).
-- Payload and note-text limits; note text is rendered via `textContent`.
-- Any new endpoint (phase 2) must be authenticated with the launch token and
-  Origin checks.
+- The Markdown renderer escapes every raw character first and only reinserts
+  pre-escaped placeholders; links are restricted to `http(s)` targets, so
+  board text is never treated as HTML.
+- The whiteboard endpoint is authenticated with the launch token and Origin
+  checks; the window is a trusted App page, not an untrusted tool frame.
+- Limits keep a single operation and the emit payload bounded.
 
 ## 7. Roadmap
 
-- **Phase 1 (this plan):** tool + structured payload + frame, end to end.
-- **Phase 2:** `whiteboard_store.py`, per-session persistence, authenticated
-  `GET /app/api/whiteboard/{session_id}`, and a larger dedicated panel so the
-  board survives restarts and uses more space.
-- **Phase 3 (optional):** user editing. Recommended path: render the canvas in
-  the trusted UI instead of the iframe; alternatively add an authenticated
-  write endpoint and relax the sandbox for this one trusted built-in, which
-  needs a separate security review.
-
-## 8. Acceptance criteria
-
-- All code and tests live under `app/`; `verify_boundaries.py` passes.
-- The AI can update the same board incrementally across turns; different
-  sessions never share boards.
-- Note text is never treated as HTML.
-- Live and history rendering are consistent.
+- **Done in this plan:** global text store, four tools, API endpoint,
+  independent window, dock toggle, Markdown rendering, persistence.
+- **Future:** user editing of the board (needs a write endpoint and a
+  security review), or per-session boards if a single global board is no
+  longer sufficient.

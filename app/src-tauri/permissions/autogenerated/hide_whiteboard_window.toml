@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hide-whiteboard-window"
+description = "Enables the hide_whiteboard_window command without any pre-configured scope."
+commands.allow = ["hide_whiteboard_window"]
+
+[[permission]]
+identifier = "deny-hide-whiteboard-window"
+description = "Denies the hide_whiteboard_window command without any pre-configured scope."
+commands.deny = ["hide_whiteboard_window"]

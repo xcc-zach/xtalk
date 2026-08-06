@@ -1152,6 +1152,11 @@ summary,
   filter: brightness(0.9);
 }
 
+.control-button.is-active {
+  color: var(--primary-text);
+  background: var(--primary);
+}
+
 .control-button svg {
   width: 26px;
   height: 26px;

@@ -53,6 +53,11 @@ import {
   ToolUIFrame,
   type ToolUICapabilities,
 } from "./tool-ui-frame";
+import {
+  listenWhiteboardWindowHidden,
+  persistWhiteboardVisiblePreference,
+  setWhiteboardWindowVisible,
+} from "./whiteboard-window";
 
 const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
   connectionState: "disconnected",
@@ -73,7 +78,6 @@ const BACKEND_SUMMARY_KEYS: Record<BackendState, TranslationKey> = {
 };
 
 const WHITEBOARD_TOOL_ID = "builtin:whiteboard";
-const WHITEBOARD_MAX_HEIGHT = 680;
 
 const elements = {
   app: requireElement<HTMLElement>("app"),
@@ -220,11 +224,38 @@ const elements = {
     "close-managed-progress-button",
   ),
   callButton: requireElement<HTMLButtonElement>("call-button"),
+  whiteboardButton: requireElement<HTMLButtonElement>("whiteboard-button"),
   muteButton: requireElement<HTMLButtonElement>("mute-button"),
   retryButton: requireElement<HTMLButtonElement>("retry-button"),
   languageSelect: requireElement<HTMLSelectElement>("language-select"),
   languageSummary: requireElement<HTMLElement>("language-summary"),
 };
+
+// Diagnostic trace for the whiteboard window flow. The desktop shell reads
+// this key to see exactly where a toggle stops when the window does not open.
+const WHITEBOARD_TRACE_KEY = "xtalk.whiteboard.trace";
+
+function traceWhiteboard(step: string, details?: unknown): void {
+  try {
+    localStorage.setItem(
+      WHITEBOARD_TRACE_KEY,
+      JSON.stringify({
+        step,
+        details: details === undefined ? null : String(details),
+        at: Date.now(),
+      }),
+    );
+  } catch {
+    // The trace must never break the whiteboard flow itself.
+  }
+}
+
+window.addEventListener("error", (event) => {
+  traceWhiteboard(
+    "window-error",
+    event.error instanceof Error ? event.error.message : event.message,
+  );
+});
 
 let adapter: XtalkClientAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -252,6 +283,8 @@ let recommendedConfigPath: string | null = null;
 let credentials: NativeCredentialDefinition[] = [];
 let selectedCredentialId: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
+let whiteboardVisible = false;
+let whiteboardAutoShown = false;
 let activeToolUISessionId: string | null = null;
 let toolUIOrder = 0;
 let toolUIHistory: ToolUIHistoryItem[] = [];
@@ -435,6 +468,7 @@ function applyUiLanguage(): void {
   updateDeveloperToolsStatus();
   renderSnapshot(latestSnapshot);
   renderManagedProgress();
+  updateWhiteboardButton();
 }
 
 function isCompactLayout(): boolean {
@@ -1198,9 +1232,61 @@ function updateOrbPresentation(snapshot: DesktopSessionSnapshot): void {
   elements.orbCaption.textContent = t("orb.openChatHint");
 }
 
+function whiteboardToolAvailable(): boolean {
+  return installedTools.some(
+    (tool) => tool.id === WHITEBOARD_TOOL_ID && tool.enabled,
+  );
+}
+
+function updateWhiteboardButton(): void {
+  elements.whiteboardButton.hidden = !whiteboardToolAvailable();
+  elements.whiteboardButton.classList.toggle("is-active", whiteboardVisible);
+  elements.whiteboardButton.setAttribute(
+    "aria-pressed",
+    String(whiteboardVisible),
+  );
+  const labelKey = whiteboardVisible ? "whiteboard.hide" : "whiteboard.show";
+  elements.whiteboardButton.setAttribute("aria-label", t(labelKey));
+  elements.whiteboardButton.title = t(labelKey);
+}
+
+async function setWhiteboardVisible(visible: boolean): Promise<void> {
+  whiteboardVisible = visible;
+  persistWhiteboardVisiblePreference(visible);
+  traceWhiteboard("persisted", visible);
+  try {
+    updateWhiteboardButton();
+    traceWhiteboard("button-updated");
+    await setWhiteboardWindowVisible(visible);
+    traceWhiteboard("invoke-ok", visible);
+  } catch (error) {
+    // The native whiteboard window is unavailable. Keep the button state
+    // consistent and surface the failure so it can be diagnosed.
+    traceWhiteboard(
+      "invoke-error",
+      error instanceof Error ? error.message : String(error),
+    );
+    console.error("Failed to toggle the whiteboard window.", error);
+  }
+}
+
+function handleWhiteboardEmit(): void {
+  if (whiteboardAutoShown && whiteboardVisible) {
+    return;
+  }
+  whiteboardAutoShown = true;
+  void setWhiteboardVisible(true);
+}
+
 function handleToolUIEvent(event: ToolUIEvent): void {
   const sessionId = event.sessionId ?? latestSnapshot.sessionId;
   if (sessionId === null || !toolHasUI(event.toolId)) {
+    return;
+  }
+  if (event.toolId === WHITEBOARD_TOOL_ID) {
+    if (event.type === "tool_ui.emit") {
+      handleWhiteboardEmit();
+    }
     return;
   }
   const anchorMessageIndex =
@@ -1485,9 +1571,7 @@ async function hydrateToolUIRow(
           renderLiveToolPanel();
         }
       },
-      row.mode === "live" && item.event.toolId === WHITEBOARD_TOOL_ID
-        ? WHITEBOARD_MAX_HEIGHT
-        : undefined,
+      undefined,
     );
     row.frame = frame;
     fallback.replaceWith(frame.element);
@@ -2099,6 +2183,7 @@ function renderModelConfigSelection(
 
 function renderInstalledTools(tools: NativeToolDefinition[]): void {
   installedTools = tools;
+  updateWhiteboardButton();
   if (tools.length === 0) {
     const empty = document.createElement("p");
     empty.className = "developer-tools-empty";
@@ -3036,6 +3121,10 @@ elements.muteButton.addEventListener("click", () => {
     adapter.setMuted(!adapter.snapshot.muted);
   }
 });
+elements.whiteboardButton.addEventListener("click", () => {
+  traceWhiteboard("clicked", whiteboardVisible);
+  void setWhiteboardVisible(!whiteboardVisible);
+});
 elements.selectModelConfigButton.addEventListener("click", () => {
   void chooseAndApplyModelConfig(false);
 });
@@ -3190,4 +3279,14 @@ updateNetworkStatus();
 setSidebarOpen(false, false);
 renderSnapshot(EMPTY_SNAPSHOT);
 resizeMessageInput();
+void listenWhiteboardWindowHidden(() => {
+  whiteboardVisible = false;
+  persistWhiteboardVisiblePreference(false);
+  updateWhiteboardButton();
+});
+// The whiteboard always starts hidden after a service restart. Only the dock
+// button or the first whiteboard tool emit opens the window, so a previously
+// visible board never resurfaces an unwanted window on launch.
+whiteboardVisible = false;
+persistWhiteboardVisiblePreference(false);
 void initializeApplication();

@@ -13,6 +13,10 @@ from backend.config import StartupConfig
 from backend.runtime import create_application
 from backend.security import STARTUP_TOKEN_HEADER
 from backend.tool_ui import ToolUIBinding, ToolUIBroker
+from backend.whiteboard_store import (
+    get_whiteboard_store,
+    reset_whiteboard_stores,
+)
 
 
 TOKEN = "t" * 32
@@ -417,7 +421,7 @@ def test_tool_ui_event_snapshot_retains_structured_payload(
                 tool_id="builtin:whiteboard",
                 update_every_s=-1,
             ),
-            tool_name="whiteboard_update",
+            tool_name="fetch_text",
             call_id="board-call",
             message=json.dumps(snapshot, ensure_ascii=False),
             status="complete",
@@ -444,3 +448,49 @@ def test_tool_ui_event_snapshot_retains_structured_payload(
     assert len(events) == 1
     assert events[0]["payload"] == snapshot
     assert events[0]["payload"]["notes"][0]["text"] == "便签"
+
+
+def test_whiteboard_endpoint_returns_session_scoped_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Expose one conversation's whiteboard behind the launch token."""
+
+    reset_whiteboard_stores()
+    try:
+        get_whiteboard_store("session-1").add_text("# 端点演示")
+
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+        )
+        unauthorized = asyncio.run(_request(app, "GET", "/app/api/whiteboard"))
+        authorized = asyncio.run(
+            _request(
+                app,
+                "GET",
+                "/app/api/whiteboard?session_id=session-1",
+                headers={STARTUP_TOKEN_HEADER: TOKEN},
+            )
+        )
+        other_session = asyncio.run(
+            _request(
+                app,
+                "GET",
+                "/app/api/whiteboard?session_id=session-2",
+                headers={STARTUP_TOKEN_HEADER: TOKEN},
+            )
+        )
+    finally:
+        reset_whiteboard_stores()
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    snapshot = authorized.json()
+    assert snapshot["version"] == 1
+    assert snapshot["text"] == "# 端点演示"
+    assert snapshot["revision"] == 1
+    assert snapshot["updated_at"]
+    assert other_session.status_code == 200
+    assert other_session.json()["text"] == ""
+    assert other_session.json()["revision"] == 0

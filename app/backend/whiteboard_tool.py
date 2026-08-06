@@ -1,4 +1,4 @@
-"""Built-in whiteboard tool that streams structured board snapshots.
+"""Built-in whiteboard tools that maintain one global Markdown text board.
 
 This module mirrors ``resources/tools/whiteboard/whiteboard_tool.py`` so unit
 tests can import the tool directly; the manifest loader runs the resource copy
@@ -7,14 +7,18 @@ inside a synthetic package.
 
 from __future__ import annotations
 
-import json
+import os
 from collections.abc import Iterator
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Annotated, Any, ClassVar, Literal, Union
-from uuid import uuid4
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field
+
+from backend.whiteboard_store import (
+    configure_whiteboard_data_directory,
+    get_whiteboard_store,
+)
 from xtalk.models.agents.tools import (
     AsyncTool,
     Finished,
@@ -27,374 +31,295 @@ from xtalk.models.agents.tools import (
 )
 
 
-MAX_WHITEBOARD_NOTES = 200
-MAX_WHITEBOARD_NOTE_TEXT = 2000
-MAX_WHITEBOARD_TITLE = 100
-MAX_WHITEBOARD_OPS = 50
+MAX_WHITEBOARD_TEXT_CHUNK = 50_000
+WHITEBOARD_COMMON_DESCRIPTION = (
+    "在需要教学、演示的场景考虑调用该工具。"
+    "Consider using this tool when teaching or demonstrating."
+)
 
-_WHITEBOARD_STATE_KEY = "_xtalk_whiteboard_board"
+_data_directory = os.environ.get("XTALK_TOOL_DATA_DIR")
+if _data_directory:
+    configure_whiteboard_data_directory(Path(_data_directory) / "whiteboards")
 
-WhiteboardColor = Literal["yellow", "blue", "green", "pink", "purple"]
+
+class WhiteboardFetchInput(ToolInput):
+    """Empty input for reading the whole whiteboard document."""
 
 
-class WhiteboardNoteInput(BaseModel):
-    """One sticky note supplied by the model."""
+class WhiteboardAddInput(ToolInput):
+    """Input for appending one text block to the whiteboard."""
 
-    id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=64,
-        description="Optional stable note id used by later update or remove operations.",
-    )
     text: str = Field(
         min_length=1,
-        max_length=MAX_WHITEBOARD_NOTE_TEXT,
-        description="Note text displayed on the whiteboard.",
-    )
-    color: WhiteboardColor = Field(
-        default="yellow",
-        description="Sticky-note accent color.",
+        max_length=MAX_WHITEBOARD_TEXT_CHUNK,
+        description="Markdown text appended to the end of the whiteboard.",
     )
 
 
-class SetTitleOp(BaseModel):
-    """Replace the whiteboard title."""
+class WhiteboardDeleteInput(ToolInput):
+    """Input for deleting one exact text block from the whiteboard."""
 
-    op: Literal["set_title"] = "set_title"
-    title: str = Field(
-        max_length=MAX_WHITEBOARD_TITLE,
-        description="New whiteboard title shown above the notes.",
-    )
-
-
-class AddNoteOp(BaseModel):
-    """Append one sticky note, or replace the note with the same id."""
-
-    op: Literal["add_note"] = "add_note"
-    note: WhiteboardNoteInput | str
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_flattened_note(cls, value: Any) -> Any:
-        """Accept models that flatten id/text/color onto the operation."""
-
-        if (
-            isinstance(value, dict)
-            and "note" not in value
-            and isinstance(value.get("text"), str)
-        ):
-            return {
-                **value,
-                "note": {
-                    "id": value.get("id"),
-                    "text": value["text"],
-                    "color": value.get("color"),
-                },
-            }
-        return value
-
-    @field_validator("note")
-    @classmethod
-    def _coerce_note(cls, value: WhiteboardNoteInput | str) -> WhiteboardNoteInput:
-        """Wrap a plain-text note into a note object for robustness."""
-
-        if isinstance(value, str):
-            return WhiteboardNoteInput(text=value)
-        return value
-
-
-class UpdateNoteOp(BaseModel):
-    """Patch an existing sticky note by id."""
-
-    op: Literal["update_note"] = "update_note"
-    id: str = Field(
+    text: str = Field(
         min_length=1,
-        max_length=64,
-        description="Id of an existing note returned by a previous snapshot.",
-    )
-    text: str | None = Field(
-        default=None,
-        max_length=MAX_WHITEBOARD_NOTE_TEXT,
-        description="Optional replacement note text.",
-    )
-    color: WhiteboardColor | None = Field(
-        default=None,
-        description="Optional replacement accent color.",
+        max_length=MAX_WHITEBOARD_TEXT_CHUNK,
+        description="Exact whiteboard text to delete; every match is removed.",
     )
 
 
-class RemoveNoteOp(BaseModel):
-    """Remove one sticky note by id."""
+class WhiteboardUpdateInput(ToolInput):
+    """Input for replacing one exact text block on the whiteboard."""
 
-    op: Literal["remove_note"] = "remove_note"
-    id: str = Field(
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(
+        alias="from",
         min_length=1,
-        max_length=64,
-        description="Id of the note to remove.",
+        max_length=MAX_WHITEBOARD_TEXT_CHUNK,
+        description="Exact whiteboard text to find; every match is replaced.",
     )
-
-
-class ClearOp(BaseModel):
-    """Remove every sticky note while keeping the title."""
-
-    op: Literal["clear"] = "clear"
-
-
-WhiteboardOp = Annotated[
-    Union[
-        SetTitleOp,
-        AddNoteOp,
-        UpdateNoteOp,
-        RemoveNoteOp,
-        ClearOp,
-    ],
-    Field(discriminator="op"),
-]
-
-
-class WhiteboardInput(ToolInput):
-    """Input accepted by the whiteboard tool."""
-
-    ops: list[WhiteboardOp] = Field(
-        default_factory=list,
-        max_length=MAX_WHITEBOARD_OPS,
-        description=(
-            "Operations applied to the conversation whiteboard. Every call "
-            "returns the full normalized board snapshot in its tool result."
-        ),
+    to: str = Field(
+        max_length=MAX_WHITEBOARD_TEXT_CHUNK,
+        description="Replacement Markdown text; empty removes the block.",
     )
 
 
 class WhiteboardOutput(ToolOutput):
-    """Full whiteboard snapshot returned by the whiteboard tool."""
+    """Structured result returned by every whiteboard tool."""
 
-    content: str
-
-    def to_content(self) -> str:
-        """Return the serialized board snapshot."""
-
-        return self.content
+    call_id: str = ""
+    action: str
+    success: bool
+    text: str
+    revision: int
+    message: str
 
 
 @dataclass
 class WhiteboardState(ToolState):
-    """Mutable whiteboard state for one tool call."""
+    """Mutable state for one whiteboard tool call."""
 
-    title: str = ""
-    revision: int = 0
-    notes: dict[str, dict[str, str]] = field(default_factory=dict)
+    status_text: str = "Preparing whiteboard"
+    output: WhiteboardOutput | None = None
 
 
-class WhiteboardTool(AsyncTool):
-    """Shared whiteboard shown to the user as sticky notes; editable across turns.
+class _WhiteboardTool(AsyncTool):
+    """在需要教学、演示的场景考虑调用该工具。Consider using this tool when teaching or demonstrating.
 
-    Teaching rule (MUST, highest priority): for any request to teach, explain,
-    or tutor a topic — for example "教我牛顿莱布尼茨公式", "解释一下贝叶斯
-    定理", "讲讲光合作用", or "教我怎么求导" — your reply MUST begin with a
-    whiteboard_update tool call that puts the topic title, the key points or
-    steps, and one concrete example on the board, followed by the verbal
-    explanation. Never describe putting content on the whiteboard without
-    actually calling this tool, and never answer a teaching request with text
-    alone.
-
-    Other triggers:
-    - The user asks for a plan, outline, brainstorm, checklist, agenda,
-      comparison, or a step-by-step breakdown with multiple items.
-    - Structured content needs to stay visible and keep evolving over several
-      turns (track progress, revise items, mark things done as the discussion
-      moves on).
-    - A compact visual summary of 3+ distinct items would help the user follow
-      along or make a decision.
-
-    Incremental behavior:
-    - Add one note per meaningful item and keep note text short, one idea per
-      note.
-    - Prefer add_note / update_note / remove_note with existing note ids over
-      replacing the whole board; reuse the board already shown in this
-      conversation instead of creating a fresh one.
-    - Use set_title for a short board title; use clear only when the user asks
-      to reset.
-
-    Do not call it for one-off factual questions that are not teaching
-    requests, such as asking for the time or a single fact.
+    The whiteboard is one global Markdown text document shared by every
+    conversation. Calls read or mutate the document and always return the full
+    normalized snapshot so the independent whiteboard window can re-render.
     """
 
-    name = "whiteboard_update"
     subscribe_by_default = False
     structured_payload: ClassVar[bool] = True
-    _state_key: ClassVar[str] = _WHITEBOARD_STATE_KEY
+    input_type = ToolInput
+    state_type = WhiteboardState
+    output_type = WhiteboardOutput
+    initial_status = "Reading whiteboard"
 
     @classmethod
     def emit_initial(
         cls,
         tool_call_id: str,
-        tool_input: WhiteboardInput,
+        tool_input: ToolInput,
         tool_state: WhiteboardState,
         global_state: ToolEngineState,
     ) -> Running:
-        """Apply the requested operations and return the full board snapshot."""
+        """Apply the concrete operation and return the updated snapshot."""
 
-        cls._load_board(tool_state, global_state)
-        cls._apply_ops(tool_input.ops, tool_state)
-        cls._save_board(tool_state, global_state)
-        return Running(cls._snapshot_json(tool_state))
+        del global_state
+        tool_state.call_id = tool_call_id
+        tool_state.status_text = cls.initial_status
+        output = cls.execute(tool_input, tool_state)
+        # ToolEngine requires the initial Running content to embed the call id,
+        # otherwise every whiteboard call is rejected as an engine error.
+        output.call_id = tool_call_id
+        tool_state.output = output
+        return Running(output.to_content())
 
     @classmethod
     def emit_updates(
         cls,
-        tool_input: WhiteboardInput,
+        tool_input: ToolInput,
         tool_state: WhiteboardState,
         global_state: ToolEngineState,
     ) -> Iterator[ToolResult[WhiteboardOutput]]:
-        """Complete the call with the same full board snapshot."""
+        """Complete the call with the same snapshot produced initially."""
 
         del tool_input, global_state
-        yield Finished(WhiteboardOutput(content=cls._snapshot_json(tool_state)))
+        if tool_state.output is None:
+            tool_state.output = cls.execute(cls.input_type(), tool_state)
+        yield Finished(tool_state.output)
 
     @classmethod
     def status(
         cls,
-        tool_input: WhiteboardInput,
+        tool_input: ToolInput,
         tool_state: WhiteboardState,
         global_state: ToolEngineState,
     ) -> str:
-        """Return the human-readable board status for the live panel."""
+        """Return the current phase for the live panel."""
 
         del tool_input, global_state
-        return (
-            f"Whiteboard revision {tool_state.revision} with "
-            f"{len(tool_state.notes)} notes"
+        return tool_state.status_text
+
+    @classmethod
+    def stop(
+        cls,
+        tool_input: ToolInput,
+        tool_state: WhiteboardState,
+        global_state: ToolEngineState,
+    ) -> None:
+        """Mark the call as stopped."""
+
+        del tool_input, global_state
+        tool_state.status_text = "Whiteboard stopped"
+
+    @classmethod
+    def execute(
+        cls,
+        tool_input: ToolInput,
+        tool_state: WhiteboardState,
+    ) -> WhiteboardOutput:
+        """Execute the concrete operation implemented by a subclass."""
+
+        raise NotImplementedError
+
+
+class WhiteboardFetchTool(_WhiteboardTool):
+    """在需要教学、演示的场景考虑调用该工具。Consider using this tool when teaching or demonstrating.
+    获取白板上全部文本，用于查看当前内容。"""
+
+    name = "fetch_text"
+    initial_status = "Reading whiteboard"
+    input_type = WhiteboardFetchInput
+
+    @classmethod
+    def execute(
+        cls,
+        tool_input: WhiteboardFetchInput,
+        tool_state: WhiteboardState,
+    ) -> WhiteboardOutput:
+        """Return the full whiteboard document without mutating it."""
+
+        del tool_input
+        snapshot: dict[str, Any] = get_whiteboard_store(
+            tool_state.metadata.get("session_id")
+        ).snapshot()
+        text = str(snapshot["text"])
+        message = (
+            "白板内容为空。"
+            if not text
+            else f"白板当前共 {len(text)} 个字符，revision {snapshot['revision']}。"
+        )
+        return WhiteboardOutput(
+            action=cls.name,
+            success=True,
+            text=text,
+            revision=int(snapshot["revision"]),
+            message=message,
         )
 
+
+class WhiteboardAddTool(_WhiteboardTool):
+    """在需要教学、演示的场景考虑调用该工具。Consider using this tool when teaching or demonstrating.
+    把一段文本追加到白板末尾；适合把新知识点、步骤或示例持续写到白板上。"""
+
+    name = "add_text"
+    initial_status = "Appending whiteboard text"
+    input_type = WhiteboardAddInput
+
     @classmethod
-    def _load_board(
+    def execute(
         cls,
+        tool_input: WhiteboardAddInput,
         tool_state: WhiteboardState,
-        global_state: ToolEngineState,
-    ) -> None:
-        """Load the persisted board into a fresh call's tool state."""
+    ) -> WhiteboardOutput:
+        """Append one Markdown text block and return the new snapshot."""
 
-        if tool_state.revision > 0 or not isinstance(global_state, dict):
-            return
-        persisted = global_state.get(cls._state_key)
-        if not isinstance(persisted, dict):
-            return
-        title = persisted.get("title")
-        if isinstance(title, str):
-            tool_state.title = title[:MAX_WHITEBOARD_TITLE]
-        revision = persisted.get("revision")
-        if isinstance(revision, int) and revision >= 0:
-            tool_state.revision = revision
-        notes = persisted.get("notes")
-        if isinstance(notes, dict):
-            tool_state.notes = {
-                str(note_id): {
-                    "text": str(note["text"])[:MAX_WHITEBOARD_NOTE_TEXT],
-                    "color": (
-                        str(note["color"])
-                        if isinstance(note.get("color"), str)
-                        else "yellow"
-                    ),
-                }
-                for note_id, note in notes.items()
-                if isinstance(note, dict) and "text" in note
-            }
+        snapshot: dict[str, Any] = get_whiteboard_store(
+            tool_state.metadata.get("session_id")
+        ).add_text(tool_input.text)
+        return WhiteboardOutput(
+            action=cls.name,
+            success=True,
+            text=str(snapshot["text"]),
+            revision=int(snapshot["revision"]),
+            message=f"已追加文本，白板 revision {snapshot['revision']}。",
+        )
+
+
+class WhiteboardDeleteTool(_WhiteboardTool):
+    """在需要教学、演示的场景考虑调用该工具。Consider using this tool when teaching or demonstrating.
+    删除白板上匹配的文本；删除的内容必须与白板现有文本完全一致。"""
+
+    name = "delete_text"
+    initial_status = "Deleting whiteboard text"
+    input_type = WhiteboardDeleteInput
 
     @classmethod
-    def _save_board(
+    def execute(
         cls,
+        tool_input: WhiteboardDeleteInput,
         tool_state: WhiteboardState,
-        global_state: ToolEngineState,
-    ) -> None:
-        """Store the board so subsequent calls can apply incremental ops."""
+    ) -> WhiteboardOutput:
+        """Delete every exact match and return the new snapshot."""
 
-        if isinstance(global_state, dict):
-            global_state[cls._state_key] = {
-                "title": tool_state.title,
-                "revision": tool_state.revision,
-                "notes": dict(tool_state.notes),
-            }
+        snapshot: dict[str, Any] = get_whiteboard_store(
+            tool_state.metadata.get("session_id")
+        ).delete_text(tool_input.text)
+        return WhiteboardOutput(
+            action=cls.name,
+            success=True,
+            text=str(snapshot["text"]),
+            revision=int(snapshot["revision"]),
+            message=f"已删除匹配文本，白板 revision {snapshot['revision']}。",
+        )
+
+
+class WhiteboardUpdateTool(_WhiteboardTool):
+    """在需要教学、演示的场景考虑调用该工具。Consider using this tool when teaching or demonstrating.
+    把白板上 from 匹配的文本更新为 to；from 必须与现有文本完全一致。"""
+
+    name = "update_text"
+    initial_status = "Updating whiteboard text"
+    input_type = WhiteboardUpdateInput
 
     @classmethod
-    def _apply_ops(
+    def execute(
         cls,
-        ops: list[WhiteboardOp],
+        tool_input: WhiteboardUpdateInput,
         tool_state: WhiteboardState,
-    ) -> None:
-        """Apply one operation batch and advance the revision counter."""
+    ) -> WhiteboardOutput:
+        """Replace every exact match and return the new snapshot."""
 
-        for op in ops:
-            if isinstance(op, SetTitleOp):
-                tool_state.title = op.title
-            elif isinstance(op, AddNoteOp):
-                note_id = op.note.id or f"note-{uuid4().hex[:8]}"
-                if (
-                    note_id not in tool_state.notes
-                    and len(tool_state.notes) >= MAX_WHITEBOARD_NOTES
-                ):
-                    raise ValueError(
-                        f"whiteboard already holds {MAX_WHITEBOARD_NOTES} notes"
-                    )
-                tool_state.notes[note_id] = {
-                    "text": op.note.text,
-                    "color": op.note.color,
-                }
-            elif isinstance(op, UpdateNoteOp):
-                note = tool_state.notes.get(op.id)
-                if note is None:
-                    raise ValueError(
-                        f"whiteboard note {op.id!r} does not exist"
-                    )
-                if op.text is not None:
-                    note["text"] = op.text
-                if op.color is not None:
-                    note["color"] = op.color
-            elif isinstance(op, RemoveNoteOp):
-                tool_state.notes.pop(op.id, None)
-            elif isinstance(op, ClearOp):
-                tool_state.notes.clear()
-        tool_state.revision += 1
-
-    @classmethod
-    def _snapshot(cls, tool_state: WhiteboardState) -> dict[str, Any]:
-        """Build the normalized full-board snapshot for one call."""
-
-        return {
-            "version": 1,
-            "call_id": tool_state.call_id,
-            "title": tool_state.title,
-            "revision": tool_state.revision,
-            "notes": [
-                {"id": note_id, **note}
-                for note_id, note in tool_state.notes.items()
-            ],
-            "updated_at": _utc_now(),
-        }
-
-    @classmethod
-    def _snapshot_json(cls, tool_state: WhiteboardState) -> str:
-        """Serialize the full board snapshot for one emit."""
-
-        return json.dumps(
-            cls._snapshot(tool_state),
-            ensure_ascii=False,
-            separators=(",", ":"),
+        snapshot: dict[str, Any] = get_whiteboard_store(
+            tool_state.metadata.get("session_id")
+        ).update_text(
+            tool_input.from_,
+            tool_input.to,
+        )
+        return WhiteboardOutput(
+            action=cls.name,
+            success=True,
+            text=str(snapshot["text"]),
+            revision=int(snapshot["revision"]),
+            message=f"已更新匹配文本，白板 revision {snapshot['revision']}。",
         )
 
 
 def create_tools() -> list[type[AsyncTool]]:
-    """Create the tools exported by this directory.
+    """Create the text whiteboard tools exported by this directory.
 
     Returns
     -------
     list[type[AsyncTool]]
-        Native XTalk tool classes registered with the configured Agent.
+        The four whiteboard operations sharing one global text document.
     """
 
-    return [WhiteboardTool]
-
-
-def _utc_now() -> str:
-    """Return the current UTC timestamp in ISO 8601 format."""
-
-    return datetime.now(timezone.utc).isoformat()
+    return [
+        WhiteboardFetchTool,
+        WhiteboardAddTool,
+        WhiteboardDeleteTool,
+        WhiteboardUpdateTool,
+    ]
