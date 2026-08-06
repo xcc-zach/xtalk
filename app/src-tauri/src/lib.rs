@@ -6,6 +6,7 @@ mod credentials;
 mod managed;
 mod sidecar;
 mod tools;
+mod whiteboard;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -37,7 +38,11 @@ pub fn run() {
             save_credential,
             set_tool_enabled,
             delete_credential,
-            shutdown_backend
+            shutdown_backend,
+            show_whiteboard_window,
+            hide_whiteboard_window,
+            set_whiteboard_window_visible,
+            is_whiteboard_window_visible
         ])
         .setup(|app| {
             let supervisor =
@@ -190,7 +195,29 @@ async fn shutdown_backend(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn show_whiteboard_window(app: tauri::AppHandle) -> Result<bool, String> {
+    whiteboard::show_whiteboard_window(&app)
+}
+
+#[tauri::command]
+fn hide_whiteboard_window(app: tauri::AppHandle) -> Result<bool, String> {
+    whiteboard::hide_whiteboard_window(&app)
+}
+
+#[tauri::command]
+fn set_whiteboard_window_visible(app: tauri::AppHandle, visible: bool) -> Result<bool, String> {
+    whiteboard::set_whiteboard_window_visible(&app, visible)
+}
+
+#[tauri::command]
+fn is_whiteboard_window_visible(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(whiteboard::is_whiteboard_window_visible(&app))
+}
+
 fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
+    whiteboard::handle_whiteboard_window_event(window, event);
+
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };

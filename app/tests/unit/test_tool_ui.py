@@ -473,7 +473,7 @@ def test_broker_retains_structured_payload_in_history() -> None:
                 tool_id="builtin:whiteboard",
                 update_every_s=-1,
             ),
-            tool_name="whiteboard_update",
+            tool_name="fetch_text",
             call_id="board-call",
             message=json.dumps(
                 {
@@ -518,7 +518,7 @@ def test_broker_drops_oversized_payload_but_keeps_message() -> None:
                 tool_id="builtin:whiteboard",
                 update_every_s=-1,
             ),
-            tool_name="whiteboard_update",
+            tool_name="fetch_text",
             call_id="large-call",
             message="small message",
             status="complete",

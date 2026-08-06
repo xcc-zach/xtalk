@@ -22,6 +22,10 @@
     "allow-save-credential",
     "allow-set-tool-enabled",
     "allow-shutdown-backend",
+    "allow-show-whiteboard-window",
+    "allow-hide-whiteboard-window",
+    "allow-set-whiteboard-window-visible",
+    "allow-is-whiteboard-window-visible",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "dialog:allow-open"

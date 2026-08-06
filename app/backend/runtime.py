@@ -14,6 +14,7 @@ from .config import PROTOCOL_VERSION, StartupConfig, build_effective_config
 from .desktop_tool_bridge import DesktopToolCallBridge
 from .security import STARTUP_TOKEN_HEADER, SidecarSecurityMiddleware
 from .tool_ui import ToolUIBroker
+from .whiteboard_store import get_whiteboard_store
 from .xtalk_adapter import build_xtalk_runtime, mount_xtalk_routes
 
 
@@ -154,6 +155,27 @@ def create_application(
                 (session_id, user_id),
             )
         return {"status": "ok"}
+
+    @app.get("/app/api/whiteboard")
+    async def _whiteboard(session_id: str) -> dict[str, Any]:
+        """Return one conversation's whiteboard text snapshot for the App.
+
+        Each conversation owns an independent Markdown document. The trusted
+        whiteboard window polls this read-only endpoint with the active
+        conversation's session id and renders the returned text as Markdown.
+
+        Parameters
+        ----------
+        session_id : str
+            Persisted chat session owning the requested board.
+
+        Returns
+        -------
+        dict[str, Any]
+            Normalized ``{version, text, revision, updated_at}`` snapshot.
+        """
+
+        return get_whiteboard_store(session_id).snapshot()
 
     if tool_ui_broker is not None:
 

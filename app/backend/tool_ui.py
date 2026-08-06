@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
-from xtalk.models.agents.tools import AsyncTool, Finished, Running
+from xtalk.models.agents.tools import AsyncTool, Finished, Running, ToolState
 
 from .desktop_tool_bridge import DesktopToolCallBridge
 
@@ -84,6 +84,17 @@ class ToolUIBroker:
 
         if self._bridge is not None:
             self._bridge.register_ui_tool(tool_name)
+
+    def current_session_id(self) -> str | None:
+        """Return the session most recently bound by the App UI.
+
+        Returns
+        -------
+        str | None
+            Active persisted session identifier, or ``None`` before binding.
+        """
+
+        return self._current_session_id
 
     async def serve(self, websocket: WebSocket) -> None:
         """Serve one authenticated read-only Tool UI WebSocket.
@@ -471,6 +482,25 @@ def wrap_tools_with_ui(
     return wrapped
 
 
+def _stamp_tool_session(broker: Any, tool_state: ToolState) -> None:
+    """Attach the App-bound session to one tool call's mutable state.
+
+    Parameters
+    ----------
+    broker : Any
+        Tool UI broker that may expose the currently bound session.
+    tool_state : ToolState
+        Mutable state shared by one asynchronous tool call.
+    """
+
+    current_session_id = getattr(broker, "current_session_id", None)
+    if not callable(current_session_id):
+        return
+    session_id = current_session_id()
+    if session_id is not None:
+        tool_state.metadata["session_id"] = session_id
+
+
 def _wrap_async_tool(
     original: type[AsyncTool],
     *,
@@ -483,6 +513,7 @@ def _wrap_async_tool(
         """Delegate the initial emit and publish its read-only observation."""
 
         del cls
+        _stamp_tool_session(broker, tool_state)
         result = await original.aemit_initial(
             tool_call_id,
             tool_input,
@@ -522,6 +553,7 @@ def _wrap_async_tool(
         """Delegate updates while observing periodic status and every emit."""
 
         del cls
+        _stamp_tool_session(broker, tool_state)
         call_id = tool_state.call_id
         updates = original.aemit_updates(
             tool_input,

@@ -16,9 +16,6 @@
         background: transparent;
       }
       .board {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
         padding: 16px;
         border: 1px solid rgb(127 127 127 / 22%);
         border-radius: 20px;
@@ -29,55 +26,32 @@
         align-items: baseline;
         justify-content: space-between;
         gap: 12px;
+        margin-bottom: 10px;
       }
       h1 {
         min-width: 0;
         margin: 0;
-        font-size: 17px;
+        font-size: 15px;
         font-weight: 650;
-        letter-spacing: -0.02em;
-        overflow-wrap: anywhere;
-      }
-      .board-meta {
-        display: flex;
-        flex: none;
-        align-items: center;
-        gap: 8px;
-        color: rgb(127 127 127);
-        font-size: 11px;
-        white-space: nowrap;
       }
       .revision {
-        padding: 4px 9px;
+        flex: none;
+        padding: 3px 9px;
         border: 1px solid rgb(127 127 127 / 20%);
         border-radius: 999px;
         color: #35c6f4;
+        font-size: 11px;
         font-weight: 620;
       }
-      .notes {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-        gap: 10px;
-      }
-      .note {
-        min-width: 0;
-        padding: 13px 14px;
-        border: 1px solid rgb(127 127 127 / 16%);
-        border-radius: 16px;
-        box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
-      }
-      .note p {
+      pre {
         margin: 0;
-        font-size: 13px;
-        line-height: 1.45;
+        max-height: 480px;
+        overflow: auto;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+        font-size: 13px;
+        line-height: 1.5;
       }
-      .note.yellow { background: rgb(250 204 21 / 18%); }
-      .note.blue { background: rgb(59 130 246 / 18%); }
-      .note.green { background: rgb(34 197 94 / 18%); }
-      .note.pink { background: rgb(236 72 153 / 18%); }
-      .note.purple { background: rgb(168 85 247 / 18%); }
       .empty {
         padding: 26px 18px;
         border: 1px dashed rgb(127 127 127 / 28%);
@@ -86,64 +60,26 @@
         font-size: 13px;
         text-align: center;
       }
-      .empty strong {
-        display: block;
-        margin-bottom: 4px;
-        color: inherit;
-        font-size: 14px;
-      }
       .status {
+        margin-top: 8px;
         color: rgb(127 127 127);
         font-size: 11px;
         text-align: right;
       }
       .status:empty { display: none; }
-      :root[data-mode="history"] .board {
-        padding: 13px;
-        border-radius: 16px;
-      }
-      :root[data-mode="history"] h1 { font-size: 15px; }
-      :root[data-mode="history"] .status { display: none; }
-      @media (max-width: 520px) {
-        .board { padding: 12px; }
-        .notes { grid-template-columns: 1fr; }
-      }
     </style>
   </head>
   <body>
     <main class="board">
       <header class="board-header">
-        <h1 id="title"></h1>
-        <div class="board-meta">
-          <span id="revision" class="revision"></span>
-          <span id="count"></span>
-        </div>
+        <h1 data-i18n="白板">白板</h1>
+        <span id="revision" class="revision"></span>
       </header>
-      <div id="notes" class="notes"></div>
-      <div id="empty" class="empty" hidden>
-        <strong id="empty-title"></strong>
-        <span id="empty-hint"></span>
-      </div>
+      <pre id="text" hidden></pre>
+      <div id="empty" class="empty" hidden>白板内容为空。</div>
       <footer id="status" class="status"></footer>
     </main>
     <script>
-      const { language, mode } = window.xtalkToolUI.context;
-      const locale = language.toLowerCase().startsWith("zh") ? "zh" : "en";
-      const copy = {
-        en: {
-          emptyTitle: "Empty board",
-          emptyHint: "Ask the assistant to add notes.",
-          revision: "Revision",
-          notes: (count) => `${count} note${count === 1 ? "" : "s"}`,
-        },
-        zh: {
-          emptyTitle: "空白白板",
-          emptyHint: "让助手帮你添加便签。",
-          revision: "版本",
-          notes: (count) => `${count} 张便签`,
-        },
-      }[locale];
-      document.documentElement.dataset.mode = mode;
       const byId = (id) => document.getElementById(id);
       const parsePayload = (event) => {
         if (event.payload && typeof event.payload === "object") {
@@ -156,46 +92,21 @@
           return null;
         }
       };
-      const renderSnapshot = (event) => {
+      const render = (event) => {
         const snapshot = parsePayload(event);
-        if (!snapshot) {
+        if (!snapshot || typeof snapshot.text !== "string") {
           return;
         }
-        const title = byId("title");
-        const notes = byId("notes");
-        const empty = byId("empty");
-        const revision = byId("revision");
-        const count = byId("count");
-        title.textContent = typeof snapshot.title === "string"
-          ? snapshot.title
-          : "";
-        revision.textContent = `${copy.revision} ${snapshot.revision ?? 0}`;
-        const noteItems = Array.isArray(snapshot.notes)
-          ? snapshot.notes
-          : [];
-        notes.replaceChildren();
-        for (const note of noteItems) {
-          if (!note || typeof note.text !== "string") {
-            continue;
-          }
-          const card = document.createElement("article");
-          card.className = `note ${typeof note.color === "string" ? note.color : "yellow"}`;
-          const text = document.createElement("p");
-          text.textContent = note.text;
-          card.append(text);
-          notes.append(card);
-        }
-        count.textContent = copy.notes(noteItems.length);
-        empty.hidden = noteItems.length !== 0;
-        byId("empty-title").textContent = copy.emptyTitle;
-        byId("empty-hint").textContent = copy.emptyHint;
+        byId("revision").textContent =
+          typeof snapshot.revision === "number" ? `revision ${snapshot.revision}` : "";
+        byId("text").textContent = snapshot.text;
+        byId("text").hidden = snapshot.text.length === 0;
+        byId("empty").hidden = snapshot.text.length !== 0;
       };
       const renderStatus = (event) => {
-        byId("status").textContent = typeof event.status === "string"
-          ? event.status
-          : "";
+        byId("status").textContent = typeof event.status === "string" ? event.status : "";
       };
-      window.xtalkToolUI.emit((event) => renderSnapshot(event));
+      window.xtalkToolUI.emit((event) => render(event));
       window.xtalkToolUI.status((event) => renderStatus(event));
     </script>
   </body>
