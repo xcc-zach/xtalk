@@ -69,6 +69,10 @@ struct CredentialDefinition {
     id: String,
     display_name: CredentialDisplayName,
     environment: Vec<String>,
+    /// Environment variable always injected into the sidecar when a secret
+    /// is available, without requiring a tool binding.
+    #[serde(default)]
+    inject_environment: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -350,6 +354,16 @@ pub(crate) async fn sidecar_environment(
     app: &AppHandle,
 ) -> Result<BTreeMap<String, String>, CredentialError> {
     let registry = load_registry(app)?;
+    let always_injected = registry
+        .credentials
+        .iter()
+        .filter_map(|definition| {
+            definition
+                .inject_environment
+                .as_ref()
+                .map(|name| (definition.id.clone(), name.clone()))
+        })
+        .collect::<Vec<_>>();
     let enabled_bindings = registry
         .bindings
         .iter()
@@ -369,6 +383,14 @@ pub(crate) async fn sidecar_environment(
             let secret = resolve_secret(definition, &SystemCredentialStore, &environment_value)?
                 .ok_or(CredentialError::RequiredCredentialMissing)?;
             resolved.insert(binding.inject_environment, secret);
+        }
+        for (credential_id, name) in always_injected {
+            let definition = registered_credential(&registry, &credential_id)?;
+            if let Some(secret) =
+                resolve_secret(definition, &SystemCredentialStore, &environment_value)?
+            {
+                resolved.insert(name, secret);
+            }
         }
         Ok(resolved)
     })
@@ -405,6 +427,21 @@ fn validate_registry(registry: &CredentialRegistry) -> Result<(), CredentialErro
     }
     let mut bindings = BTreeSet::new();
     let mut injected_names = BTreeMap::new();
+    for definition in &registry.credentials {
+        if let Some(name) = &definition.inject_environment {
+            if !is_environment_name(name)
+                || !definition
+                    .environment
+                    .iter()
+                    .any(|candidate| candidate == name)
+                || injected_names
+                    .insert(name.as_str(), definition.id.as_str())
+                    .is_some()
+            {
+                return Err(CredentialError::InvalidRegistry);
+            }
+        }
+    }
     for binding in &registry.bindings {
         if !binding.tool_id.starts_with("builtin:")
             || !credential_ids.contains_key(binding.credential_id.as_str())
@@ -583,6 +620,7 @@ mod tests {
                 id: "serper".to_owned(),
                 display_name: CredentialDisplayName::Text("Serper".to_owned()),
                 environment: vec!["SERPER_API_KEY".to_owned()],
+                inject_environment: None,
             }],
             bindings: vec![CredentialBinding {
                 tool_id: "builtin:web_search".to_owned(),
@@ -590,6 +628,17 @@ mod tests {
                 inject_environment: "SERPER_API_KEY".to_owned(),
             }],
         }
+    }
+
+    fn registry_with_llm() -> CredentialRegistry {
+        let mut registry = registry();
+        registry.credentials.push(CredentialDefinition {
+            id: "llm".to_owned(),
+            display_name: CredentialDisplayName::Text("DeepSeek LLM".to_owned()),
+            environment: vec!["OPENAI_API_KEY".to_owned()],
+            inject_environment: Some("OPENAI_API_KEY".to_owned()),
+        });
+        registry
     }
 
     #[test]
@@ -638,6 +687,39 @@ mod tests {
         invalid.bindings[0].credential_id = "missing".to_owned();
         assert!(matches!(
             validate_registry(&invalid),
+            Err(CredentialError::InvalidRegistry)
+        ));
+    }
+
+    #[test]
+    fn always_injected_credentials_validate_when_declared_in_environment() {
+        assert!(validate_registry(&registry_with_llm()).is_ok());
+
+        let mut undeclared = registry_with_llm();
+        undeclared.credentials[1].inject_environment = Some("SERPER_API_KEY".to_owned());
+        assert!(matches!(
+            validate_registry(&undeclared),
+            Err(CredentialError::InvalidRegistry)
+        ));
+
+        let mut malformed = registry_with_llm();
+        malformed.credentials[1].inject_environment = Some("OPENAI_API_KEY-extra".to_owned());
+        assert!(matches!(
+            validate_registry(&malformed),
+            Err(CredentialError::InvalidRegistry)
+        ));
+    }
+
+    #[test]
+    fn always_injected_names_cannot_collide_with_tool_bindings() {
+        let mut registry = registry_with_llm();
+        registry.bindings.push(CredentialBinding {
+            tool_id: "builtin:web_search".to_owned(),
+            credential_id: "serper".to_owned(),
+            inject_environment: "OPENAI_API_KEY".to_owned(),
+        });
+        assert!(matches!(
+            validate_registry(&registry),
             Err(CredentialError::InvalidRegistry)
         ));
     }

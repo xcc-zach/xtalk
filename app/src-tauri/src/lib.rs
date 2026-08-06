@@ -30,6 +30,7 @@ pub fn run() {
             get_installed_tools,
             get_managed_model_plan,
             get_model_config_selection,
+            get_recommended_model_config,
             get_tool_ui_source,
             install_tool_directory,
             remove_installed_tool,
@@ -80,6 +81,11 @@ async fn get_model_config_selection(
     supervisor: State<'_, Arc<BackendSupervisor>>,
 ) -> Result<NativeModelConfigSelection, String> {
     Ok(supervisor.selection().await)
+}
+
+#[tauri::command]
+fn get_recommended_model_config(app: tauri::AppHandle) -> Result<PathBuf, String> {
+    sidecar::recommended_model_config_path(&app).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

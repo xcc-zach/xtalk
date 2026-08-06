@@ -612,6 +612,111 @@
       </div>
 
       <dialog
+        id="first-launch-dialog"
+        class="settings-dialog"
+        aria-labelledby="first-launch-dialog-title"
+      >
+        <div class="settings-dialog-card">
+          <header>
+            <h2 id="first-launch-dialog-title" data-i18n="model.firstLaunchTitle">
+              首次启动配置
+            </h2>
+            <p data-i18n="model.firstLaunchDescription">
+              选择推荐配置可立即使用本地语音模型与 DeepSeek 大语言模型；也可以选择自己的 JSON 配置文件。
+            </p>
+          </header>
+          <div class="first-launch-options">
+            <button
+              id="recommended-config-button"
+              class="first-launch-option"
+              type="button"
+            >
+              <strong data-i18n="model.recommended">推荐配置</strong>
+              <span data-i18n="model.recommendedDescription">
+                本地语音模型（SenseVoice + Matcha）搭配 DeepSeek 大语言模型，无需选择文件。
+              </span>
+            </button>
+            <button
+              id="custom-config-button"
+              class="first-launch-option"
+              type="button"
+            >
+              <strong data-i18n="model.custom">自定义配置</strong>
+              <span data-i18n="model.customDescription">
+                选择自己的外部 JSON 模型配置文件。
+              </span>
+            </button>
+          </div>
+          <div class="settings-dialog-actions">
+            <button
+              id="first-launch-cancel-button"
+              class="settings-dialog-button"
+              type="button"
+              data-i18n="model.cancel"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        id="llm-key-dialog"
+        class="settings-dialog"
+        aria-labelledby="llm-key-dialog-title"
+      >
+        <form id="llm-key-form" class="settings-dialog-card">
+          <header>
+            <h2 id="llm-key-dialog-title" data-i18n="llm.title">
+              配置 LLM API Key
+            </h2>
+            <p data-i18n="llm.description">
+              输入 DeepSeek API Key 后即可开始对话。Key 将保存在系统凭据管理器中，不会写入 AppData。
+            </p>
+            <a
+              id="llm-key-link"
+              class="settings-dialog-link"
+              href="https://platform.deepseek.com/api_keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-i18n="llm.linkLabel"
+            >
+              获取 DeepSeek API Key
+            </a>
+          </header>
+          <label class="settings-dialog-field" for="llm-key-input">
+            <span data-i18n="llm.title">配置 LLM API Key</span>
+            <input
+              id="llm-key-input"
+              type="password"
+              autocomplete="new-password"
+              spellcheck="false"
+              placeholder="粘贴 API Key"
+              data-i18n-placeholder="llm.placeholder"
+              required
+            />
+          </label>
+          <div class="settings-dialog-actions">
+            <button
+              id="llm-key-skip-button"
+              class="settings-dialog-button"
+              type="button"
+              data-i18n="llm.skip"
+            >
+              跳过
+            </button>
+            <button
+              class="settings-dialog-button settings-dialog-button-primary"
+              type="submit"
+              data-i18n="llm.saveAndContinue"
+            >
+              保存并继续
+            </button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog
         id="credential-dialog"
         class="settings-dialog"
         aria-labelledby="credential-dialog-title"

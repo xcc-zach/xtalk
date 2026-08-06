@@ -475,9 +475,11 @@ def verify_builtin_tools_and_credentials() -> None:
         raise ValueError("credential registry must not contain secret values")
     credential_ids: set[str] = set()
     for definition in credentials["credentials"]:
+        allowed_keys = {"id", "display_name", "environment", "inject_environment"}
+        inject_environment = definition.get("inject_environment")
         if (
             not isinstance(definition, dict)
-            or set(definition) != {"id", "display_name", "environment"}
+            or set(definition) - allowed_keys
             or not isinstance(definition["id"], str)
             or not definition["id"]
             or definition["id"] in credential_ids
@@ -486,6 +488,14 @@ def verify_builtin_tools_and_credentials() -> None:
             or not all(
                 isinstance(name, str) and name
                 for name in definition["environment"]
+            )
+            or (
+                inject_environment is not None
+                and (
+                    not isinstance(inject_environment, str)
+                    or not inject_environment
+                    or inject_environment not in definition["environment"]
+                )
             )
         ):
             raise ValueError("credential registry definition is invalid")

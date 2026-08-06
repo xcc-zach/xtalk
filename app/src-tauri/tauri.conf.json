@@ -54,6 +54,7 @@
       "../resources/licenses/mlx-swift-LICENSE.txt": "licenses/mlx-swift-LICENSE.txt",
       "../resources/manifests/managed-models.lock.json": "manifests/managed-models.lock.json",
       "../resources/credentials.json": "credentials.json",
+      "../examples/local_models_matcha.json": "examples/local_models_matcha.json",
       "../resources/tools/": "tools/",
       "../resources/managed-runtime/ort/": "managed-runtime/ort/",
       "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",

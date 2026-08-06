@@ -2034,6 +2034,52 @@ summary,
   background: #e5484d;
 }
 
+.first-launch-options {
+  display: grid;
+  gap: 9px;
+}
+
+.first-launch-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 13px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface-muted);
+  font: inherit;
+}
+
+.first-launch-option:hover {
+  border-color: var(--focus);
+  background: var(--surface-hover);
+}
+
+.first-launch-option strong {
+  font-size: 13px;
+}
+
+.first-launch-option span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-dialog-link {
+  justify-self: start;
+  color: var(--primary);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.settings-dialog-link:hover {
+  filter: brightness(1.1);
+}
+
 .toast-region {
   position: fixed;
   z-index: 60;
