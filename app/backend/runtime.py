@@ -104,6 +104,57 @@ def create_application(
             await callback_result
         return {"status": "shutting_down"}
 
+    @app.delete("/app/api/sessions/{session_id}")
+    async def _delete_session(session_id: str) -> dict[str, str]:
+        """Delete one persisted chat session owned by the desktop identity.
+
+        The desktop UI talks to a single anonymous identity, so the delete is
+        scoped by that identity. Any live service for the session is stopped
+        before its SQLite rows are removed, letting the ``chat_messages``
+        foreign key cascade clean up the history.
+
+        Parameters
+        ----------
+        session_id : str
+            Identifier of the persisted session to delete.
+
+        Returns
+        -------
+        dict[str, str]
+            Status acknowledgment once the session and its rows are removed.
+
+        Raises
+        ------
+        fastapi.HTTPException
+            Raised with 404 when persistence or the desktop identity is
+            unavailable, or the session is not owned by that identity.
+        """
+
+        persistence = xtalk_runtime._persistence
+        user_id = xtalk_runtime._anonymous_user_id
+        if (
+            persistence is None
+            or user_id is None
+            or not persistence.user_owns_session(user_id, session_id)
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Session not found",
+            )
+        # Stop the in-memory service first so any final message flush happens
+        # before the rows it targets are removed from the SQLite store.
+        service_manager = xtalk_runtime._service_manager
+        if service_manager is not None:
+            await service_manager.remove_service(session_id)
+        # The persistence store lives in the public ``xtalk`` package, so the
+        # App reuses its connection and lock directly for the deletion.
+        with persistence._lock, persistence._connect() as conn:
+            conn.execute(
+                "DELETE FROM chat_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            )
+        return {"status": "ok"}
+
     if tool_ui_broker is not None:
 
         @app.post("/app/api/tool-ui/frames")
