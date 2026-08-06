@@ -112,6 +112,7 @@ const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
 const MANAGED_MODEL_PLAN_COMMAND = "get_managed_model_plan";
 const MANAGED_MODEL_PROGRESS_EVENT = "managed-model-progress";
 const MODEL_CONFIG_SELECTION_COMMAND = "get_model_config_selection";
+const RECOMMENDED_MODEL_CONFIG_COMMAND = "get_recommended_model_config";
 const REMOVE_INSTALLED_TOOL_COMMAND = "remove_installed_tool";
 const SAVE_CREDENTIAL_COMMAND = "save_credential";
 const SET_TOOL_ENABLED_COMMAND = "set_tool_enabled";
@@ -164,6 +165,20 @@ export async function getNativeModelConfigSelection(): Promise<NativeModelConfig
     throw new Error("Model configuration payload contains an empty path.");
   }
   return { configPath };
+}
+
+/**
+ * Returns the validated bundled recommended model configuration path.
+ *
+ * @returns Absolute JSON configuration path bundled with the App.
+ */
+export async function getNativeRecommendedModelConfig(): Promise<string> {
+  requireTauriRuntime();
+  const payload = await invoke<unknown>(RECOMMENDED_MODEL_CONFIG_COMMAND);
+  if (typeof payload !== "string" || !payload.trim()) {
+    throw new Error("Tauri returned an invalid recommended configuration path.");
+  }
+  return payload;
 }
 
 /** Lists external service credentials without returning secret values. */

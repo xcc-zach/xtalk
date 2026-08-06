@@ -12,6 +12,7 @@ import {
   getNativeBackendConnection,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
+  getNativeRecommendedModelConfig,
   getNativeToolUiSource,
   installNativeToolDirectory,
   listenNativeManagedModelProgress,
@@ -93,6 +94,24 @@ const elements = {
   modelConfigStatus: requireElement<HTMLElement>("model-config-status"),
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
+  ),
+  firstLaunchDialog: requireElement<HTMLDialogElement>(
+    "first-launch-dialog",
+  ),
+  recommendedConfigButton: requireElement<HTMLButtonElement>(
+    "recommended-config-button",
+  ),
+  customConfigButton: requireElement<HTMLButtonElement>(
+    "custom-config-button",
+  ),
+  firstLaunchCancelButton: requireElement<HTMLButtonElement>(
+    "first-launch-cancel-button",
+  ),
+  llmKeyDialog: requireElement<HTMLDialogElement>("llm-key-dialog"),
+  llmKeyForm: requireElement<HTMLFormElement>("llm-key-form"),
+  llmKeyInput: requireElement<HTMLInputElement>("llm-key-input"),
+  llmKeySkipButton: requireElement<HTMLButtonElement>(
+    "llm-key-skip-button",
   ),
   credentialsList: requireElement<HTMLElement>("credentials-list"),
   credentialsStatus: requireElement<HTMLElement>("credentials-status"),
@@ -229,6 +248,7 @@ let sidebarOpen = false;
 let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
+let recommendedConfigPath: string | null = null;
 let credentials: NativeCredentialDefinition[] = [];
 let selectedCredentialId: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
@@ -2501,6 +2521,101 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
   }
 }
 
+function openFirstLaunchDialog(): void {
+  if (modelConfigPath !== null || elements.firstLaunchDialog.open) {
+    return;
+  }
+  elements.firstLaunchDialog.showModal();
+  elements.recommendedConfigButton.focus();
+}
+
+function cancelFirstLaunchChoice(): void {
+  elements.firstLaunchDialog.close();
+  setBackendStatus("unconfigured", "service.chooseConfig");
+  elements.modelConfigStatus.textContent = t("model.firstLaunch");
+}
+
+async function chooseCustomConfig(): Promise<void> {
+  elements.firstLaunchDialog.close();
+  await chooseAndApplyModelConfig(true);
+}
+
+async function chooseRecommendedConfig(): Promise<void> {
+  if (modelConfigPath !== null) {
+    return;
+  }
+  elements.firstLaunchDialog.close();
+  showError(null);
+  elements.modelConfigStatus.textContent = t("model.choosePrompt");
+  try {
+    recommendedConfigPath = await getNativeRecommendedModelConfig();
+    elements.llmKeyInput.value = "";
+    elements.llmKeyInput.setCustomValidity("");
+    elements.llmKeyDialog.showModal();
+    elements.llmKeyInput.focus();
+  } catch (error) {
+    recommendedConfigPath = null;
+    setBackendStatus("unconfigured", "service.chooseConfig");
+    elements.modelConfigStatus.textContent = t("model.firstLaunch");
+    showError("model.applyFailedDetail", { error });
+    setDiagnosticsOpen(true);
+  }
+}
+
+async function applyRecommendedConfig(): Promise<void> {
+  const configPath = recommendedConfigPath;
+  recommendedConfigPath = null;
+  if (configPath === null) {
+    setBackendStatus("unconfigured", "service.chooseConfig");
+    return;
+  }
+  await applyModelConfigPath(configPath);
+}
+
+function skipLlmKey(): void {
+  elements.llmKeyDialog.close();
+  elements.llmKeyInput.value = "";
+  void applyRecommendedConfig();
+}
+
+function cancelLlmKeyDialog(): void {
+  elements.llmKeyDialog.close();
+  recommendedConfigPath = null;
+  setBackendStatus("unconfigured", "service.chooseConfig");
+  elements.modelConfigStatus.textContent = t("model.firstLaunch");
+}
+
+async function saveLlmKeyAndContinue(): Promise<void> {
+  const value = elements.llmKeyInput.value.trim();
+  if (!value) {
+    elements.llmKeyInput.setCustomValidity(t("credentials.keyValidation"));
+    elements.llmKeyInput.reportValidity();
+    return;
+  }
+  if (credentialOperation) {
+    return;
+  }
+
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("llm.saving"));
+  updateToolControls();
+  try {
+    await saveNativeCredential("llm", value);
+    elements.llmKeyDialog.close();
+    elements.llmKeyInput.value = "";
+    credentialChangesPending = true;
+    await refreshCredentials();
+    updateCredentialStatus(t("llm.saved"));
+    await applyRecommendedConfig();
+  } catch (error) {
+    showError("llm.saveFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
+  }
+}
+
 async function restartCurrentModelConfig(): Promise<void> {
   if (modelConfigOperation || modelConfigPath === null) {
     return;
@@ -2754,7 +2869,7 @@ async function initializeApplication(): Promise<void> {
     if (selection.configPath === null) {
       setBackendStatus("unconfigured", "service.chooseConfig");
       setDiagnosticsOpen(true);
-      await chooseAndApplyModelConfig(true);
+      openFirstLaunchDialog();
       return;
     }
     const managedPlan = await getNativeManagedModelPlan(selection.configPath);
@@ -2924,6 +3039,33 @@ elements.muteButton.addEventListener("click", () => {
 elements.selectModelConfigButton.addEventListener("click", () => {
   void chooseAndApplyModelConfig(false);
 });
+elements.recommendedConfigButton.addEventListener("click", () => {
+  void chooseRecommendedConfig();
+});
+elements.customConfigButton.addEventListener("click", () => {
+  void chooseCustomConfig();
+});
+elements.firstLaunchCancelButton.addEventListener("click", () => {
+  cancelFirstLaunchChoice();
+});
+elements.firstLaunchDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelFirstLaunchChoice();
+});
+elements.llmKeyForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveLlmKeyAndContinue();
+});
+elements.llmKeySkipButton.addEventListener("click", () => {
+  skipLlmKey();
+});
+elements.llmKeyDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelLlmKeyDialog();
+});
+elements.llmKeyInput.addEventListener("input", () => {
+  elements.llmKeyInput.setCustomValidity("");
+});
 elements.installToolDirectoryButton.addEventListener("click", () => {
   void chooseAndInstallToolDirectory();
 });
@@ -3002,7 +3144,7 @@ elements.messageInput.addEventListener("blur", () => {
 });
 elements.retryButton.addEventListener("click", () => {
   if (modelConfigPath === null) {
-    void chooseAndApplyModelConfig(true);
+    openFirstLaunchDialog();
   } else {
     void restartCurrentModelConfig();
   }
@@ -3018,7 +3160,11 @@ window.addEventListener("keydown", (event) => {
     event.stopImmediatePropagation();
     return;
   }
-  if (elements.credentialDialog.open) {
+  if (
+    elements.credentialDialog.open ||
+    elements.firstLaunchDialog.open ||
+    elements.llmKeyDialog.open
+  ) {
     return;
   }
   if (event.key === "Escape" && managedProgressState === "failed") {

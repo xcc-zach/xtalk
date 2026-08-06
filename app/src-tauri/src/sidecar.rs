@@ -39,6 +39,7 @@ const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
 const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
 const DESKTOP_VAD_THRESHOLD: f64 = 0.7;
 const BUILTIN_TOOLS_RESOURCE: &str = "tools";
+const RECOMMENDED_MODEL_CONFIG_RESOURCE: &str = "examples/local_models_matcha.json";
 const SIDECAR_RUNTIME_RESOURCE: &str = "app-backend-runtime";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -767,6 +768,12 @@ fn resolve_required_resource(
         return Err(BackendError::MissingResource);
     }
     Ok(path)
+}
+
+/// Returns the validated bundled recommended model configuration.
+pub(crate) fn recommended_model_config_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    let path = resolve_required_resource(app, RECOMMENDED_MODEL_CONFIG_RESOURCE, false)?;
+    validate_model_config_path(&path)
 }
 
 fn sidecar_working_directory() -> Result<PathBuf, BackendError> {

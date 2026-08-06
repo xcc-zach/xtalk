@@ -119,3 +119,26 @@ chooses CUDA, then MLX, then CPU. The external JSON is never rewritten.
 `Info.plist` and `Entitlements.plist` provide the macOS microphone usage
 description and hardened-runtime audio-input entitlement. The WebView requests
 microphone access only when the user starts a voice conversation.
+
+## Adding a Tauri command
+
+Every command exposed to the WebView must be registered in **four** places.
+Omitting any of them fails at runtime; the most common symptom is:
+
+```text
+Command <name> not allowed by ACL
+```
+
+1. `src/lib.rs` — add the `#[tauri::command]` function and include its name in
+   the `invoke_handler(tauri::generate_handler![...])` list.
+2. `build.rs` — add the command name to `APP_COMMANDS` so Tauri generates its
+   permission identifiers in `gen/schemas/desktop-schema.json`.
+3. `capabilities/main.json` — add `allow-<kebab-case-command-name>` to
+   `permissions`. This entry is the ACL gate and is the one most often
+   forgotten: the ACL error above still appears when steps 1, 2, and 4 are
+   correct.
+4. `../ui/adapters/native-capabilities.ts` — add the command constant and the
+   invoke wrapper used by the WebView.
+
+After changing any of these files, rebuild with `npm run package:macos:local`
+so the generated schema and the installed bundle include the new permission.

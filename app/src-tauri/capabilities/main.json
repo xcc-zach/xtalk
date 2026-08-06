@@ -16,6 +16,7 @@
     "allow-get-managed-model-plan",
     "allow-get-tool-ui-source",
     "allow-get-model-config-selection",
+    "allow-get-recommended-model-config",
     "allow-install-tool-directory",
     "allow-remove-installed-tool",
     "allow-save-credential",
