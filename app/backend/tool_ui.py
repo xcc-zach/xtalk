@@ -1,4 +1,4 @@
-"""Read-only UI observation for developer-installed asynchronous tools."""
+"""Read-only UI observation for developer-installed native tools."""
 
 from __future__ import annotations
 
@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
-from xtalk.models.agents.tools import AsyncTool, Finished, Running, ToolState
+from xtalk.models.agents.tools import (
+    AsyncTool,
+    Finished,
+    Running,
+    SyncTool,
+    ToolState,
+)
 
 from .desktop_tool_bridge import DesktopToolCallBridge
 
@@ -444,7 +450,7 @@ def wrap_tools_with_ui(
     binding: ToolUIBinding,
     broker: ToolUIBroker,
 ) -> list[Any]:
-    """Wrap native asynchronous tools with read-only App observers.
+    """Wrap native tools with read-only App observers.
 
     Parameters
     ----------
@@ -458,13 +464,22 @@ def wrap_tools_with_ui(
     Returns
     -------
     list[Any]
-        Original values with native ``AsyncTool`` classes transparently
-        replaced by behavior-preserving subclasses.
+        Original values with native tool classes transparently replaced by
+        behavior-preserving subclasses.
     """
 
     wrapped: list[Any] = []
     for tool in tools:
-        if isinstance(tool, type) and issubclass(tool, AsyncTool):
+        if isinstance(tool, type) and issubclass(tool, SyncTool):
+            broker.register_ui_tool(tool.name or tool.__name__)
+            wrapped.append(
+                _wrap_sync_tool(
+                    tool,
+                    binding=binding,
+                    broker=broker,
+                )
+            )
+        elif isinstance(tool, type) and issubclass(tool, AsyncTool):
             broker.register_ui_tool(tool.name or tool.__name__)
             wrapped.append(
                 _wrap_async_tool(
@@ -476,6 +491,51 @@ def wrap_tools_with_ui(
         else:
             wrapped.append(tool)
     return wrapped
+
+
+def _global_tool_session_id(global_state: Any) -> str | None:
+    """Return the backend session identifier stored in tool-engine state."""
+
+    if not isinstance(global_state, dict):
+        return None
+    session_id = global_state.get("session_id")
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _wrap_sync_tool(
+    original: type[SyncTool],
+    *,
+    binding: ToolUIBinding,
+    broker: ToolUIBroker,
+) -> type[SyncTool]:
+    """Wrap one immediate tool with a single terminal UI observation."""
+
+    tool_name = original.name or original.__name__
+
+    async def ainvoke(cls, tool_input, global_state):
+        """Delegate the invocation and publish its completed output once."""
+
+        del cls
+        result = await original.ainvoke(tool_input, global_state)
+        message = result.to_content()
+        await broker.publish_emit(
+            binding=binding,
+            tool_name=tool_name,
+            call_id=f"sync-{secrets.token_hex(16)}",
+            message=message,
+            status="complete",
+            running=False,
+            payload=_structured_payload(original, message),
+            session_id=_global_tool_session_id(global_state),
+        )
+        return result
+
+    attributes = {
+        "__module__": original.__module__,
+        "__doc__": original.__doc__,
+        "ainvoke": classmethod(ainvoke),
+    }
+    return type(original.__name__, (original,), attributes)
 
 
 def _bind_tool_session(
@@ -500,8 +560,8 @@ def _bind_tool_session(
     """
 
     session_id = tool_state.metadata.get("session_id")
-    if not session_id and isinstance(global_state, dict):
-        session_id = global_state.get("session_id")
+    if not session_id:
+        session_id = _global_tool_session_id(global_state)
     if not isinstance(session_id, str) or not session_id:
         return None
     tool_state.metadata["session_id"] = session_id
@@ -740,14 +800,14 @@ async def _safe_status(
 
 
 def _structured_payload(
-    original: type[AsyncTool],
+    original: type[SyncTool] | type[AsyncTool],
     message: str,
 ) -> dict[str, Any] | None:
     """Return one tool's structured emit payload when it declares one.
 
     Parameters
     ----------
-    original : type[AsyncTool]
+    original : type[SyncTool] | type[AsyncTool]
         Unwrapped tool class whose structured-content declaration is read.
     message : str
         Emit message produced by the tool.
