@@ -19,6 +19,7 @@ from ..events import (
     LLMAgentResponseUpdate,
     LLMFirstChunk,
     LLMModelSwitchRequested,
+    TTSResponseClosed,
     ToolCallOccurred,
     TurnLLMAgentPauseRequested,
     TurnLLMAgentResumeRequested,
@@ -80,8 +81,17 @@ class LLMAgentConsumptionManager(Manager):
         self._persistent_streams: set[asyncio.Task[None]] = set()
         self._streams_lock = asyncio.Lock()
         self._output_lock = asyncio.Lock()
+        self._response_close_waiters: dict[str, asyncio.Event] = {}
         self._resume_event = asyncio.Event()
         self._resume_event.set()
+
+    @Manager.event_handler(TTSResponseClosed, priority=-110)
+    async def _handle_tts_response_closed(self, event: TTSResponseClosed) -> None:
+        """Release a tool call after its preceding response has settled."""
+
+        waiter = self._response_close_waiters.get(event.response_id)
+        if waiter is not None:
+            waiter.set()
 
     @Manager.event_handler(LLMModelSwitchRequested, priority=100)
     async def _handle_llm_model_switch(self, event: LLMModelSwitchRequested) -> None:
@@ -303,6 +313,8 @@ class LLMAgentConsumptionManager(Manager):
                         self.session_id,
                     )
                     return
+                if item["name"] != "tool_call_result":
+                    await self._wait_for_pre_tool_playback_locked(task)
                 await self._publish_tool_call(item)
                 return
 
@@ -343,6 +355,33 @@ class LLMAgentConsumptionManager(Manager):
                 ),
                 wait_for_completion=True,
             )
+
+    async def _wait_for_pre_tool_playback_locked(
+        self,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Flush and settle one stream's spoken preamble before a tool call."""
+
+        state = self._response_states.get(task)
+        if state is None or not (state.accumulated_text or state.tts_started):
+            return
+
+        response_id = state.response_id
+        waiter: asyncio.Event | None = None
+        if response_id is not None and state.tts_started:
+            waiter = asyncio.Event()
+            self._response_close_waiters[response_id] = waiter
+
+        try:
+            await self._finish_response_locked(task)
+            if waiter is not None:
+                await waiter.wait()
+        finally:
+            if (
+                response_id is not None
+                and self._response_close_waiters.get(response_id) is waiter
+            ):
+                self._response_close_waiters.pop(response_id, None)
 
     async def _finalize_stream(
         self,
@@ -542,6 +581,7 @@ class LLMAgentConsumptionManager(Manager):
             tasks, iterators = self._detach_all_streams_locked()
         await self._cancel_tasks(tasks)
         await self._close_iterators(iterators)
+        self._response_close_waiters.clear()
 
         agent = self.models.get(Agent)
         if agent is not None and hasattr(agent, "tool_engine"):
