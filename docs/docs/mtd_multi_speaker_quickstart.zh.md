@@ -16,7 +16,7 @@ flowchart LR
     Join --> Agent[DefaultAgent]
 ```
 
-现有 VAD、MTD snapshot 调度、speaker exemplar pool、事件发布和 ASR/MTD 合并链路对两个后端完全相同。切换后端只需要替换 `speaker_diarization` 模型配置。
+现有 VAD、MTD snapshot 调度、speaker exemplar pool、事件发布和 ASR/MTD 合并链路对两个后端完全相同。两个后端统一使用 `OfficialMtdClient`，切换时只需修改 `base_url`。客户端通过 `GET /v1/models` 识别 SGLang-Omni 并获取模型名；该接口返回 404 时使用官方 runtime 协议。
 
 ## 1. 选择推理后端
 
@@ -114,7 +114,7 @@ curl http://127.0.0.1:18604/health
 
 将 [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) 中的以下配置合并进现有 X-Talk 配置：
 
-- `speaker_diarization`：配置 `OfficialMtdClient` 和 runtime 地址。
+- `speaker_diarization`：配置统一的 `OfficialMtdClient` 和 runtime 地址。
 - `service_config.multi_speaker`：启用多说话人链路和响应策略。
 - `service_config.mtd`：配置 partial 间隔、注册音频静音以及 exemplar 质量规则。
 
@@ -152,15 +152,14 @@ curl http://127.0.0.1:18604/health
 
 ### 3.2 SGLang-Omni
 
-将 [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_multi_speaker_sglang_omni.example.json) 合并进现有配置。核心差别仅是客户端类型和服务地址：
+将 [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_multi_speaker_sglang_omni.example.json) 合并进现有配置。核心差别仅是服务地址：
 
 ```json
 {
   "speaker_diarization": {
-    "type": "SglangOmniMtdClient",
+    "type": "OfficialMtdClient",
     "params": {
       "base_url": "http://127.0.0.1:18714",
-      "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
       "max_tokens": 2048
@@ -169,7 +168,7 @@ curl http://127.0.0.1:18604/health
 }
 ```
 
-`SglangOmniMtdClient` 现在与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
+`OfficialMtdClient` 通过 `GET /v1/models` 自动识别 SGLang-Omni，取返回的第一个模型 ID 发起转录请求，并与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
 
 1. `MtdDiarizationManager` 将已注册 exemplar 音频、可配置静音和当前 VAD snapshot 拼成同一个请求。
 2. 时间戳形式的 `decoder_prefix` 被接在 `<|im_start|>assistant` 后，注册的 `S01` / `S02` 标签成为固定的 decoder 上下文。

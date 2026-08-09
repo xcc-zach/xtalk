@@ -16,7 +16,7 @@ flowchart LR
     Join --> Agent[DefaultAgent]
 ```
 
-The existing VAD path, MTD snapshot scheduler, speaker exemplar pool, event publication, and ASR/MTD join are identical for both backends. Switching backends only changes the `speaker_diarization` model configuration.
+The existing VAD path, MTD snapshot scheduler, speaker exemplar pool, event publication, and ASR/MTD join are identical for both backends. Both use the unified `OfficialMtdClient`; switching backends only changes `base_url`. The client queries `GET /v1/models` to detect SGLang-Omni and obtain its model name, while a 404 selects the official runtime protocol.
 
 ## 1. Choose an inference backend
 
@@ -117,7 +117,7 @@ has completed.
 
 Merge the following sections from [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) into an existing X-Talk configuration:
 
-- `speaker_diarization` configures `OfficialMtdClient` and the runtime URL.
+- `speaker_diarization` configures the unified `OfficialMtdClient` and runtime URL.
 - `service_config.multi_speaker` enables the multi-speaker path and response policy.
 - `service_config.mtd` configures the partial interval, registration-audio silence, and exemplar quality rules.
 
@@ -155,15 +155,14 @@ The current speaker-aware prompt is implemented by `DefaultAgent`, so the comple
 
 ### 3.2 SGLang-Omni
 
-Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_multi_speaker_sglang_omni.example.json) into the existing configuration. Only the client type and service address differ:
+Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_multi_speaker_sglang_omni.example.json) into the existing configuration. Only the service address differs:
 
 ```json
 {
   "speaker_diarization": {
-    "type": "SglangOmniMtdClient",
+    "type": "OfficialMtdClient",
     "params": {
       "base_url": "http://127.0.0.1:18714",
-      "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
       "max_tokens": 2048
@@ -172,7 +171,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 }
 ```
 
-`SglangOmniMtdClient` uses a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
+`OfficialMtdClient` discovers SGLang-Omni through `GET /v1/models`, uses the first returned model ID for transcription requests, and applies a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
 
 1. `MtdDiarizationManager` concatenates registered exemplar audio, configurable silence, and the current VAD snapshot into one request.
 2. Its timestamped `decoder_prefix` is appended after `<|im_start|>assistant`; registered `S01` / `S02` labels are fixed decoder context.
