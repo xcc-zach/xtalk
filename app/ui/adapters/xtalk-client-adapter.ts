@@ -33,6 +33,8 @@ export interface DesktopMessage {
   role: "user" | "assistant" | "info";
   /** Plain-text message body. */
   content: string;
+  /** Stable server response identifier for assistant messages. */
+  responseId?: string;
   /** Whether the backend marked the message as complete. */
   final: boolean;
 }
@@ -103,13 +105,15 @@ function mapDesktopMessages(
     role: DesktopMessage["role"];
     content: string;
     final?: boolean;
+    responseId?: string;
   }>,
 ): DesktopMessage[] {
   return messages.map((message, index) => ({
-    id: `${sessionId ?? "pending"}:${index}`,
+    id: message.responseId ?? `${sessionId ?? "pending"}:${index}`,
     role: message.role,
     content: message.content,
     final: message.final === true,
+    ...(message.responseId ? { responseId: message.responseId } : {}),
   }));
 }
 

@@ -512,23 +512,28 @@ async def _exercise_text_timer_conversation(
             open_timeout=20,
             close_timeout=5,
         ) as websocket:
-            playback_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+            playback_queue: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue()
             conversation_completed = False
+            active_response_id: str | None = None
 
             async def playback_worker() -> None:
                 """Serialize real-time PCM playback and chunk acknowledgements."""
 
                 nonlocal chunk_ack_count
                 while True:
-                    chunk = await playback_queue.get()
+                    queued_audio = await playback_queue.get()
                     try:
-                        if chunk is None:
+                        if queued_audio is None:
                             return
+                        response_id, chunk = queued_audio
                         chunk_duration_seconds = (len(chunk) // 2) / 48_000.0
                         await asyncio.sleep(chunk_duration_seconds)
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_chunk_played"},
+                                {
+                                    "action": "tts_chunk_played",
+                                    "response_id": response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
@@ -587,9 +592,13 @@ async def _exercise_text_timer_conversation(
                 while True:
                     incoming = await websocket.recv()
                     if isinstance(incoming, bytes):
+                        if active_response_id is None:
+                            raise AssertionError(
+                                "binary TTS arrived without start_tts"
+                            )
                         action_counts["binary_audio"] += 1
                         binary_chunk_count += 1
-                        await playback_queue.put(incoming)
+                        await playback_queue.put((active_response_id, incoming))
                         continue
 
                     try:
@@ -609,7 +618,39 @@ async def _exercise_text_timer_conversation(
 
                     if action == "error":
                         raise AssertionError("sidecar emitted an error action")
+                    if action == "start_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or not isinstance(data.get("response_id"), str)
+                            or not data["response_id"]
+                        ):
+                            raise AssertionError("start_tts response ID is missing")
+                        active_response_id = data["response_id"]
+                        continue
+                    if action == "stop_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("stop_tts response ID mismatched")
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "action": "tts_playback_stopped",
+                                    "response_id": active_response_id,
+                                    "played_audio_ms": 0,
+                                },
+                                separators=(",", ":"),
+                            )
+                        )
+                        active_response_id = None
+                        continue
                     if action == "tts_finished":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("tts_finished response ID mismatched")
                         tts_finished_count += 1
                         try:
                             await asyncio.wait_for(
@@ -627,10 +668,14 @@ async def _exercise_text_timer_conversation(
                         await asyncio.sleep(1.0)
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_playback_finished"},
+                                {
+                                    "action": "tts_playback_finished",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
+                        active_response_id = None
                         playback_finished_ack_count += 1
                         if conversation_is_complete():
                             conversation_completed = True
@@ -773,6 +818,7 @@ async def _exercise_voice_conversation(
             open_timeout=20,
             close_timeout=5,
         ) as websocket:
+            active_response_id: str | None = None
             await websocket.send(
                 json.dumps(
                     {
@@ -815,10 +861,17 @@ async def _exercise_voice_conversation(
                 while True:
                     incoming = await websocket.recv()
                     if isinstance(incoming, bytes):
+                        if active_response_id is None:
+                            raise AssertionError(
+                                "binary TTS arrived without start_tts"
+                            )
                         action_counts["binary_audio"] += 1
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_chunk_played"},
+                                {
+                                    "action": "tts_chunk_played",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
@@ -841,6 +894,33 @@ async def _exercise_voice_conversation(
 
                     if action == "error":
                         raise AssertionError("sidecar emitted an error action")
+                    if action == "start_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or not isinstance(data.get("response_id"), str)
+                            or not data["response_id"]
+                        ):
+                            raise AssertionError("start_tts response ID is missing")
+                        active_response_id = data["response_id"]
+                        continue
+                    if action == "stop_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("stop_tts response ID mismatched")
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "action": "tts_playback_stopped",
+                                    "response_id": active_response_id,
+                                    "played_audio_ms": 0,
+                                },
+                                separators=(",", ":"),
+                            )
+                        )
+                        active_response_id = None
+                        continue
                     if action in {"vad_speech_start", "vad_speech_end"}:
                         if (
                             not isinstance(data, dict)
@@ -878,12 +958,21 @@ async def _exercise_voice_conversation(
                             return
                         continue
                     if action == "tts_finished":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("tts_finished response ID mismatched")
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_playback_finished"},
+                                {
+                                    "action": "tts_playback_finished",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
+                        active_response_id = None
             finally:
                 if not microphone_task.done():
                     microphone_task.cancel()

@@ -23,10 +23,11 @@ def test_desktop_maps_one_display_entry_per_sdk_message() -> None:
     )[1].split("export class XtalkClientAdapter", maxsplit=1)[0]
 
     assert "return messages.map((message, index) =>" in mapping
-    assert 'id: `${sessionId ?? "pending"}:${index}`' in mapping
+    assert 'id: message.responseId ?? `${sessionId ?? "pending"}:${index}`' in mapping
     assert "role: message.role" in mapping
     assert "content: message.content" in mapping
     assert "final: message.final === true" in mapping
+    assert "message.responseId ? { responseId: message.responseId } : {}" in mapping
 
 
 def test_desktop_does_not_coalesce_assistant_messages() -> None:

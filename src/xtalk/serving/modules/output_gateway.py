@@ -186,12 +186,12 @@ class OutputGateway(EventListenerMixin):
         await self._forward_asr("finish_asr", event)
 
     @EventListenerMixin.event_handler(TTSStarted, priority=5)
-    async def _on_start_tts(self, event) -> None:
-        await self._forward("start_tts", "")
+    async def _on_start_tts(self, event: TTSStarted) -> None:
+        await self._forward("start_tts", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(TTSStopped, priority=5)
-    async def _send_stop_tts_signal(self, event) -> None:
-        await self._forward("stop_tts", "")
+    async def _send_stop_tts_signal(self, event: TTSStopped) -> None:
+        await self._forward("stop_tts", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(ErrorOccurred, priority=5)
     async def _send_error_signal(self, event: ErrorOccurred) -> None:
@@ -207,15 +207,21 @@ class OutputGateway(EventListenerMixin):
 
     @EventListenerMixin.event_handler(ResponseUpdate, priority=5)
     async def _send_update_resp_signal(self, event: ResponseUpdate) -> None:
-        await self._forward("update_resp", {"text": event.text})
+        await self._forward(
+            "update_resp",
+            {"response_id": event.response_id, "text": event.text},
+        )
 
     @EventListenerMixin.event_handler(ResponseFinish, priority=5)
     async def _send_finish_resp_signal(self, event: ResponseFinish) -> None:
-        await self._forward("finish_resp", {"text": event.text})
+        await self._forward(
+            "finish_resp",
+            {"response_id": event.response_id, "text": event.text},
+        )
 
     @EventListenerMixin.event_handler(TTSFinished, priority=5)
     async def _send_tts_finished_signal(self, event: TTSFinished) -> None:
-        await self._forward("tts_finished", {})
+        await self._forward("tts_finished", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(SpeakerRecognized, priority=5)
     async def _send_speaker_updated_signal(self, event: SpeakerRecognized) -> None:
