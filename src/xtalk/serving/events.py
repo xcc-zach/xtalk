@@ -313,6 +313,7 @@ class TTSSpeedChange(Event):
 @dataclass
 class TTSChunkReady(Event):
     """Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated."""
+
     TYPE: ClassVar[str] = "tts.chunk_ready"
     audio_chunk: bytes = b""
     sample_rate: int = 48000
@@ -520,7 +521,7 @@ class TurnASRPauseRequested(Event):
 
 @dataclass
 class SpeakerDiarizationPartial(Event):
-    """Replaceable MTD result for the current VAD-segment snapshot."""
+    """Replaceable diarization result for the current VAD-segment snapshot."""
 
     TYPE: ClassVar[str] = "speaker_diarization.partial"
     turn_id: int = 0
@@ -537,7 +538,7 @@ class SpeakerDiarizationPartial(Event):
 
 @dataclass
 class SpeakerDiarizationSegmentFinal(Event):
-    """Terminal MTD result for one VAD segment."""
+    """Terminal diarization result for one VAD segment."""
 
     TYPE: ClassVar[str] = "speaker_diarization.segment_final"
     turn_id: int = 0
@@ -548,8 +549,7 @@ class SpeakerDiarizationSegmentFinal(Event):
     raw_text: str = ""
     diarization_text: str = ""
     segments: list[dict[str, Any]] = field(default_factory=list)
-    pool_version: int = 0
-    pool_actions: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
     degraded: bool = False
     degraded_reason: str = ""
     latency_ms: float = 0.0
@@ -557,7 +557,7 @@ class SpeakerDiarizationSegmentFinal(Event):
 
 @dataclass
 class SpeakerDiarizationTurnFinal(Event):
-    """Terminal MTD timeline after every VAD segment in a hard turn ends."""
+    """Terminal diarization timeline after every segment in a hard turn ends."""
 
     TYPE: ClassVar[str] = "speaker_diarization.turn_final"
     turn_id: int = 0
