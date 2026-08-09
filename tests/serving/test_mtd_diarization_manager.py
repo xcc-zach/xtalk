@@ -1,13 +1,15 @@
-"""Tests for final-only MTD speaker exemplar selection."""
+"""Tests for MTD manager speaker exemplar selection."""
 
 import numpy as np
 
-from xtalk.serving.mtd.audio_layout import float32_to_pcm16_bytes
-from xtalk.serving.mtd.exemplar_pool import SpeakerExemplarPool
+from xtalk.serving.modules.mtd_diarization_manager import (
+    _SpeakerExemplarPool,
+    _float32_to_pcm16_bytes,
+)
 
 
-def _pool() -> SpeakerExemplarPool:
-    return SpeakerExemplarPool(
+def _pool() -> _SpeakerExemplarPool:
+    return _SpeakerExemplarPool(
         {
             "max_speakers": 16,
             "min_register_duration_s": 0.70,
@@ -34,7 +36,7 @@ def test_pool_keeps_complete_partially_overlapped_mtd_segment() -> None:
 
     pool = _pool()
     t = np.arange(4 * 16000, dtype=np.float32) / 16000
-    audio = float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
+    audio = _float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
     decisions = pool.update_from_final(
         audio,
         [
@@ -58,12 +60,17 @@ def test_pool_prefers_complete_non_overlapped_segment_before_better_overlap() ->
 
     pool = _pool()
     t = np.arange(4 * 16000, dtype=np.float32) / 16000
-    audio = float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
+    audio = _float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
     decisions = pool.update_from_final(
         audio,
         [
             {"start_s": 0.0, "end_s": 1.0, "speaker_id": "S01", "text": "纯净片段"},
-            {"start_s": 1.0, "end_s": 4.0, "speaker_id": "S01", "text": "较长但重叠片段"},
+            {
+                "start_s": 1.0,
+                "end_s": 4.0,
+                "speaker_id": "S01",
+                "text": "较长但重叠片段",
+            },
             {"start_s": 1.5, "end_s": 2.5, "speaker_id": "S02", "text": "插话"},
         ],
         source_segment_id=1,
@@ -80,7 +87,7 @@ def test_pool_prefers_partial_before_full_overlap() -> None:
 
     pool = _pool()
     t = np.arange(4 * 16000, dtype=np.float32) / 16000
-    audio = float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
+    audio = _float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 220 * t))
     decisions = pool.update_from_final(
         audio,
         [
@@ -103,7 +110,7 @@ def test_pool_falls_back_to_complete_fully_overlapped_segment() -> None:
 
     pool = _pool()
     t = np.arange(3 * 16000, dtype=np.float32) / 16000
-    audio = float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 180 * t))
+    audio = _float32_to_pcm16_bytes(0.2 * np.sin(2 * np.pi * 180 * t))
     decisions = pool.update_from_final(
         audio,
         [
@@ -126,7 +133,7 @@ def test_clean_candidate_replaces_higher_scoring_overlapped_exemplar() -> None:
 
     pool = _pool()
     long_t = np.arange(3 * 16000, dtype=np.float32) / 16000
-    loud = float32_to_pcm16_bytes(0.3 * np.sin(2 * np.pi * 220 * long_t))
+    loud = _float32_to_pcm16_bytes(0.3 * np.sin(2 * np.pi * 220 * long_t))
     first = pool.update_from_final(
         loud,
         [
@@ -135,12 +142,15 @@ def test_clean_candidate_replaces_higher_scoring_overlapped_exemplar() -> None:
         ],
         source_segment_id=1,
     )
-    assert next(item for item in first if item["speaker_id"] == "S01")["action"] == "register"
+    assert (
+        next(item for item in first if item["speaker_id"] == "S01")["action"]
+        == "register"
+    )
     assert pool.items["S01"].quality["overlap_class"] == "partial_overlap"
     old_score = pool.items["S01"].score
 
     short_t = np.arange(0.8 * 16000, dtype=np.float32) / 16000
-    quiet = float32_to_pcm16_bytes(0.02 * np.sin(2 * np.pi * 220 * short_t))
+    quiet = _float32_to_pcm16_bytes(0.02 * np.sin(2 * np.pi * 220 * short_t))
     second = pool.update_from_final(
         quiet,
         [{"start_s": 0.0, "end_s": 0.8, "speaker_id": "S01", "text": "纯净新样本"}],
@@ -157,7 +167,7 @@ def test_overlapped_candidate_never_replaces_clean_exemplar_by_score() -> None:
 
     pool = _pool()
     short_t = np.arange(0.8 * 16000, dtype=np.float32) / 16000
-    quiet = float32_to_pcm16_bytes(0.02 * np.sin(2 * np.pi * 220 * short_t))
+    quiet = _float32_to_pcm16_bytes(0.02 * np.sin(2 * np.pi * 220 * short_t))
     first = pool.update_from_final(
         quiet,
         [{"start_s": 0.0, "end_s": 0.8, "speaker_id": "S01", "text": "纯净旧样本"}],
@@ -167,7 +177,7 @@ def test_overlapped_candidate_never_replaces_clean_exemplar_by_score() -> None:
     old_score = pool.items["S01"].score
 
     long_t = np.arange(3 * 16000, dtype=np.float32) / 16000
-    loud = float32_to_pcm16_bytes(0.3 * np.sin(2 * np.pi * 220 * long_t))
+    loud = _float32_to_pcm16_bytes(0.3 * np.sin(2 * np.pi * 220 * long_t))
     second = pool.update_from_final(
         loud,
         [

@@ -9,7 +9,7 @@ from urllib.parse import quote
 import aiohttp
 
 from ..registry import model
-from .interfaces import DiarizationResult, SpeakerDiarization
+from .interfaces import DiarizationResult, DiarizationSegment, SpeakerDiarization
 
 
 @model
@@ -93,7 +93,9 @@ class OfficialMtdClient(SpeakerDiarization):
             content_type="audio/pcm",
         )
         started = time.perf_counter()
-        async with session.post(f"{self.base_url}/v1/mtd/decode", data=form) as response:
+        async with session.post(
+            f"{self.base_url}/v1/mtd/decode", data=form
+        ) as response:
             response.raise_for_status()
             payload: dict[str, Any] = await response.json()
         latency_ms = float(payload.get("latency_ms") or 0.0)
@@ -101,7 +103,7 @@ class OfficialMtdClient(SpeakerDiarization):
             latency_ms = (time.perf_counter() - started) * 1000.0
         return DiarizationResult(
             raw_text=str(payload.get("raw_text") or ""),
-            current_segments=list(payload.get("current_segments") or []),
+            current_segments=_normalize_segments(payload.get("current_segments")),
             latency_ms=latency_ms,
             metrics=dict(payload.get("metrics") or {}),
         )
@@ -129,3 +131,31 @@ class OfficialMtdClient(SpeakerDiarization):
             timeout = aiohttp.ClientTimeout(total=self.request_timeout_s)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
+
+
+def _normalize_segments(value: object) -> list[DiarizationSegment]:
+    """Normalize runtime JSON into the public diarization segment contract."""
+
+    if not isinstance(value, list):
+        return []
+    segments: list[DiarizationSegment] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start_s = float(item["start_s"])
+            end_s = float(item["end_s"])
+            speaker_id = str(item["speaker_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end_s <= start_s:
+            continue
+        segments.append(
+            {
+                "start_s": start_s,
+                "end_s": end_s,
+                "speaker_id": speaker_id,
+                "text": str(item.get("text") or ""),
+            }
+        )
+    return segments

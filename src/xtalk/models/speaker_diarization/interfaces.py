@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
 from ..registry import model_type
+
+
+class DiarizationSegment(TypedDict):
+    """One timestamped speaker-diarization segment."""
+
+    start_s: float
+    end_s: float
+    speaker_id: str
+    text: str
 
 
 @dataclass(frozen=True)
@@ -17,7 +26,7 @@ class DiarizationResult:
     ----------
     raw_text : str
         Full timestamped model output, including any fixed decoder prefix.
-    current_segments : list[dict[str, Any]]
+    current_segments : list[DiarizationSegment]
         Parsed segments cropped to current-audio-local coordinates.
     latency_ms : float
         End-to-end decode latency measured by the runtime or client.
@@ -26,7 +35,7 @@ class DiarizationResult:
     """
 
     raw_text: str = ""
-    current_segments: list[dict[str, Any]] = field(default_factory=list)
+    current_segments: list[DiarizationSegment] = field(default_factory=list)
     latency_ms: float = 0.0
     metrics: dict[str, Any] = field(default_factory=dict)
 

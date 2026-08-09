@@ -13,7 +13,7 @@ from typing import Any
 import aiohttp
 
 from ..registry import model
-from .interfaces import DiarizationResult, SpeakerDiarization
+from .interfaces import DiarizationResult, DiarizationSegment, SpeakerDiarization
 
 
 _TIMESTAMP_SEGMENT_RE = re.compile(
@@ -374,11 +374,11 @@ def _crop_current_segments(
     *,
     context_seconds: float,
     current_audio_seconds: float,
-) -> list[dict[str, object]]:
+) -> list[DiarizationSegment]:
     """Remove registered-audio time and retain decoder-produced speaker IDs."""
 
     current_end_s = context_seconds + current_audio_seconds
-    result: list[dict[str, object]] = []
+    result: list[DiarizationSegment] = []
     for segment in segments:
         start_s = max(segment.start_s, context_seconds)
         end_s = min(segment.end_s, current_end_s)
