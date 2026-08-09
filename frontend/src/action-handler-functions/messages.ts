@@ -30,18 +30,24 @@ const messagesMap: ActionToFunctionMap = {
         conversation.state.streamState = 'processing';
     },
     "update_resp": async (data, websocket, conversation, outputAudioSession) => {
-        conversation.appendMessage({
-            role: "assistant",
-            content: data.text,
-            final: false
-        })
+        if (typeof data.response_id !== "string" || !data.response_id) {
+            return;
+        }
+        conversation.updateAssistantResponse(
+            data.response_id,
+            typeof data.text === "string" ? data.text : "",
+            false,
+        );
     },
     "finish_resp": async (data, websocket, conversation, outputAudioSession) => {
-        conversation.appendMessage({
-            role: "assistant",
-            content: data.text,
-            final: true
-        })
+        if (typeof data.response_id !== "string" || !data.response_id) {
+            return;
+        }
+        conversation.updateAssistantResponse(
+            data.response_id,
+            typeof data.text === "string" ? data.text : "",
+            true,
+        );
     },
 };
 

@@ -12,7 +12,6 @@ from .events import Event, LLMAgentLoop
 from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
 from .modules.captioner_manager import CaptionerManager
-from .modules.direct_audio_manager import DirectAudioManager
 from .modules.embeddings_manager import EmbeddingsManager
 from .modules.enhancer_manager import EnhancerManager
 from .modules.input_gateway import InputGateway
@@ -26,6 +25,7 @@ from .modules.retrieval_manager import RetrievalManager
 from .modules.speaker_manager import SpeakerManager
 from .modules.tts_manager import TTSManager
 from .modules.tts_playback_manager import TTSPlaybackManager
+from .modules.tts_response_coordinator import TTSResponseCoordinator
 from .modules.turn_detector_manager import TurnDetectorManager
 from .modules.turn_taking_manager import TurnTakingManager
 from .modules.vad_manager import VADManager
@@ -392,8 +392,8 @@ class DefaultService(Service):
         ASRManager,
         LLMAgentContextManager,
         LLMAgentConsumptionManager,
-        DirectAudioManager,
         TTSManager,
+        TTSResponseCoordinator,
         TTSPlaybackManager,
         CaptionerManager,
         RetrievalManager,

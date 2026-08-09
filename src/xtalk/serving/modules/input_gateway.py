@@ -223,7 +223,13 @@ class TextMsgHandler(EventListenerMixin):
 
     async def _handle_tts_playback_finished(self, message_data: dict) -> None:
         """Handle frontend TTS playback completion and transition to idle."""
-        await self._publish(TTSPlaybackFinished(session_id=self.session_id))
+        await self.event_bus.publish(
+            TTSPlaybackFinished(
+                session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
+            ),
+            wait_for_completion=True,
+        )
 
     async def _handle_tts_playback_stopped(self, message_data: dict) -> None:
         """Apply the final partial-chunk playback reported during interruption."""
@@ -237,6 +243,7 @@ class TextMsgHandler(EventListenerMixin):
         await self.event_bus.publish(
             TTSPlaybackStopped(
                 session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
                 played_audio_ms=played_audio_ms,
             ),
             wait_for_completion=True,
@@ -300,7 +307,10 @@ class TextMsgHandler(EventListenerMixin):
     async def _handle_tts_chunk_played(self, message_data: dict) -> None:
         """Handle frontend confirmation that a TTS chunk finished playback."""
         await self.event_bus.publish(
-            TTSChunkPlayed(session_id=self.session_id),
+            TTSChunkPlayed(
+                session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
+            ),
             wait_for_completion=True,
         )
 
