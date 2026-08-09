@@ -23,15 +23,9 @@
     }
   },
   "tts": {
-    "type": "MossTTSNano",
+    "type": "SherpaOnnxTTS",
     "params": {
-      "base_url": "managed://moss-tts-nano",
-      "voices": [
-        {
-          "name": "zh",
-          "path": "managed://moss-tts-nano/voices/zh_1.wav"
-        }
-      ]
+      "base_url": "managed://matcha-icefall-zh-en"
     }
   }
 }
