@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from xtalk.models.asr.agentic_asr import (
     _OpenAICompatibleRefiner,
+    _clean_response,
     _extract_model_id,
     _resolve_models_url,
 )
@@ -114,6 +115,24 @@ class RefinerModelDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             [payload["model"] for _, payload in session.posts],
             ["/models/refiner", "/models/refiner"],
         )
+
+
+class RefinerResponseCleaningTests(unittest.TestCase):
+    """Verify client-only metadata is excluded from ASR transcripts."""
+
+    def test_strips_trailing_keyword_metadata(self) -> None:
+        """Remove the Refiner keyword suffix while preserving the transcript."""
+
+        self.assertEqual(
+            _clean_response("你知道Python doMD这个文件是什么吗<KEY>[Python、doMD]"),
+            "你知道Python doMD这个文件是什么吗",
+        )
+
+    def test_preserves_non_trailing_keyword_text(self) -> None:
+        """Do not remove marker-like text embedded in the transcript body."""
+
+        text = "请解释<KEY>[示例]在协议里的含义，然后继续"
+        self.assertEqual(_clean_response(text), text)
 
 
 if __name__ == "__main__":

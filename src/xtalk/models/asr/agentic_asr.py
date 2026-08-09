@@ -79,13 +79,14 @@ def _run_coro(coro):
 
 
 def _clean_response(response: str) -> str:
-    """Strip chat markers that a Refiner may echo around its answer."""
+    """Strip chat markers and trailing Refiner keyword metadata."""
 
     value = response.strip()
     value = re.sub(r"^<\|im_start\|>assistant\s*", "", value)
     value = re.sub(r"<\|im_end\|>\s*$", "", value)
     value = re.sub(r"^assistant\s*[:\uff1a]?\s*", "", value, flags=re.IGNORECASE)
-    return re.sub(r"</s>\s*$", "", value).strip()
+    value = re.sub(r"</s>\s*$", "", value).strip()
+    return re.sub(r"\s*<KEY>\[[^\]\r\n]*\]\s*$", "", value).strip()
 
 
 def _extract_message_content(data) -> str:
