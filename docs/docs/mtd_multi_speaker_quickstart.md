@@ -6,14 +6,15 @@ This document explains how to start the MOSS Transcribe Diarize (MTD) runtime an
 flowchart LR
     Audio[Audio frames] --> VAD[VAD]
     VAD --> ASR[SenseVoice ASR]
-    VAD --> MTD[MtdDiarizationManager]
-    MTD --> Backend{Inference backend}
+    VAD --> Multi[MultiSpeakerTurnContextManager]
+    Multi --> Model[OfficialMtdClient]
+    Model --> Backend{Inference backend}
     Backend --> VLLM[MTD server.py<br/>official vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
-    ASR --> Join[MultiSpeakerTurnContextManager]
-    VLLM --> Join
-    SGLang --> Join
-    Join --> Agent[DefaultAgent]
+    ASR --> Multi
+    VLLM --> Multi
+    SGLang --> Multi
+    Multi --> Agent[DefaultAgent]
 ```
 
 The existing VAD path, MTD snapshot scheduler, speaker exemplar pool, event publication, and ASR/MTD join are identical for both backends. Both use the unified `OfficialMtdClient`; switching backends only changes `base_url`. The client queries `GET /v1/models` to detect SGLang-Omni and obtain its model name, while a 404 selects the official runtime protocol.
@@ -119,7 +120,7 @@ Merge the following sections from [`configs/mtd_multi_speaker.example.json`](../
 
 - `speaker_diarization` configures the unified `OfficialMtdClient` and runtime URL.
 - `service_config.multi_speaker` enables the multi-speaker path and response policy.
-- `service_config.mtd` configures the partial interval, registration-audio silence, and exemplar quality rules.
+- `service_config.multi_speaker.diarization` configures generic snapshot buffering and partial scheduling. MTD-specific registration layout and exemplar policy are internal to `OfficialMtdClient`.
 
 Minimal configuration example:
 
@@ -139,12 +140,16 @@ Minimal configuration example:
       "enabled": true,
       "response_policy": "all",
       "join_timeout_s": 5.0,
-      "fallback_on_timeout": true
-    },
-    "mtd": {
-      "audio_layout": {
-        "inter_exemplar_silence_s": 0.5,
-        "exemplar_to_current_silence_s": 1.0
+      "fallback_on_timeout": true,
+      "diarization": {
+        "sample_rate": 16000,
+        "pre_buffer_s": 1.0,
+        "partial": {
+          "interval_s": 1.0,
+          "first_partial_min_s": 0.8,
+          "publish_unchanged": false,
+          "abort_on_vad_end": true
+        }
       }
     }
   }
@@ -173,7 +178,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 
 `OfficialMtdClient` discovers SGLang-Omni through `GET /v1/models`, uses the first returned model ID for transcription requests, and applies a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
 
-1. `MtdDiarizationManager` concatenates registered exemplar audio, configurable silence, and the current VAD snapshot into one request.
+1. `OfficialMtdClient` concatenates registered exemplar audio, its internal silence layout, and the current VAD snapshot into one request.
 2. Its timestamped `decoder_prefix` is appended after `<|im_start|>assistant`; registered `S01` / `S02` labels are fixed decoder context.
 3. SGLang returns only the newly generated suffix. The client joins that suffix with the locally known prefix, parses the complete timestamped timeline, removes the exemplar range, and rebases the current-audio timestamps to zero.
 4. The client preserves the speaker labels emitted in that fixed-prefix continuation; it does not apply exemplar-slot overlap mapping or allocate replacement labels.
@@ -183,7 +188,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 ## 4. Runtime behavior
 
 1. `TurnTakingManager` assigns a `turn_id` and `segment_id` when VAD starts a segment.
-2. SenseVoice and `MtdDiarizationManager` receive the audio frames for the same segment.
+2. SenseVoice and `MultiSpeakerTurnContextManager` receive the audio frames for the same segment.
 3. Within the VAD segment, MTD periodically submits a complete audio snapshot and publishes a replaceable partial result.
 4. Both vLLM and SGLang-Omni preserve global labels with the same fixed decoder prefix mechanism.
 5. At VAD end, MTD submits a terminal segment final and uses high-quality audio from that result to update the speaker exemplar pool.
