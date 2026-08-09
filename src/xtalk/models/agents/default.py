@@ -474,9 +474,17 @@ class DefaultAgent(Agent):
             # avoid duplicating the same text in chat history.
             response_message.content = ""
             response_message.tool_calls = tool_calls
-            self._chat_history.append_message(response_message)
+            tool_call_message_appended = False
             for tool_call in tool_calls:
                 yield tool_call
+                # The serving layer may suspend this generator here until the
+                # spoken preamble has finished playback. Append its
+                # playback-managed AI message before declaring the tool-call
+                # batch so every ToolMessage remains adjacent to the
+                # AssistantMessage that owns its tool_call_id.
+                if not tool_call_message_appended:
+                    self._chat_history.append_message(response_message)
+                    tool_call_message_appended = True
                 try:
                     tool_result = await self.tool_engine.ainvoke_and_append(
                         tool_call,
