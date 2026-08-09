@@ -6,7 +6,11 @@ import uuid
 from typing import Any
 
 from xtalk import Xtalk
+from xtalk.models import Agent, Models
+from xtalk.serving.interfaces import EventListenerMixin, EventOverrides, Manager
 from xtalk.serving.service import DefaultService, Service
+
+from .desktop_agent import DesktopDefaultAgent
 
 
 class DesktopXtalk(Xtalk):
@@ -106,3 +110,47 @@ class DesktopService(DefaultService):
     ``xtalk.serving.modules.output_gateway.OutputGateway`` exactly like the
     generic XTalk pipeline.
     """
+
+    def __init__(
+        self,
+        *,
+        models: Models,
+        service_config: dict[str, Any] | None = None,
+        manager_classes: list[type[Manager]] | None = None,
+        _websocket: Any | None = None,
+        _session_id: str | None = None,
+        _event_overrides: (
+            dict[type[EventListenerMixin], EventOverrides] | None
+        ) = None,
+    ) -> None:
+        """Initialize a service and bind backend session context to its Agent.
+
+        Parameters
+        ----------
+        models : Models
+            Prototype model container cloned for this service.
+        service_config : dict[str, Any] | None, optional
+            Session manager configuration.
+        manager_classes : list[type[Manager]] | None, optional
+            Manager stack override.
+        _websocket : Any | None, optional
+            Live WebSocket, or ``None`` for the service prototype.
+        _session_id : str | None, optional
+            Existing persisted session identifier.
+        _event_overrides : dict[type[EventListenerMixin], EventOverrides] | None, optional
+            Event subscription overrides copied into the service.
+        """
+
+        super().__init__(
+            models=models,
+            service_config=service_config,
+            manager_classes=manager_classes,
+            _websocket=_websocket,
+            _session_id=_session_id,
+            _event_overrides=_event_overrides,
+        )
+        if _websocket is None:
+            return
+        agent = self.models.get(Agent)
+        if isinstance(agent, DesktopDefaultAgent):
+            agent.bind_session(self.session_id)

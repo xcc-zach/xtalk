@@ -41,6 +41,7 @@ def test_broker_attaches_offset_to_first_and_terminal_emits() -> None:
             message="Timer started.",
             status="running",
             running=True,
+            session_id="s",
         )
         await broker.publish_emit(
             binding=binding,
@@ -50,6 +51,7 @@ def test_broker_attaches_offset_to_first_and_terminal_emits() -> None:
             status="stopped",
             running=False,
             outcome="cancelled",
+            session_id="s",
         )
 
     asyncio.run(scenario())
@@ -74,6 +76,7 @@ def test_broker_without_bridge_omits_text_offset() -> None:
             message="Timer started.",
             status="running",
             running=True,
+            session_id="s",
         )
 
     asyncio.run(scenario())
