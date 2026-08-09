@@ -478,11 +478,11 @@ def wrap_tools_with_ui(
     return wrapped
 
 
-def _tool_session_id(
+def _bind_tool_session(
     tool_state: ToolState,
     global_state: Any,
 ) -> str | None:
-    """Return backend-owned session context from the tool engine.
+    """Bind backend-owned session context to one asynchronous tool call.
 
     Parameters
     ----------
@@ -495,14 +495,17 @@ def _tool_session_id(
     Returns
     -------
     str | None
-        Non-empty backend session identifier, when one was injected by the
-        desktop tool engine.
+        Non-empty backend session identifier bound to the tool call, when one
+        was injected by the desktop tool engine.
     """
 
     session_id = tool_state.metadata.get("session_id")
     if not session_id and isinstance(global_state, dict):
         session_id = global_state.get("session_id")
-    return session_id if isinstance(session_id, str) and session_id else None
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    tool_state.metadata["session_id"] = session_id
+    return session_id
 
 
 def _wrap_async_tool(
@@ -517,7 +520,7 @@ def _wrap_async_tool(
         """Delegate the initial emit and publish its read-only observation."""
 
         del cls
-        session_id = _tool_session_id(tool_state, global_state)
+        session_id = _bind_tool_session(tool_state, global_state)
         result = await original.aemit_initial(
             tool_call_id,
             tool_input,
@@ -559,7 +562,7 @@ def _wrap_async_tool(
         """Delegate updates while observing periodic status and every emit."""
 
         del cls
-        session_id = _tool_session_id(tool_state, global_state)
+        session_id = _bind_tool_session(tool_state, global_state)
         call_id = tool_state.call_id
         updates = original.aemit_updates(
             tool_input,
