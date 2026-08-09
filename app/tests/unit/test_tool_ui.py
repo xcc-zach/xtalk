@@ -1,4 +1,4 @@
-"""Contract tests for read-only App observation of asynchronous tools."""
+"""Contract tests for read-only App observation of native tools."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from xtalk.models.agents.tools import (
     AsyncTool,
     Finished,
     Running,
+    SyncTool,
     ToolInput,
     ToolOutput,
     ToolResult,
@@ -51,6 +52,24 @@ class _Output(ToolOutput):
         """Return the output text."""
 
         return self.value
+
+
+class _ObservedSyncTool(SyncTool):
+    """Small immediate-tool contract fixture."""
+
+    name = "observed_sync"
+    structured_payload = True
+
+    @classmethod
+    def invoke(
+        cls,
+        tool_input: _Input,
+        global_state: Any,
+    ) -> _Output:
+        """Return one structured final result immediately."""
+
+        del cls, global_state
+        return _Output(value=json.dumps({"value": tool_input.value}))
 
 
 class _ObservedTool(AsyncTool):
@@ -336,6 +355,39 @@ def test_wrapper_preserves_results_and_observes_each_emit() -> None:
         event["session_id"] == "session-1"
         for event in [*broker.statuses, *broker.emits]
     )
+
+
+def test_wrapper_observes_sync_tool_with_one_terminal_emit() -> None:
+    """Publish one completed UI event for an immediate native tool."""
+
+    async def scenario() -> tuple[_Output, _RecordingBroker]:
+        broker = _RecordingBroker()
+        wrapped = wrap_tools_with_ui(
+            [_ObservedSyncTool],
+            binding=ToolUIBinding(tool_id="tool-sync", update_every_s=-1),
+            broker=broker,  # type: ignore[arg-type]
+        )[0]
+        result = await wrapped.ainvoke(
+            _Input(value="finished"),
+            {"session_id": "session-1"},
+        )
+        return result, broker
+
+    result, broker = asyncio.run(scenario())
+
+    assert result == _Output(value=json.dumps({"value": "finished"}))
+    assert broker.ui_tool_names == {"observed_sync"}
+    assert broker.statuses == []
+    assert len(broker.emits) == 1
+    emit = broker.emits[0]
+    assert emit["tool_name"] == "observed_sync"
+    assert emit["message"] == json.dumps({"value": "finished"})
+    assert emit["status"] == "complete"
+    assert emit["running"] is False
+    assert emit["payload"] == {"value": "finished"}
+    assert emit["session_id"] == "session-1"
+    assert isinstance(emit["call_id"], str)
+    assert emit["call_id"]
 
 
 def test_wrapper_publishes_terminal_history_emit_when_cancelled() -> None:

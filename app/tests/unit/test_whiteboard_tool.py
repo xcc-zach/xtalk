@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from xtalk.models.agents.tools import Finished, Running
+from xtalk.models.agents.tools import SyncTool, ToolEngine
 
 from backend.tool_ui import ToolUIBinding, wrap_tools_with_ui
 from backend.whiteboard_store import (
@@ -23,7 +23,7 @@ from backend.whiteboard_tool import (
     WhiteboardDeleteInput,
     WhiteboardDeleteTool,
     WhiteboardFetchTool,
-    WhiteboardState,
+    WhiteboardOutput,
     WhiteboardUpdateInput,
     WhiteboardUpdateTool,
 )
@@ -38,83 +38,56 @@ def _reset_whiteboard_stores() -> Any:
     reset_whiteboard_stores()
 
 
-def _run_initial(
+def _run_tool(
     tool: type[Any],
     tool_input: Any,
     *,
     session_id: str = "session-1",
-    call_id: str = "whiteboard-call",
-) -> tuple[Running, WhiteboardState]:
-    """Run one whiteboard call and return its initial result and state."""
+) -> WhiteboardOutput:
+    """Run one immediate whiteboard operation for a backend session."""
 
-    tool_state = WhiteboardState(call_id=call_id)
-    tool_state.metadata["session_id"] = session_id
-    initial = tool.emit_initial(
-        call_id,
+    return tool.invoke(
         tool_input,
-        tool_state,
-        object(),
+        {"session_id": session_id},
     )
-    return initial, tool_state
-
-
-def _collect_updates(
-    tool: type[Any],
-    tool_input: Any,
-    tool_state: WhiteboardState,
-) -> list[Any]:
-    """Collect every whiteboard update into a list."""
-
-    return list(tool.emit_updates(tool_input, tool_state, object()))
 
 
 def test_whiteboard_add_appends_text_and_advances_revision() -> None:
     """Appending text joins blocks with one newline and bumps the revision."""
 
-    initial, tool_state = _run_initial(
+    output = _run_tool(
         WhiteboardAddTool,
         WhiteboardAddInput(text="# 第一段"),
     )
 
-    assert isinstance(initial, Running)
-    assert "whiteboard-call" in initial.content
-    snapshot = json.loads(initial.content)
+    assert issubclass(WhiteboardAddTool, SyncTool)
+    snapshot = json.loads(output.to_content())
     assert snapshot["action"] == "add_text"
     assert snapshot["success"] is True
     assert snapshot["text"] == "# 第一段"
     assert snapshot["revision"] == 1
-    assert snapshot["call_id"] == "whiteboard-call"
+    assert "call_id" not in snapshot
     assert snapshot["message"]
 
-    _, second_state = _run_initial(
+    second_output = _run_tool(
         WhiteboardAddTool,
         WhiteboardAddInput(text="第二段"),
-        call_id="whiteboard-call-2",
     )
-    second_snapshot = json.loads(second_state.output.to_content())  # type: ignore[union-attr]
+    second_snapshot = json.loads(second_output.to_content())
     assert second_snapshot["text"] == "# 第一段\n第二段"
     assert second_snapshot["revision"] == 2
-
-    updates = _collect_updates(
-        WhiteboardAddTool,
-        WhiteboardAddInput(text="第三段"),
-        tool_state,
-    )
-    assert len(updates) == 1
-    assert isinstance(updates[0], Finished)
 
 
 def test_whiteboard_fetch_returns_full_text_without_mutating() -> None:
     """Fetch reports the whole document and never changes the revision."""
 
     get_whiteboard_store("session-1").add_text("演示内容")
-    initial, tool_state = _run_initial(WhiteboardFetchTool, WhiteboardFetchTool.input_type())
+    output = _run_tool(WhiteboardFetchTool, WhiteboardFetchTool.input_type())
 
-    assert isinstance(initial, Running)
-    snapshot = json.loads(initial.content)
+    snapshot = json.loads(output.to_content())
     assert snapshot["text"] == "演示内容"
     assert snapshot["revision"] == 1
-    assert json.loads(tool_state.output.to_content())["action"] == "fetch_text"  # type: ignore[union-attr]
+    assert snapshot["action"] == "fetch_text"
     assert get_whiteboard_store("session-1").snapshot()["revision"] == 1
 
 
@@ -126,12 +99,12 @@ def test_whiteboard_delete_removes_exact_match() -> None:
     store.add_text("需要删除的内容")
     store.add_text("保留内容")
 
-    initial, _ = _run_initial(
+    output = _run_tool(
         WhiteboardDeleteTool,
         WhiteboardDeleteInput(text="需要删除的内容"),
     )
 
-    snapshot = json.loads(initial.content)
+    snapshot = json.loads(output.to_content())
     assert snapshot["revision"] == 4
     assert snapshot["text"] == "# 标题\n保留内容"
 
@@ -140,7 +113,7 @@ def test_whiteboard_delete_rejects_missing_text() -> None:
     """Deleting text that is not on the board raises a clear error."""
 
     with pytest.raises(ValueError, match="not found"):
-        _run_initial(
+        _run_tool(
             WhiteboardDeleteTool,
             WhiteboardDeleteInput(text="不存在的内容"),
         )
@@ -151,12 +124,12 @@ def test_whiteboard_update_replaces_every_match() -> None:
 
     get_whiteboard_store("session-1").add_text("旧文本 保留 旧文本")
 
-    initial, _ = _run_initial(
+    output = _run_tool(
         WhiteboardUpdateTool,
         WhiteboardUpdateInput(from_="旧文本", to="新文本"),
     )
 
-    snapshot = json.loads(initial.content)
+    snapshot = json.loads(output.to_content())
     assert snapshot["revision"] == 2
     assert snapshot["text"] == "新文本 保留 新文本"
 
@@ -177,7 +150,7 @@ def test_whiteboard_update_rejects_missing_from() -> None:
     """Updating absent text raises a clear error."""
 
     with pytest.raises(ValueError, match="not found"):
-        _run_initial(
+        _run_tool(
             WhiteboardUpdateTool,
             WhiteboardUpdateInput(from_="不存在", to="替换"),
         )
@@ -186,33 +159,30 @@ def test_whiteboard_update_rejects_missing_from() -> None:
 def test_whiteboard_sessions_are_independent() -> None:
     """Each conversation owns its own board and revision counter."""
 
-    _, first_state = _run_initial(
+    first_output = _run_tool(
         WhiteboardAddTool,
         WhiteboardAddInput(text="会话一内容"),
         session_id="session-a",
-        call_id="call-a",
     )
-    _, second_state = _run_initial(
+    second_output = _run_tool(
         WhiteboardAddTool,
         WhiteboardAddInput(text="会话二内容"),
         session_id="session-b",
-        call_id="call-b",
     )
 
-    first_snapshot = json.loads(first_state.output.to_content())  # type: ignore[union-attr]
-    second_snapshot = json.loads(second_state.output.to_content())  # type: ignore[union-attr]
+    first_snapshot = json.loads(first_output.to_content())
+    second_snapshot = json.loads(second_output.to_content())
     assert first_snapshot["text"] == "会话一内容"
     assert first_snapshot["revision"] == 1
     assert second_snapshot["text"] == "会话二内容"
     assert second_snapshot["revision"] == 1
 
-    _, first_again = _run_initial(
+    first_again = _run_tool(
         WhiteboardAddTool,
         WhiteboardAddInput(text="追加到会话一"),
         session_id="session-a",
-        call_id="call-a-2",
     )
-    first_again_snapshot = json.loads(first_again.output.to_content())  # type: ignore[union-attr]
+    first_again_snapshot = json.loads(first_again.to_content())
     assert first_again_snapshot["text"] == "会话一内容\n追加到会话一"
     assert first_again_snapshot["revision"] == 2
     assert get_whiteboard_store("session-b").snapshot()["revision"] == 1
@@ -269,7 +239,7 @@ def test_whiteboard_wrapper_emits_structured_payload() -> None:
         def finish_call(self, call_id: str) -> None:
             """Ignore terminal cleanup in this fixture."""
 
-    async def scenario() -> tuple[Any, _RecordingBroker, WhiteboardState]:
+    async def scenario() -> tuple[WhiteboardOutput, _RecordingBroker]:
         broker = _RecordingBroker()
         wrapped = wrap_tools_with_ui(
             [WhiteboardAddTool],
@@ -279,23 +249,59 @@ def test_whiteboard_wrapper_emits_structured_payload() -> None:
             ),
             broker=broker,  # type: ignore[arg-type]
         )[0]
-        tool_state = WhiteboardState(call_id="wrapped-call")
-        initial = await wrapped.aemit_initial(
-            "wrapped-call",
+        output = await wrapped.ainvoke(
             WhiteboardAddInput(text="包装链路"),
-            tool_state,
             {"session_id": "session-1"},
         )
-        return initial, broker, tool_state
+        return output, broker
 
-    initial, broker, tool_state = asyncio.run(scenario())
+    output, broker = asyncio.run(scenario())
 
-    assert isinstance(initial, Running)
-    assert tool_state.metadata["session_id"] == "session-1"
+    assert isinstance(output, WhiteboardOutput)
     assert get_whiteboard_store("session-1").snapshot()["text"] == "包装链路"
     assert get_whiteboard_store().snapshot()["text"] == ""
     assert len(broker.emits) == 1
     emit = broker.emits[0]
+    assert emit["running"] is False
+    assert emit["status"] == "complete"
+    assert emit["session_id"] == "session-1"
     assert emit["payload"]["action"] == "add_text"
     assert emit["payload"]["revision"] == 1
     assert emit["payload"]["text"] == "包装链路"
+
+
+def test_whiteboard_tool_engine_returns_one_final_result() -> None:
+    """Finish in the initial call without scheduling an asynchronous update."""
+
+    async def scenario() -> tuple[Any, list[tuple[Any, Any]]]:
+        engine = ToolEngine(
+            tools=[WhiteboardAddTool],
+            state={"session_id": "session-1"},
+        )
+        updates: list[tuple[Any, Any]] = []
+        engine.on_async_tool_update(
+            lambda tool_call, tool_message: updates.append(
+                (tool_call, tool_message)
+            )
+        )
+        try:
+            result = await engine.ainvoke(
+                {
+                    "id": "whiteboard-engine-call",
+                    "name": "add_text",
+                    "args": {"text": "单次最终结果"},
+                }
+            )
+            await asyncio.sleep(0)
+            return result, updates
+        finally:
+            await engine.shutdown()
+
+    result, updates = asyncio.run(scenario())
+    snapshot = json.loads(str(result.content))
+
+    assert result.tool_call_id == "whiteboard-engine-call"
+    assert result.name == "add_text"
+    assert snapshot["text"] == "单次最终结果"
+    assert snapshot["revision"] == 1
+    assert updates == []
