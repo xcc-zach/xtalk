@@ -6,14 +6,15 @@
 flowchart LR
     Audio[语音帧] --> VAD[VAD]
     VAD --> ASR[SenseVoice ASR]
-    VAD --> MTD[MtdDiarizationManager]
-    MTD --> Backend{推理后端}
+    VAD --> Multi[MultiSpeakerTurnContextManager]
+    Multi --> Model[OfficialMtdClient]
+    Model --> Backend{推理后端}
     Backend --> VLLM[MTD server.py<br/>官方 vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
-    ASR --> Join[MultiSpeakerTurnContextManager]
-    VLLM --> Join
-    SGLang --> Join
-    Join --> Agent[DefaultAgent]
+    ASR --> Multi
+    VLLM --> Multi
+    SGLang --> Multi
+    Multi --> Agent[DefaultAgent]
 ```
 
 现有 VAD、MTD snapshot 调度、speaker exemplar pool、事件发布和 ASR/MTD 合并链路对两个后端完全相同。两个后端统一使用 `OfficialMtdClient`，切换时只需修改 `base_url`。客户端通过 `GET /v1/models` 识别 SGLang-Omni 并获取模型名；该接口返回 404 时使用官方 runtime 协议。
@@ -116,7 +117,7 @@ curl http://127.0.0.1:18604/health
 
 - `speaker_diarization`：配置统一的 `OfficialMtdClient` 和 runtime 地址。
 - `service_config.multi_speaker`：启用多说话人链路和响应策略。
-- `service_config.mtd`：配置 partial 间隔、注册音频静音以及 exemplar 质量规则。
+- `service_config.multi_speaker.diarization`：配置通用 snapshot 缓冲与 partial 调度。MTD 专属注册音频布局和 exemplar 策略由 `OfficialMtdClient` 内部维护。
 
 核心配置示例：
 
@@ -136,12 +137,16 @@ curl http://127.0.0.1:18604/health
       "enabled": true,
       "response_policy": "all",
       "join_timeout_s": 5.0,
-      "fallback_on_timeout": true
-    },
-    "mtd": {
-      "audio_layout": {
-        "inter_exemplar_silence_s": 0.5,
-        "exemplar_to_current_silence_s": 1.0
+      "fallback_on_timeout": true,
+      "diarization": {
+        "sample_rate": 16000,
+        "pre_buffer_s": 1.0,
+        "partial": {
+          "interval_s": 1.0,
+          "first_partial_min_s": 0.8,
+          "publish_unchanged": false,
+          "abort_on_vad_end": true
+        }
       }
     }
   }
@@ -170,7 +175,7 @@ curl http://127.0.0.1:18604/health
 
 `OfficialMtdClient` 通过 `GET /v1/models` 自动识别 SGLang-Omni，取返回的第一个模型 ID 发起转录请求，并与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
 
-1. `MtdDiarizationManager` 将已注册 exemplar 音频、可配置静音和当前 VAD snapshot 拼成同一个请求。
+1. `OfficialMtdClient` 将已注册 exemplar 音频、内部固定静音布局和当前 VAD snapshot 拼成同一个请求。
 2. 时间戳形式的 `decoder_prefix` 被接在 `<|im_start|>assistant` 后，注册的 `S01` / `S02` 标签成为固定的 decoder 上下文。
 3. SGLang 只返回新生成的后缀；客户端将后缀和本地已知的 prefix 拼回完整文本，解析完整时间线，裁掉 exemplar 区间后将当前音频时间戳归零。
 4. 客户端直接保留 fixed-prefix continuation 输出的 speaker label，不再做 exemplar 时间槽重叠映射，也不再重新分配标签。
@@ -180,7 +185,7 @@ curl http://127.0.0.1:18604/health
 ## 4. 运行机制
 
 1. `TurnTakingManager` 在 VAD start 时分配 `turn_id` 和 `segment_id`。
-2. SenseVoice 与 `MtdDiarizationManager` 同时接收该片段的语音帧。
+2. SenseVoice 与 `MultiSpeakerTurnContextManager` 同时接收该片段的语音帧。
 3. MTD 在 VAD 片段内周期性提交完整 audio snapshot，并发布可替换的 partial。
 4. vLLM 和 SGLang-Omni 均使用固定 decoder prefix 保持全局标签。
 5. VAD end 后提交不可替换的 segment final，并使用其中的高质量音频更新 speaker exemplar pool。
