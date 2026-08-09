@@ -292,18 +292,19 @@ async def _exercise_wrapped_tool() -> tuple[
     )[0]
     tool_input = _Input(value="input")
     tool_state = _State(call_id="call-1")
+    global_state = {"session_id": "session-1"}
     initial = await wrapped.aemit_initial(
         "call-1",
         tool_input,
         tool_state,
-        object(),
+        global_state,
     )
     updates = [
         update
         async for update in wrapped.aemit_updates(
             tool_input,
             tool_state,
-            object(),
+            global_state,
         )
     ]
     return [initial, *updates], broker
@@ -331,6 +332,10 @@ def test_wrapper_preserves_results_and_observes_each_emit() -> None:
         "progress=0",
         "progress=2",
     ]
+    assert all(
+        event["session_id"] == "session-1"
+        for event in [*broker.statuses, *broker.emits]
+    )
 
 
 def test_wrapper_publishes_terminal_history_emit_when_cancelled() -> None:
@@ -379,6 +384,7 @@ def test_wrapper_publishes_terminal_history_emit_when_cancelled() -> None:
         "status": "Tool stopped",
         "running": False,
         "outcome": "cancelled",
+        "session_id": None,
     }
 
 
@@ -484,6 +490,7 @@ def test_broker_retains_structured_payload_in_history() -> None:
             ),
             status="complete",
             running=False,
+            session_id="session-1",
             payload={
                 "kind": "board",
                 "call_id": "board-call",
@@ -523,6 +530,7 @@ def test_broker_drops_oversized_payload_but_keeps_message() -> None:
             message="small message",
             status="complete",
             running=False,
+            session_id="session-1",
             payload={"blob": "x" * (MAX_TOOL_UI_EMIT_PAYLOAD_BYTES + 1)},
         )
         return await broker.snapshot("session-1")
@@ -609,6 +617,7 @@ def test_broker_replays_running_status_after_app_channel_reconnects() -> None:
             call_id="call-1",
             status="Codex is working",
             running=True,
+            session_id="session-1",
         )
         websocket = _ReplayWebSocket()
         await broker.serve(websocket)  # type: ignore[arg-type]
@@ -644,6 +653,7 @@ def test_broker_replays_history_emit_after_app_channel_connects() -> None:
             message="Codex completed",
             status="Complete",
             running=False,
+            session_id="session-1",
         )
         websocket = _ReplayWebSocket()
         await broker.serve(websocket)  # type: ignore[arg-type]
@@ -680,6 +690,7 @@ def test_cancelled_emit_replaces_live_status_in_broker_snapshot() -> None:
             call_id="timer-call",
             status="10 of 60 seconds",
             running=True,
+            session_id="session-1",
         )
         await broker.publish_emit(
             binding=binding,
@@ -689,6 +700,7 @@ def test_cancelled_emit_replaces_live_status_in_broker_snapshot() -> None:
             status="Timer stopped after 10 seconds out of 60 seconds.",
             running=False,
             outcome="cancelled",
+            session_id="session-1",
         )
         return await broker.snapshot("session-1")
 

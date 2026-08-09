@@ -125,13 +125,7 @@ class ToolUIBroker:
                     self._current_session_id = session_id
                     history_payloads = self._bind_history_payloads(session_id)
                     live_statuses = []
-                    for call_id, status in self._live_status_payloads.items():
-                        if (
-                            status.get("sessionId") is None
-                            and session_id is not None
-                        ):
-                            status["sessionId"] = session_id
-                            self._call_sessions[call_id] = session_id
+                    for status in self._live_status_payloads.values():
                         if status.get("sessionId") == session_id:
                             live_statuses.append(dict(status))
                 for replay in [*history_payloads, *live_statuses]:
@@ -170,10 +164,7 @@ class ToolUIBroker:
             self._current_session_id = session_id
             history_payloads = self._bind_history_payloads(session_id)
             live_statuses = []
-            for call_id, status in self._live_status_payloads.items():
-                if status.get("sessionId") is None:
-                    status["sessionId"] = session_id
-                    self._call_sessions[call_id] = session_id
+            for status in self._live_status_payloads.values():
                 if status.get("sessionId") == session_id:
                     live_statuses.append(dict(status))
         return [*history_payloads, *live_statuses]
@@ -186,8 +177,26 @@ class ToolUIBroker:
         call_id: str,
         status: str,
         running: bool,
+        session_id: str | None = None,
     ) -> None:
-        """Publish one deduplicated live status observation."""
+        """Publish one deduplicated live status observation.
+
+        Parameters
+        ----------
+        binding : ToolUIBinding
+            Installed UI metadata for the observed tool.
+        tool_name : str
+            Exported tool name.
+        call_id : str
+            Stable source tool-call identifier.
+        status : str
+            Human-readable current status.
+        running : bool
+            Whether the call remains active.
+        session_id : str | None, optional
+            Backend-owned session identifier. App display bindings never
+            determine tool ownership.
+        """
 
         normalized_status = str(status)
         latest = (normalized_status, running)
@@ -202,6 +211,7 @@ class ToolUIBroker:
                 binding=binding,
                 tool_name=tool_name,
                 call_id=call_id,
+                session_id=session_id,
             )
             | {
                 "sequence": sequence,
@@ -229,6 +239,7 @@ class ToolUIBroker:
         running: bool,
         outcome: Literal["running", "complete", "cancelled"] | None = None,
         payload: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Publish one immutable tool emit observation.
 
@@ -252,6 +263,9 @@ class ToolUIBroker:
         payload : dict[str, Any] | None, optional
             Optional structured content emitted by the tool. Payloads that
             exceed the emit size limit are dropped while ``message`` is kept.
+        session_id : str | None, optional
+            Backend-owned session identifier. The UI may filter by this value
+            but cannot assign it.
 
         Raises
         ------
@@ -271,6 +285,7 @@ class ToolUIBroker:
                 binding=binding,
                 tool_name=tool_name,
                 call_id=call_id,
+                session_id=session_id,
             )
         )
         if self._bridge is not None and sequence == 1:
@@ -369,30 +384,10 @@ class ToolUIBroker:
         self,
         session_id: str | None,
     ) -> list[dict[str, Any]]:
-        """Bind pending history events and return replay copies for a session."""
+        """Return replay copies already owned by one backend session."""
 
         if session_id is None:
             return []
-        pending = self._history_payloads.pop(None, [])
-        if pending:
-            for payload in pending:
-                payload["sessionId"] = session_id
-                call_id = str(payload["callId"])
-                if self._call_sessions.get(call_id) is None:
-                    self._call_sessions[call_id] = session_id
-            existing = self._history_payloads.get(session_id, [])
-            known_ids = {
-                (payload["callId"], payload["sequence"])
-                for payload in existing
-            }
-            existing.extend(
-                payload
-                for payload in pending
-                if (payload["callId"], payload["sequence"]) not in known_ids
-            )
-            self._history_payloads[session_id] = existing[
-                -MAX_REPLAYED_TOOL_UI_HISTORY_ITEMS:
-            ]
         return [
             dict(payload)
             for payload in self._history_payloads.get(session_id, [])
@@ -415,15 +410,16 @@ class ToolUIBroker:
         binding: ToolUIBinding,
         tool_name: str,
         call_id: str,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
-        if call_id not in self._call_sessions:
-            self._call_sessions[call_id] = self._current_session_id
+        if session_id is not None:
+            self._call_sessions[call_id] = session_id
         return {
             "type": event_type,
             "toolId": binding.tool_id,
             "toolName": tool_name,
             "callId": call_id,
-            "sessionId": self._call_sessions[call_id],
+            "sessionId": self._call_sessions.get(call_id),
         }
 
     async def _broadcast(self, payload: dict[str, Any]) -> None:
@@ -482,23 +478,31 @@ def wrap_tools_with_ui(
     return wrapped
 
 
-def _stamp_tool_session(broker: Any, tool_state: ToolState) -> None:
-    """Attach the App-bound session to one tool call's mutable state.
+def _tool_session_id(
+    tool_state: ToolState,
+    global_state: Any,
+) -> str | None:
+    """Return backend-owned session context from the tool engine.
 
     Parameters
     ----------
-    broker : Any
-        Tool UI broker that may expose the currently bound session.
     tool_state : ToolState
-        Mutable state shared by one asynchronous tool call.
+        Mutable state shared by one asynchronous tool call. Per-call metadata
+        takes precedence when provided by a custom engine.
+    global_state : Any
+        Shared tool-engine state carrying App session context.
+
+    Returns
+    -------
+    str | None
+        Non-empty backend session identifier, when one was injected by the
+        desktop tool engine.
     """
 
-    current_session_id = getattr(broker, "current_session_id", None)
-    if not callable(current_session_id):
-        return
-    session_id = current_session_id()
-    if session_id is not None:
-        tool_state.metadata["session_id"] = session_id
+    session_id = tool_state.metadata.get("session_id")
+    if not session_id and isinstance(global_state, dict):
+        session_id = global_state.get("session_id")
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def _wrap_async_tool(
@@ -513,7 +517,7 @@ def _wrap_async_tool(
         """Delegate the initial emit and publish its read-only observation."""
 
         del cls
-        _stamp_tool_session(broker, tool_state)
+        session_id = _tool_session_id(tool_state, global_state)
         result = await original.aemit_initial(
             tool_call_id,
             tool_input,
@@ -532,6 +536,7 @@ def _wrap_async_tool(
             call_id=tool_call_id,
             status=status,
             running=True,
+            session_id=session_id,
         )
         await broker.publish_emit(
             binding=binding,
@@ -541,6 +546,7 @@ def _wrap_async_tool(
             status=status,
             running=True,
             payload=_structured_payload(original, result.content),
+            session_id=session_id,
         )
         return result
 
@@ -553,7 +559,7 @@ def _wrap_async_tool(
         """Delegate updates while observing periodic status and every emit."""
 
         del cls
-        _stamp_tool_session(broker, tool_state)
+        session_id = _tool_session_id(tool_state, global_state)
         call_id = tool_state.call_id
         updates = original.aemit_updates(
             tool_input,
@@ -574,6 +580,7 @@ def _wrap_async_tool(
                         tool_input=tool_input,
                         tool_state=tool_state,
                         global_state=global_state,
+                        session_id=session_id,
                     )
                 except StopAsyncIteration:
                     status = await _safe_status(
@@ -588,6 +595,7 @@ def _wrap_async_tool(
                         call_id=call_id,
                         status=status,
                         running=False,
+                        session_id=session_id,
                     )
                     broker.finish_call(call_id)
                     return
@@ -606,6 +614,7 @@ def _wrap_async_tool(
                         call_id=call_id,
                         status=status,
                         running=running,
+                        session_id=session_id,
                     )
                 message = (
                     result.content
@@ -620,6 +629,7 @@ def _wrap_async_tool(
                     status=status,
                     running=running,
                     payload=_structured_payload(original, message),
+                    session_id=session_id,
                 )
                 yield result
                 if isinstance(result, Finished):
@@ -640,6 +650,7 @@ def _wrap_async_tool(
                 status=status,
                 running=False,
                 outcome="cancelled",
+                session_id=session_id,
             )
             raise
         except BaseException as exc:
@@ -650,6 +661,7 @@ def _wrap_async_tool(
                     call_id=call_id,
                     status=f"Tool failed ({type(exc).__name__})",
                     running=False,
+                    session_id=session_id,
                 )
                 broker.finish_call(call_id)
             raise
@@ -674,6 +686,7 @@ async def _wait_for_update_with_status(
     tool_input: Any,
     tool_state: Any,
     global_state: Any,
+    session_id: str | None,
 ) -> Any:
     if binding.update_every_s == -1.0:
         return await next_update
@@ -698,6 +711,7 @@ async def _wait_for_update_with_status(
                 call_id=call_id,
                 status=status,
                 running=True,
+                session_id=session_id,
             )
     except BaseException:
         next_update.cancel()

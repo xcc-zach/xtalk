@@ -357,6 +357,7 @@ def test_tool_ui_event_snapshot_requires_token_and_replays_session_events(
             call_id="timer-call",
             status="5 of 10 seconds",
             running=True,
+            session_id="session-1",
         )
         await broker.publish_emit(
             binding=ToolUIBinding(
@@ -368,6 +369,7 @@ def test_tool_ui_event_snapshot_requires_token_and_replays_session_events(
             message="Timer started",
             status="5 of 10 seconds",
             running=True,
+            session_id="session-1",
         )
         app = create_application(
             startup=_startup(tmp_path),
@@ -426,6 +428,7 @@ def test_tool_ui_event_snapshot_retains_structured_payload(
             message=json.dumps(snapshot, ensure_ascii=False),
             status="complete",
             running=False,
+            session_id="session-1",
             payload=snapshot,
         )
         app = create_application(

@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage, ToolCall, ToolMessage
 from backend.desktop_agent import DesktopDefaultAgent
 from xtalk.models.agents.default import DefaultAgent
 from xtalk.models.agents.interfaces import AgentOutput
+from xtalk.models.agents.tools import ToolEngine
 from xtalk.models.agents.tools.utils import build_tool_call_result
 
 
@@ -41,7 +42,6 @@ def test_desktop_agent_inherits_default_conversation_flow() -> None:
 
     flow_methods = (
         "async_accept",
-        "clone",
         "_loop_runner",
         "_handle_asr_final",
         "_stream_messages",
@@ -55,6 +55,15 @@ def test_desktop_agent_inherits_default_conversation_flow() -> None:
             DefaultAgent,
             method_name,
         )
+
+
+def test_desktop_tool_engine_keeps_default_async_scheduling() -> None:
+    """Add only App session metadata without overriding tool dispatch."""
+
+    agent = _bare_agent()
+    agent.tool_engine = ToolEngine(tools=[], state={})
+    agent.bind_session("session-1")
+    assert agent.tool_engine.state == {"session_id": "session-1"}
 
 
 def _tool_update(
