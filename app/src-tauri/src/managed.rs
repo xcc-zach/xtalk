@@ -13,7 +13,7 @@ use std::{
 };
 
 use bzip2::read::BzDecoder;
-use reqwest::{redirect::Policy, Client};
+use reqwest::{redirect::Policy, Client, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -53,6 +53,8 @@ const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_READY_LINE_BYTES: usize = 4 * 1024;
 const MANAGED_PROGRESS_EVENT: &str = "managed-model-progress";
+const HUGGING_FACE_ORIGIN: &str = "https://huggingface.co/";
+const HUGGING_FACE_MIRROR_ORIGIN: &str = "https://hf-mirror.com/";
 
 /// Managed model services requested by one external model configuration.
 #[derive(Clone, Serialize)]
@@ -185,6 +187,13 @@ pub(crate) enum ManagedError {
     Shell(#[from] tauri_plugin_shell::Error),
     #[error("managed model download failed: {0}")]
     Download(#[from] reqwest::Error),
+    #[error(
+        "managed model download failed from both Hugging Face and its mirror: primary: {primary}; mirror: {mirror}"
+    )]
+    DownloadFallback {
+        primary: reqwest::Error,
+        mirror: reqwest::Error,
+    },
     #[error("managed model manifest uses an unsupported schema")]
     UnsupportedManifest,
     #[error("managed model configuration is invalid: {0}")]
@@ -1085,7 +1094,7 @@ async fn download_file(
             .and_then(|value| value.to_str())
             .unwrap_or_default()
     ));
-    let response = client.get(&manifest.url).send().await?.error_for_status()?;
+    let response = send_download_request(client, &manifest.url).await?;
     let mut output = File::create(&partial)?;
     let mut response = response;
     let mut digest = Sha256::new();
@@ -1122,6 +1131,35 @@ async fn download_file(
     }
     fs::rename(partial, destination)?;
     Ok(())
+}
+
+async fn send_download_request(client: &Client, url: &str) -> Result<Response, ManagedError> {
+    let primary_result = client
+        .get(url)
+        .send()
+        .await
+        .and_then(Response::error_for_status);
+    let primary_error = match primary_result {
+        Ok(response) => return Ok(response),
+        Err(error) => error,
+    };
+    let Some(mirror_url) = hugging_face_mirror_url(url) else {
+        return Err(ManagedError::Download(primary_error));
+    };
+    client
+        .get(mirror_url)
+        .send()
+        .await
+        .and_then(Response::error_for_status)
+        .map_err(|mirror| ManagedError::DownloadFallback {
+            primary: primary_error,
+            mirror,
+        })
+}
+
+fn hugging_face_mirror_url(url: &str) -> Option<String> {
+    url.strip_prefix(HUGGING_FACE_ORIGIN)
+        .map(|path| format!("{HUGGING_FACE_MIRROR_ORIGIN}{path}"))
 }
 
 fn emit_managed_progress(
@@ -1523,11 +1561,11 @@ fn configure_library_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_service_archives, inspect_model_config, parse_managed_request, resolve_moss_voices,
-        safe_join, select_backend, verify_installed_service, write_install_marker,
-        ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend, ManagedServiceManifest,
-        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, REFINER_ID,
-        SENSEVOICE_ID,
+        extract_service_archives, hugging_face_mirror_url, inspect_model_config,
+        parse_managed_request, resolve_moss_voices, safe_join, select_backend,
+        verify_installed_service, write_install_marker, ManagedArchiveFormat,
+        ManagedArchiveManifest, ManagedBackend, ManagedServiceManifest, ManagedVoice,
+        DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, REFINER_ID, SENSEVOICE_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
@@ -1567,6 +1605,21 @@ mod tests {
     fn safe_join_rejects_parent_components() {
         assert!(safe_join(Path::new("/tmp/models"), "../secret").is_err());
         assert!(safe_join(Path::new("/tmp/models"), "weights/model.onnx").is_ok());
+    }
+
+    #[test]
+    fn hugging_face_downloads_have_a_same_path_mirror() {
+        assert_eq!(
+            hugging_face_mirror_url(
+                "https://huggingface.co/example/model/resolve/commit/model.safetensors"
+            )
+            .as_deref(),
+            Some("https://hf-mirror.com/example/model/resolve/commit/model.safetensors")
+        );
+        assert_eq!(
+            hugging_face_mirror_url("https://example.com/model.safetensors"),
+            None
+        );
     }
 
     #[test]
