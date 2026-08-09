@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import PROTOCOL_VERSION, StartupConfig, build_effective_config
 from .desktop_tool_bridge import DesktopToolCallBridge
+from .frontend_text_log import FrontendTextLogMiddleware
 from .security import STARTUP_TOKEN_HEADER, SidecarSecurityMiddleware
 from .tool_ui import ToolUIBroker
 from .whiteboard_store import get_whiteboard_store
@@ -54,6 +55,10 @@ def create_application(
     )
     app.state.sidecar_ready = False
 
+    app.add_middleware(
+        FrontendTextLogMiddleware,
+        log_path=startup.data_dir / "frontend-text.log",
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(startup.origins),
