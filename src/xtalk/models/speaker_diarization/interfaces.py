@@ -26,8 +26,8 @@ class DiarizationResult:
     ----------
     raw_text : str
         Full timestamped model output, including any fixed decoder prefix.
-    current_segments : list[DiarizationSegment]
-        Parsed segments cropped to current-audio-local coordinates.
+    segments : list[DiarizationSegment]
+        Parsed segments relative to the supplied snapshot.
     latency_ms : float
         End-to-end decode latency measured by the runtime or client.
     metrics : dict[str, Any]
@@ -35,7 +35,7 @@ class DiarizationResult:
     """
 
     raw_text: str = ""
-    current_segments: list[DiarizationSegment] = field(default_factory=list)
+    segments: list[DiarizationSegment] = field(default_factory=list)
     latency_ms: float = 0.0
     metrics: dict[str, Any] = field(default_factory=dict)
 
@@ -51,9 +51,6 @@ class SpeakerDiarization(ABC):
         request_id: str,
         pcm16: bytes,
         sample_rate: int,
-        decoder_prefix: str,
-        context_seconds: float,
-        current_audio_seconds: float,
         is_final: bool,
     ) -> DiarizationResult:
         """Decode one immutable audio snapshot.
@@ -63,22 +60,16 @@ class SpeakerDiarization(ABC):
         request_id : str
             Unique request identifier used for cancellation and tracing.
         pcm16 : bytes
-            Mono little-endian signed PCM16 containing exemplars and current audio.
+            Mono little-endian signed PCM16 for the current audio snapshot.
         sample_rate : int
             PCM sampling rate in hertz.
-        decoder_prefix : str
-            Fixed timestamp-plus-speaker transcript for exemplar audio slots.
-        context_seconds : float
-            Duration occupied by exemplar audio and configured silence.
-        current_audio_seconds : float
-            Duration of the current VAD snapshot.
         is_final : bool
             Whether the snapshot closes its VAD segment.
 
         Returns
         -------
         DiarizationResult
-            Parsed current-local diarization output.
+            Parsed snapshot-local diarization output.
         """
 
     async def cancel(self, request_id: str) -> None:

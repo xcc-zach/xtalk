@@ -1,8 +1,8 @@
-"""Tests for MTD manager speaker exemplar selection."""
+"""Tests for MTD model speaker exemplar selection."""
 
 import numpy as np
 
-from xtalk.serving.modules.mtd_diarization_manager import (
+from xtalk.models.speaker_diarization.mtd import (
     _SpeakerExemplarPool,
     _float32_to_pcm16_bytes,
 )
@@ -43,7 +43,6 @@ def test_pool_keeps_complete_partially_overlapped_mtd_segment() -> None:
             {"start_s": 0.2, "end_s": 3.2, "speaker_id": "S01", "text": "甲说了一段话"},
             {"start_s": 1.2, "end_s": 2.2, "speaker_id": "S02", "text": "乙插话"},
         ],
-        source_segment_id=1,
     )
     first = decisions[0]
     assert first["action"] == "register"
@@ -73,7 +72,6 @@ def test_pool_prefers_complete_non_overlapped_segment_before_better_overlap() ->
             },
             {"start_s": 1.5, "end_s": 2.5, "speaker_id": "S02", "text": "插话"},
         ],
-        source_segment_id=1,
     )
     s01_actions = [item for item in decisions if item["speaker_id"] == "S01"]
     selected = next(item for item in s01_actions if item["action"] == "register")
@@ -96,7 +94,6 @@ def test_pool_prefers_partial_before_full_overlap() -> None:
             {"start_s": 0.5, "end_s": 1.5, "speaker_id": "S02", "text": "插话甲"},
             {"start_s": 2.0, "end_s": 3.0, "speaker_id": "S02", "text": "插话乙"},
         ],
-        source_segment_id=1,
     )
     s01_actions = [item for item in decisions if item["speaker_id"] == "S01"]
     selected = next(item for item in s01_actions if item["action"] == "register")
@@ -117,7 +114,6 @@ def test_pool_falls_back_to_complete_fully_overlapped_segment() -> None:
             {"start_s": 0.0, "end_s": 3.0, "speaker_id": "S01", "text": "外层说话"},
             {"start_s": 1.0, "end_s": 2.0, "speaker_id": "S02", "text": "中间插话"},
         ],
-        source_segment_id=1,
     )
     second = decisions[1]
     assert second["action"] == "register"
@@ -140,7 +136,6 @@ def test_clean_candidate_replaces_higher_scoring_overlapped_exemplar() -> None:
             {"start_s": 0.0, "end_s": 2.5, "speaker_id": "S01", "text": "重叠旧样本"},
             {"start_s": 0.5, "end_s": 2.0, "speaker_id": "S02", "text": "另一个人"},
         ],
-        source_segment_id=1,
     )
     assert (
         next(item for item in first if item["speaker_id"] == "S01")["action"]
@@ -154,7 +149,6 @@ def test_clean_candidate_replaces_higher_scoring_overlapped_exemplar() -> None:
     second = pool.update_from_final(
         quiet,
         [{"start_s": 0.0, "end_s": 0.8, "speaker_id": "S01", "text": "纯净新样本"}],
-        source_segment_id=2,
     )
     assert second[0]["action"] == "replace"
     assert second[0]["reason"] == "better_overlap_class"
@@ -171,7 +165,6 @@ def test_overlapped_candidate_never_replaces_clean_exemplar_by_score() -> None:
     first = pool.update_from_final(
         quiet,
         [{"start_s": 0.0, "end_s": 0.8, "speaker_id": "S01", "text": "纯净旧样本"}],
-        source_segment_id=1,
     )
     assert first[0]["action"] == "register"
     old_score = pool.items["S01"].score
@@ -184,7 +177,6 @@ def test_overlapped_candidate_never_replaces_clean_exemplar_by_score() -> None:
             {"start_s": 0.0, "end_s": 2.5, "speaker_id": "S01", "text": "重叠新样本"},
             {"start_s": 0.5, "end_s": 2.0, "speaker_id": "S02", "text": "另一个人"},
         ],
-        source_segment_id=2,
     )
     s01 = next(item for item in second if item["speaker_id"] == "S01")
     assert s01["quality"]["score"] > old_score

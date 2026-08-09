@@ -11,7 +11,6 @@ from .modules.tts_playback_manager import TTSPlaybackManager
 from .modules.tts_manager import TTSManager
 from .modules.turn_taking_manager import TurnTakingManager
 from .modules.vad_manager import VADManager
-from .modules.mtd_diarization_manager import MtdDiarizationManager
 from .modules.multi_speaker_turn_context_manager import MultiSpeakerTurnContextManager
 
 __all__ = [
@@ -28,6 +27,5 @@ __all__ = [
     "TTSManager",
     "TurnTakingManager",
     "VADManager",
-    "MtdDiarizationManager",
     "MultiSpeakerTurnContextManager",
 ]

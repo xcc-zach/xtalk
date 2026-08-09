@@ -19,7 +19,6 @@ from .modules.input_gateway import InputGateway
 from .modules.latency_manager import LatencyManager
 from .modules.llm_agent_context_manager import LLMAgentContextManager
 from .modules.llm_agent_generation_manager import LLMAgentConsumptionManager
-from .modules.mtd_diarization_manager import MtdDiarizationManager
 from .modules.multi_speaker_turn_context_manager import MultiSpeakerTurnContextManager
 from .modules.output_gateway import OutputGateway
 from .modules.persistence_manager import PersistenceManager
@@ -392,7 +391,6 @@ class DefaultService(Service):
 
     MANAGER_CLASSES: list[Type[Manager]] = [
         ASRManager,
-        MtdDiarizationManager,
         MultiSpeakerTurnContextManager,
         LLMAgentContextManager,
         LLMAgentConsumptionManager,

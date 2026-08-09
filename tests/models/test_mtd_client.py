@@ -6,18 +6,46 @@ import asyncio
 import time
 from typing import Any, Awaitable, Callable
 
+import numpy as np
 from aiohttp import web
 
 from xtalk.model_loader import init_registered_model
 from xtalk.models.speaker_diarization import OfficialMtdClient
 from xtalk.models.speaker_diarization.mtd import (
     MtdRequestCancelled,
+    _SpeakerExemplar,
     _join_decoder_prefix_and_suffix,
     _parse_timestamped_text,
 )
 
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
+
+
+def _seed_exemplars(client: OfficialMtdClient) -> None:
+    """Register two deterministic one-second exemplars in one model clone."""
+
+    audio = np.zeros(16000, dtype=np.float32)
+    client._exemplar_pool.items = {
+        "S01": _SpeakerExemplar(
+            speaker_id="S01",
+            audio=audio.copy(),
+            text="我是甲",
+            score=1.0,
+            quality={"overlap_class": "non_overlap"},
+            source_start_s=0.0,
+            source_end_s=1.0,
+        ),
+        "S02": _SpeakerExemplar(
+            speaker_id="S02",
+            audio=audio.copy(),
+            text="我是乙",
+            score=1.0,
+            quality={"overlap_class": "non_overlap"},
+            source_start_s=0.0,
+            source_end_s=1.0,
+        ),
+    }
 
 
 async def _start_server(
@@ -84,15 +112,13 @@ def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> No
 
         runner, base_url = await _start_server(handler)
         client = OfficialMtdClient(base_url=base_url)
+        _seed_exemplars(client)
         try:
             result = await client.decode_snapshot(
                 request_id="session/1/1/1/final",
-                pcm16=b"\0\0" * 72000,
+                pcm16=b"\0\0" * 16000,
                 sample_rate=16000,
-                decoder_prefix=("[0.00][S01]我是甲[1.00] [1.50][S02]我是乙[2.50]"),
-                context_seconds=3.5,
-                current_audio_seconds=1.0,
-                is_final=True,
+                is_final=False,
             )
         finally:
             await client.close()
@@ -107,7 +133,7 @@ def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> No
         assert captured["prompt"].count("<|audio_pad|>") == 1
         assert captured["prompt"].endswith("<|im_start|>assistant\n" + prefix)
         assert result.raw_text == prefix + " [3.50][S02]继续说话[4.30]"
-        assert result.current_segments == [
+        assert result.segments == [
             {
                 "start_s": 0.0,
                 "end_s": 0.8,
@@ -157,9 +183,6 @@ def test_official_runtime_is_selected_when_model_listing_is_unavailable() -> Non
                 request_id="official-final",
                 pcm16=b"\0\0" * 8000,
                 sample_rate=16000,
-                decoder_prefix="",
-                context_seconds=0.0,
-                current_audio_seconds=0.5,
                 is_final=True,
             )
         finally:
@@ -169,7 +192,7 @@ def test_official_runtime_is_selected_when_model_listing_is_unavailable() -> Non
         assert captured["request_id"] == "official-final"
         assert captured["is_final"] == "true"
         assert captured["max_tokens"] == "2048"
-        assert result.current_segments[0]["speaker_id"] == "S01"
+        assert result.segments[0]["speaker_id"] == "S01"
         assert result.metrics["engine"] == "async_llm"
 
     asyncio.run(scenario())
@@ -191,21 +214,19 @@ def test_fixed_prefix_does_not_apply_exemplar_slot_label_mapping() -> None:
 
         runner, base_url = await _start_server(handler)
         client = OfficialMtdClient(base_url=base_url)
+        _seed_exemplars(client)
         try:
             result = await client.decode_snapshot(
                 request_id="fixed-label",
-                pcm16=b"\0\0" * 72000,
+                pcm16=b"\0\0" * 16000,
                 sample_rate=16000,
-                decoder_prefix="[0.00][S01]甲[1.00] [1.50][S02]乙[2.50]",
-                context_seconds=3.5,
-                current_audio_seconds=1.0,
-                is_final=True,
+                is_final=False,
             )
         finally:
             await client.close()
             await runner.cleanup()
 
-        assert [item["speaker_id"] for item in result.current_segments] == ["S01"]
+        assert [item["speaker_id"] for item in result.segments] == ["S01"]
 
     asyncio.run(scenario())
 
@@ -235,16 +256,13 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
                 request_id="cold-start",
                 pcm16=b"\0\0" * 16000,
                 sample_rate=16000,
-                decoder_prefix="",
-                context_seconds=0.0,
-                current_audio_seconds=1.0,
                 is_final=False,
             )
         finally:
             await client.close()
             await runner.cleanup()
 
-        assert [item["speaker_id"] for item in result.current_segments] == [
+        assert [item["speaker_id"] for item in result.segments] == [
             "S01",
             "S02",
         ]
@@ -302,9 +320,6 @@ def test_cancel_releases_waiting_decode_quickly() -> None:
                 request_id="cancel-me",
                 pcm16=b"\0\0" * 1600,
                 sample_rate=16000,
-                decoder_prefix="",
-                context_seconds=0.0,
-                current_audio_seconds=0.1,
                 is_final=False,
             )
         )
