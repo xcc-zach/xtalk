@@ -269,7 +269,7 @@ def test_whiteboard_wrapper_emits_structured_payload() -> None:
         def finish_call(self, call_id: str) -> None:
             """Ignore terminal cleanup in this fixture."""
 
-    async def scenario() -> tuple[Any, _RecordingBroker]:
+    async def scenario() -> tuple[Any, _RecordingBroker, WhiteboardState]:
         broker = _RecordingBroker()
         wrapped = wrap_tools_with_ui(
             [WhiteboardAddTool],
@@ -280,18 +280,20 @@ def test_whiteboard_wrapper_emits_structured_payload() -> None:
             broker=broker,  # type: ignore[arg-type]
         )[0]
         tool_state = WhiteboardState(call_id="wrapped-call")
-        tool_state.metadata["session_id"] = "session-1"
         initial = await wrapped.aemit_initial(
             "wrapped-call",
             WhiteboardAddInput(text="包装链路"),
             tool_state,
-            {},
+            {"session_id": "session-1"},
         )
-        return initial, broker
+        return initial, broker, tool_state
 
-    initial, broker = asyncio.run(scenario())
+    initial, broker, tool_state = asyncio.run(scenario())
 
     assert isinstance(initial, Running)
+    assert tool_state.metadata["session_id"] == "session-1"
+    assert get_whiteboard_store("session-1").snapshot()["text"] == "包装链路"
+    assert get_whiteboard_store().snapshot()["text"] == ""
     assert len(broker.emits) == 1
     emit = broker.emits[0]
     assert emit["payload"]["action"] == "add_text"
