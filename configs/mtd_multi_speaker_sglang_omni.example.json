@@ -1,9 +1,8 @@
 {
   "speaker_diarization": {
-    "type": "SglangOmniMtdClient",
+    "type": "OfficialMtdClient",
     "params": {
       "base_url": "http://127.0.0.1:18714",
-      "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
       "request_timeout_s": 15.0,
       "temperature": 0.0,
       "max_tokens": 2048
