@@ -1,4 +1,4 @@
-"""Tests for the native SGLang-Omni MTD HTTP client."""
+"""Tests for the unified MTD HTTP client."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any, Awaitable, Callable
 from aiohttp import web
 
 from xtalk.model_loader import init_registered_model
-from xtalk.models.speaker_diarization import SglangOmniMtdClient
-from xtalk.models.speaker_diarization.sglang_omni_mtd_client import (
-    SglangOmniRequestCancelled,
+from xtalk.models.speaker_diarization import OfficialMtdClient
+from xtalk.models.speaker_diarization.mtd import (
+    MtdRequestCancelled,
     _join_decoder_prefix_and_suffix,
     _parse_timestamped_text,
 )
@@ -20,11 +20,22 @@ from xtalk.models.speaker_diarization.sglang_omni_mtd_client import (
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
-async def _start_server(handler: Handler) -> tuple[web.AppRunner, str]:
+async def _start_server(
+    handler: Handler,
+    *,
+    route: str = "/v1/audio/transcriptions",
+    model_name: str | None = "mtd-test",
+) -> tuple[web.AppRunner, str]:
     """Start one local ephemeral aiohttp server."""
 
     app = web.Application()
-    app.router.add_post("/v1/audio/transcriptions", handler)
+    app.router.add_post(route, handler)
+    if model_name is not None:
+
+        async def models(_request: web.Request) -> web.Response:
+            return web.json_response({"data": [{"id": model_name}]})
+
+        app.router.add_get("/v1/models", models)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -72,15 +83,13 @@ def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> No
             )
 
         runner, base_url = await _start_server(handler)
-        client = SglangOmniMtdClient(base_url=base_url, model="mtd-test")
+        client = OfficialMtdClient(base_url=base_url)
         try:
             result = await client.decode_snapshot(
                 request_id="session/1/1/1/final",
                 pcm16=b"\0\0" * 72000,
                 sample_rate=16000,
-                decoder_prefix=(
-                    "[0.00][S01]我是甲[1.00] [1.50][S02]我是乙[2.50]"
-                ),
+                decoder_prefix=("[0.00][S01]我是甲[1.00] [1.50][S02]我是乙[2.50]"),
                 context_seconds=3.5,
                 current_audio_seconds=1.0,
                 is_final=True,
@@ -113,6 +122,59 @@ def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> No
     asyncio.run(scenario())
 
 
+def test_official_runtime_is_selected_when_model_listing_is_unavailable() -> None:
+    """A missing model-list route selects the official runtime protocol."""
+
+    async def scenario() -> None:
+        captured: dict[str, Any] = {}
+
+        async def handler(request: web.Request) -> web.Response:
+            captured.update(await _read_form(request))
+            return web.json_response(
+                {
+                    "raw_text": "[0.00][S01]你好[0.50]",
+                    "current_segments": [
+                        {
+                            "start_s": 0.0,
+                            "end_s": 0.5,
+                            "speaker_id": "S01",
+                            "text": "你好",
+                        }
+                    ],
+                    "latency_ms": 2.5,
+                    "metrics": {"engine": "async_llm"},
+                }
+            )
+
+        runner, base_url = await _start_server(
+            handler,
+            route="/v1/mtd/decode",
+            model_name=None,
+        )
+        client = OfficialMtdClient(base_url=base_url)
+        try:
+            result = await client.decode_snapshot(
+                request_id="official-final",
+                pcm16=b"\0\0" * 8000,
+                sample_rate=16000,
+                decoder_prefix="",
+                context_seconds=0.0,
+                current_audio_seconds=0.5,
+                is_final=True,
+            )
+        finally:
+            await client.close()
+            await runner.cleanup()
+
+        assert captured["request_id"] == "official-final"
+        assert captured["is_final"] == "true"
+        assert captured["max_tokens"] == "2048"
+        assert result.current_segments[0]["speaker_id"] == "S01"
+        assert result.metrics["engine"] == "async_llm"
+
+    asyncio.run(scenario())
+
+
 def test_fixed_prefix_does_not_apply_exemplar_slot_label_mapping() -> None:
     """A generated S01 is retained even when prefix audio contains S01/S02."""
 
@@ -128,7 +190,7 @@ def test_fixed_prefix_does_not_apply_exemplar_slot_label_mapping() -> None:
             )
 
         runner, base_url = await _start_server(handler)
-        client = SglangOmniMtdClient(base_url=base_url)
+        client = OfficialMtdClient(base_url=base_url)
         try:
             result = await client.decode_snapshot(
                 request_id="fixed-label",
@@ -167,7 +229,7 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
             )
 
         runner, base_url = await _start_server(handler)
-        client = SglangOmniMtdClient(base_url=base_url)
+        client = OfficialMtdClient(base_url=base_url)
         try:
             result = await client.decode_snapshot(
                 request_id="cold-start",
@@ -182,7 +244,10 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
             await client.close()
             await runner.cleanup()
 
-        assert [item["speaker_id"] for item in result.current_segments] == ["S01", "S02"]
+        assert [item["speaker_id"] for item in result.current_segments] == [
+            "S01",
+            "S02",
+        ]
         assert captured["prompt"].endswith("<|im_start|>assistant\n")
         assert "<|audio_pad|>" in captured["prompt"]
 
@@ -192,9 +257,7 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
 def test_timestamp_parser_accepts_nested_speaker_bracket() -> None:
     """Continuation-boundary ``[[Sxx]`` is parsed as the intended speaker."""
 
-    assert _parse_timestamped_text(
-        "[0.00][S01]甲[1.00] [1.50][[S02]乙[2.50]"
-    ) == [
+    assert _parse_timestamped_text("[0.00][S01]甲[1.00] [1.50][[S02]乙[2.50]") == [
         _parse_timestamped_text("[0.00][S01]甲[1.00]")[0],
         _parse_timestamped_text("[1.50][S02]乙[2.50]")[0],
     ]
@@ -206,10 +269,7 @@ def test_suffix_without_start_timestamp_reuses_prefix_boundary() -> None:
     assert _join_decoder_prefix_and_suffix(
         "[0.00][S01]你好，我叫张三。[2.10]",
         "[S02]你好，我叫李四。[5.64]",
-    ) == (
-        "[0.00][S01]你好，我叫张三。[2.10] "
-        "[2.10][S02]你好，我叫李四。[5.64]"
-    )
+    ) == ("[0.00][S01]你好，我叫张三。[2.10] " "[2.10][S02]你好，我叫李四。[5.64]")
     parsed = _parse_timestamped_text(
         _join_decoder_prefix_and_suffix(
             "[0.00][S01]你好，我叫张三。[2.10]",
@@ -236,7 +296,7 @@ def test_cancel_releases_waiting_decode_quickly() -> None:
             return web.json_response({"text": "", "segments": []})
 
         runner, base_url = await _start_server(handler)
-        client = SglangOmniMtdClient(base_url=base_url, request_timeout_s=60.0)
+        client = OfficialMtdClient(base_url=base_url, request_timeout_s=60.0)
         decode_task = asyncio.create_task(
             client.decode_snapshot(
                 request_id="cancel-me",
@@ -255,7 +315,7 @@ def test_cancel_releases_waiting_decode_quickly() -> None:
             try:
                 await asyncio.wait_for(decode_task, timeout=1.0)
                 raise AssertionError("decode_snapshot unexpectedly completed")
-            except SglangOmniRequestCancelled:
+            except MtdRequestCancelled:
                 pass
             assert time.perf_counter() - cancelled_at < 1.0
         finally:
@@ -266,14 +326,14 @@ def test_cancel_releases_waiting_decode_quickly() -> None:
     asyncio.run(scenario())
 
 
-def test_model_loader_discovers_sglang_client() -> None:
-    """Configuration discovery can instantiate the new client type."""
+def test_model_loader_discovers_unified_client() -> None:
+    """Configuration discovery can instantiate the unified client type."""
 
     client = init_registered_model(
         slot="speaker_diarization",
         model_config={
-            "type": "SglangOmniMtdClient",
+            "type": "OfficialMtdClient",
             "params": {"base_url": "http://127.0.0.1:18714"},
         },
     )
-    assert isinstance(client, SglangOmniMtdClient)
+    assert isinstance(client, OfficialMtdClient)
