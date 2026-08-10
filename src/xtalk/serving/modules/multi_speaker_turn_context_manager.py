@@ -814,6 +814,13 @@ class MultiSpeakerTurnContextManager(Manager):
                         _render_timeline(segments),
                         normalized_active,
                     )
+            # The history gate promises that non-focus speech cannot enter
+            # focus-only history. A missing or degraded diarization result
+            # cannot establish that promise, so fail closed while the gate is
+            # active. Sessions without a diarization model never call this
+            # filter and keep the original single-speaker behavior.
+            if self.history_gate_enabled:
+                return None
             if self.suppress_when_speaker_missing:
                 return None
             return asr_event.text, segments, _render_timeline(segments), None
