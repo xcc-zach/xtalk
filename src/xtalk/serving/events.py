@@ -116,6 +116,8 @@ class ASRResultPartial(Event):
     display_text: str = ""  # Cleaned text for frontend display
     speech_pause: bool = False
     origin: str = "asr"
+    turn_id: int = 0
+    segment_id: int = 0
 
 
 @dataclass
@@ -126,6 +128,8 @@ class ASRResultFinal(Event):
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
     origin: str = "asr"
+    turn_id: int = 0
+    segment_id: int = 0
 
 
 @dataclass
@@ -331,6 +335,7 @@ class TTSSpeedChange(Event):
 @dataclass
 class TTSChunkReady(Event):
     """Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated."""
+
     TYPE: ClassVar[str] = "tts.chunk_ready"
     response_id: str = ""
     audio_chunk: bytes = b""
@@ -540,6 +545,8 @@ class TurnInputAbortRequested(Event):
 @dataclass
 class TurnASRStartRequested(Event):
     TYPE: ClassVar[str] = "turn.asr_start_requested"
+    turn_id: int = 0
+    segment_id: int = 0
 
 
 @dataclass
@@ -549,6 +556,8 @@ class TurnASREndRequested(Event):
     """
 
     TYPE: ClassVar[str] = "turn.asr_end_requested"
+    turn_id: int = 0
+    segment_id: int = 0
 
 
 @dataclass
@@ -558,6 +567,76 @@ class TurnASRPauseRequested(Event):
     """
 
     TYPE: ClassVar[str] = "turn.asr_pause_requested"
+    turn_id: int = 0
+    segment_id: int = 0
+
+
+# ==================== Multi-speaker Diarization Events ====================
+
+
+@dataclass
+class SpeakerDiarizationPartial(Event):
+    """Replaceable diarization result for the current VAD-segment snapshot."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.partial"
+    turn_id: int = 0
+    segment_id: int = 0
+    revision: int = 0
+    source_start_sample: int = 0
+    source_end_sample: int = 0
+    sample_rate: int = 16000
+    raw_text: str = ""
+    diarization_text: str = ""
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    latency_ms: float = 0.0
+
+
+@dataclass
+class SpeakerDiarizationSegmentFinal(Event):
+    """Terminal diarization result for one VAD segment."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.segment_final"
+    turn_id: int = 0
+    segment_id: int = 0
+    source_start_sample: int = 0
+    source_end_sample: int = 0
+    sample_rate: int = 16000
+    raw_text: str = ""
+    diarization_text: str = ""
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    degraded: bool = False
+    degraded_reason: str = ""
+    latency_ms: float = 0.0
+
+
+@dataclass
+class SpeakerDiarizationTurnFinal(Event):
+    """Terminal diarization timeline after every segment in a hard turn ends."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.turn_final"
+    turn_id: int = 0
+    segment_ids: list[int] = field(default_factory=list)
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    diarization_text: str = ""
+    active_speaker_id: str | None = None
+    degraded: bool = False
+    degraded_reason: str = ""
+
+
+@dataclass
+class MultiSpeakerTurnReady(Event):
+    """ASR transcript joined with its turn-level speaker timeline."""
+
+    TYPE: ClassVar[str] = "multi_speaker.turn_ready"
+    turn_id: int = 0
+    asr_text: str = ""
+    diarization_text: str = ""
+    diarization_segments: list[dict[str, Any]] = field(default_factory=list)
+    active_speaker_id: str | None = None
+    should_respond: bool = True
+    degraded: bool = False
+    degraded_reason: str = ""
 
 
 @dataclass

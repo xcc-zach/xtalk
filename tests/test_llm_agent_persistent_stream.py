@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
+
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from xtalk.models import Agent, Models
 from xtalk.models.agents import AgentContext, AgentOutput
+from xtalk.models.agents.default import DefaultAgent
 from xtalk.serving.events import (
     ConsumeLLMAgentGenerationRequested,
     Event,
@@ -100,6 +103,20 @@ class _StubAgent:
             yield ""
 
 
+class _ToolBindableFakeChatModel(FakeListChatModel):
+    """Fake chat model that accepts the agent's tool binding."""
+
+    def bind_tools(
+        self,
+        tools: Sequence[Any],
+        **kwargs: Any,
+    ) -> _ToolBindableFakeChatModel:
+        """Accept tool binding and remain directly runnable."""
+
+        del tools, kwargs
+        return self
+
+
 async def _queue_stream(
     queue: asyncio.Queue[AgentOutput],
     started: asyncio.Event,
@@ -175,6 +192,33 @@ class PersistentAgentStreamTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(updates)
         self.assertEqual(updates[-1].text, "timer progress")
+
+    async def test_multi_speaker_final_flushes_pending_async_tool_result(self) -> None:
+        """Wake the agent loop for a final tool result deferred during speech."""
+
+        agent = DefaultAgent(
+            model=_ToolBindableFakeChatModel(responses=["unused"]),
+            proactive=False,
+        )
+        agent._pending_final_reports.append("timer finished")
+
+        outputs = [
+            output
+            async for output in agent.async_accept(
+                {
+                    "type": "multi_speaker_final",
+                    "data": {
+                        "turn_id": 1,
+                        "asr_text": "继续说",
+                        "should_respond": False,
+                    },
+                }
+            )
+        ]
+
+        self.assertEqual(outputs, [])
+        self.assertEqual(agent._pending_final_reports, [])
+        self.assertEqual(agent._async_tool_update_queue.get_nowait(), "timer finished")
 
 
 if __name__ == "__main__":

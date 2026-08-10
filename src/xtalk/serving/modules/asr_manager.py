@@ -90,6 +90,8 @@ class AudioConsumer:
         self._recognized_text = ""
         self._turn_chat_history: str | None = None
         self._recognition_generation = 0
+        self._turn_id = 0
+        self._segment_id = 0
         # Assume PCM 16bit mono
         bytes_per_second = self.SAMPLE_RATE * 1 * (16 // 8)
         # Store audio before ASR starts; make sure ASR do not leave alone the first words
@@ -112,7 +114,7 @@ class AudioConsumer:
         else:
             await self._audio_queue.put(audio_frame)
 
-    async def start(self):
+    async def start(self, *, turn_id: int = 0, segment_id: int = 0):
         # Pump pre-buffer to recognition queue; start consumer
         async with self._lifecycle_lock:
             # Break start-once invariance warning
@@ -121,6 +123,8 @@ class AudioConsumer:
                 return
             self._ended = False
             self._paused = False
+            self._turn_id = turn_id
+            self._segment_id = segment_id
             self._turn_chat_history = self._snapshot_chat_history()
             self._start_consumer()
             await self._audio_queue.put(await self._pre_buffer.get())
@@ -259,6 +263,8 @@ class AudioConsumer:
                     text=recognized_text,
                     display_text=recognized_text,
                     speech_pause=is_final_chunk,
+                    turn_id=self._turn_id,
+                    segment_id=self._segment_id,
                 )
             )
 
@@ -277,6 +283,8 @@ class AudioConsumer:
                 session_id=self._session_id,
                 text=text,
                 display_text=text,
+                turn_id=self._turn_id,
+                segment_id=self._segment_id,
             )
         )
 
@@ -350,10 +358,13 @@ class ASRManager(Manager):
             self._text_turn_active = False
 
     @Manager.event_handler(TurnASRStartRequested)
-    async def _handle_asr_start(self, _):
+    async def _handle_asr_start(self, event: TurnASRStartRequested):
         if self._text_turn_active:
             return
-        await self._audio_consumer.start()
+        await self._audio_consumer.start(
+            turn_id=event.turn_id,
+            segment_id=event.segment_id,
+        )
 
     @Manager.event_handler(TurnASREndRequested)
     async def _handle_asr_end(self, _):
