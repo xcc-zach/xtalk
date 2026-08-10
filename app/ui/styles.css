@@ -1483,6 +1483,39 @@ summary,
   cursor: pointer;
 }
 
+.wake-word-setting {
+  display: flex;
+  margin-bottom: 12px;
+  padding: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.wake-word-setting span {
+  display: grid;
+  gap: 4px;
+}
+
+.wake-word-setting strong {
+  font-size: 13px;
+}
+
+.wake-word-setting small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.wake-word-setting input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--primary);
+}
+
 .runtime-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

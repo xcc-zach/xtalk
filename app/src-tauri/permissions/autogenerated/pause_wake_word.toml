@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pause-wake-word"
+description = "Enables the pause_wake_word command without any pre-configured scope."
+commands.allow = ["pause_wake_word"]
+
+[[permission]]
+identifier = "deny-pause-wake-word"
+description = "Denies the pause_wake_word command without any pre-configured scope."
+commands.deny = ["pause_wake_word"]

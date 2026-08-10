@@ -5,6 +5,8 @@
 mod managed;
 mod sidecar;
 mod tools;
+mod tray;
+mod wake_word;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -12,8 +14,9 @@ use sidecar::{
     inspect_managed_model_config, BackendSupervisor, NativeBackendConnection,
     NativeModelConfigSelection, NativeWebSearchSettings,
 };
-use tauri::{Manager, State, WindowEvent};
+use tauri::{Emitter, Manager, State, WindowEvent};
 use tools::NativeToolDefinition;
+use wake_word::{NativeWakeWordSettings, WakeWordSupervisor};
 
 /// Runs the XTalk Desktop native shell.
 pub fn run() {
@@ -33,12 +36,20 @@ pub fn run() {
             install_tool_directory,
             remove_installed_tool,
             set_tool_enabled,
+            get_wake_word_settings,
+            pause_wake_word,
+            resume_wake_word,
+            set_wake_word_enabled,
             shutdown_backend
         ])
         .setup(|app| {
             let supervisor =
                 tauri::async_runtime::block_on(BackendSupervisor::initialize(app.handle()));
             app.manage(supervisor);
+            let wake_word =
+                tauri::async_runtime::block_on(WakeWordSupervisor::initialize(app.handle()));
+            app.manage(wake_word);
+            tray::setup(app)?;
             Ok(())
         })
         .on_window_event(handle_window_event)
@@ -169,6 +180,48 @@ async fn shutdown_backend(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn get_wake_word_settings(
+    supervisor: State<'_, Arc<WakeWordSupervisor>>,
+) -> Result<NativeWakeWordSettings, String> {
+    Ok(supervisor.settings().await)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn set_wake_word_enabled(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<WakeWordSupervisor>>,
+    enabled: bool,
+    listen_immediately: bool,
+) -> Result<NativeWakeWordSettings, String> {
+    supervisor
+        .inner()
+        .set_enabled(&app, enabled, listen_immediately)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn pause_wake_word(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<WakeWordSupervisor>>,
+) -> Result<NativeWakeWordSettings, String> {
+    supervisor.pause(&app).await;
+    Ok(supervisor.settings().await)
+}
+
+#[tauri::command]
+async fn resume_wake_word(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<WakeWordSupervisor>>,
+) -> Result<NativeWakeWordSettings, String> {
+    supervisor
+        .inner()
+        .resume(&app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
@@ -180,18 +233,34 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     api.prevent_close();
 
     let app = window.app_handle().clone();
+    let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
+    if wake_word.is_enabled() {
+        let _ = app.emit("app-backgrounding", ());
+        if let Err(error) = window.hide() {
+            eprintln!("failed to hide the main window: {error}");
+        }
+        return;
+    }
+
+    request_app_exit(app);
+}
+
+pub(crate) fn request_app_exit(app: tauri::AppHandle) {
     let supervisor = app.state::<Arc<BackendSupervisor>>().inner().clone();
     if !supervisor.begin_app_close() {
         return;
     }
 
-    let window = window.clone();
+    let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
     tauri::async_runtime::spawn(async move {
+        wake_word.shutdown().await;
         if let Err(error) = supervisor.shutdown().await {
             eprintln!("app-backend shutdown did not complete cleanly: {error}");
         }
-        if let Err(error) = window.destroy() {
-            eprintln!("failed to destroy the main window: {error}");
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.destroy() {
+                eprintln!("failed to destroy the main window: {error}");
+            }
         }
         app.exit(0);
     });

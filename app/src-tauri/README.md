@@ -8,6 +8,7 @@ app/src-tauri/binaries/
 ├── app-backend-<target-triple>[.exe]
 ├── local-model-runtime-<target-triple>[.exe]
 ├── sherpa-onnx-offline-websocket-server-<target-triple>[.exe]
+├── sherpa-onnx-keyword-spotter-microphone-<target-triple>[.exe]
 └── app-backend-runtime/
     └── PyInstaller onedir runtime files
 ```
@@ -32,18 +33,26 @@ Prepare the optional managed native runtimes from explicit platform files:
 ```sh
 python ../scripts/prepare_managed_runtime.py \
   --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-keyword-spotter /path/to/sherpa-onnx-keyword-spotter-microphone \
+  --sherpa-kws-model-dir /path/to/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20 \
   --sherpa-ort-library /path/to/sherpa/libonnxruntime \
   --tts-ort-library /path/to/tts/libonnxruntime
 ```
 
 The script builds the Rust MOSS service, gives the executables Tauri's
-target-specific names, and stages the two ABI-specific ONNX Runtime libraries
-as ignored resources. Apple Silicon builds also compile the pinned Swift MLX
-service through Xcode and stage its Metal resource bundle. CUDA packages pass
-the two optional `--*-cuda-runtime-dir` arguments so the matching execution
-provider libraries are staged. A release build must run it for every target.
-The Apple Silicon build host must have Xcode's Metal Toolchain component
-installed (`xcodebuild -downloadComponent MetalToolchain`).
+target-specific names, stages the wake-word model, and stages the two
+ABI-specific ONNX Runtime libraries as ignored resources. The sherpa keyword
+spotter must use the same ABI as the supplied sherpa ONNX Runtime. Apple
+Silicon builds also compile the pinned Swift MLX service through Xcode and
+stage its Metal resource bundle. CUDA packages pass the two optional
+`--*-cuda-runtime-dir` arguments so the matching execution provider libraries
+are staged. A release build must run it for every target. The Apple Silicon
+build host must have Xcode's Metal Toolchain component installed
+(`xcodebuild -downloadComponent MetalToolchain`).
+
+On Windows, `tauri.windows.conf.json` also places the sherpa ONNX Runtime DLL
+beside the packaged sidecars. This application-local copy must take precedence
+over any incompatible `onnxruntime.dll` supplied by Windows itself.
 
 `tauri.conf.json` bundles the runtime directory as
 `$RESOURCE/app-backend-runtime` and launches the external binary with
@@ -101,4 +110,6 @@ chooses CUDA, then MLX, then CPU. The external JSON is never rewritten.
 
 `Info.plist` and `Entitlements.plist` provide the macOS microphone usage
 description and hardened-runtime audio-input entitlement. The WebView requests
-microphone access only when the user starts a voice conversation.
+microphone access when the user starts a voice conversation; the packaged local
+keyword spotter also uses it while the user has explicitly enabled background
+voice wake.

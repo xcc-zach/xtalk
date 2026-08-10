@@ -1089,7 +1089,7 @@ fn find_ort_library(directory: &Path, sherpa: bool) -> Result<PathBuf, ManagedEr
         .ok_or(ManagedError::MissingRuntime)
 }
 
-fn configure_library_path(
+pub(crate) fn configure_library_path(
     command: tauri_plugin_shell::process::Command,
     runtime_dir: &Path,
 ) -> tauri_plugin_shell::process::Command {
