@@ -15,7 +15,7 @@ from xtalk.models.agents import AgentOutput, AgentTurnBoundary
 from xtalk.models.agents.default import DefaultAgent
 from xtalk.models.agents.interfaces import ChatHistory
 from xtalk.models.agents.tools import ToolEngine
-from xtalk.serving.event_bus import EventBus
+from xtalk.serving.event_bus import EventBus, EventDispatchMode
 from xtalk.serving.events import (
     ConsumeLLMAgentGenerationRequested,
     TTSFinished,
@@ -136,7 +136,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=_gated_tool_stream(resumed_after_call),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         await _wait_for_history(event_bus, TurnTTSFlushRequested.TYPE)
@@ -148,7 +148,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
 
         await event_bus.publish(
             TTSFinished(session_id="session", response_id=response_id),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.sleep(0)
         self.assertFalse(resumed_after_call.is_set())
@@ -156,7 +156,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
 
         await event_bus.publish(
             TTSResponseClosed(session_id="session", response_id=response_id),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(resumed_after_call.wait(), timeout=1.0)
 
@@ -190,7 +190,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=_gated_tool_stream(resumed_after_call, stream_closed),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await _wait_for_history(event_bus, TurnTTSFlushRequested.TYPE)
 
@@ -222,7 +222,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=stream(),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(resumed_after_call.wait(), timeout=1.0)
 
@@ -258,7 +258,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=stream(),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         started = await _wait_for_history(
@@ -274,7 +274,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 response_id=first_response_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(first_resumed.wait(), timeout=1.0)
 
@@ -295,7 +295,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 response_id=started[1].response_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(second_resumed.wait(), timeout=1.0)
 
@@ -333,7 +333,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=stream(),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(result_forwarded.wait(), timeout=1.0)
 
@@ -361,7 +361,7 @@ class ToolCallPlaybackBarrierTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 stream=stream(),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await asyncio.wait_for(stream_finished.wait(), timeout=1.0)
 
