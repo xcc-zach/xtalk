@@ -119,8 +119,10 @@ has completed.
 Merge the following sections from [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) into an existing X-Talk configuration:
 
 - `speaker_diarization` configures the unified `MossTranscribeDiarize` and runtime URL.
-- `service_config.multi_speaker` enables the multi-speaker path and response policy.
+- `service_config.multi_speaker` configures multi-speaker orchestration and response policies.
 - `service_config.multi_speaker.diarization` configures generic snapshot buffering and partial scheduling. MTD-specific registration layout and exemplar policy are internal to `MossTranscribeDiarize`.
+
+The diarization pipeline always consumes 16 kHz mono PCM16 audio; its sample rate is not configurable.
 
 Minimal configuration example:
 
@@ -137,18 +139,15 @@ Minimal configuration example:
   },
   "service_config": {
     "multi_speaker": {
-      "enabled": true,
-      "response_policy": "all",
+      "response_policy": "focus_only",
+      "focus_speaker_ids": ["S01"],
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
-        "sample_rate": 16000,
         "pre_buffer_s": 1.0,
         "partial": {
           "interval_s": 1.0,
-          "first_partial_min_s": 0.8,
-          "publish_unchanged": false,
-          "abort_on_vad_end": true
+          "first_partial_min_s": 0.8
         }
       }
     }
@@ -183,7 +182,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 3. SGLang returns only the newly generated suffix. The client joins that suffix with the locally known prefix, parses the complete timestamped timeline, removes the exemplar range, and rebases the current-audio timestamps to zero.
 4. The client preserves the speaker labels emitted in that fixed-prefix continuation; it does not apply exemplar-slot overlap mapping or allocate replacement labels.
 
-`abort_on_vad_end` still cancels a locally waiting obsolete partial so the final can enter the manager worker promptly. The native transcription API does not currently expose a public request-ID cancellation endpoint, so this is best-effort HTTP-task cancellation.
+At VAD end, the client always cancels a locally waiting obsolete partial so the final can enter the manager worker promptly. Unchanged partial results are never republished. The native transcription API does not currently expose a public request-ID cancellation endpoint, so cancellation is best-effort at the HTTP-task level.
 
 ## 4. Runtime behavior
 
@@ -195,7 +194,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 6. At the hard turn boundary, `MultiSpeakerTurnContextManager` joins the ASR final and MTD timeline by `turn_id`.
 7. `DefaultAgent` receives the ASR transcript, speaker timeline, and active speaker together, allowing the LLM to understand who is speaking and remember speaker self-introductions.
 
-The multi-speaker path is controlled by `service_config.multi_speaker.enabled`. When it is `false`, ASR finals continue through the original single-speaker path.
+The multi-speaker path is enabled automatically whenever a `speaker_diarization` model is configured. Without that model, ASR finals continue through the original single-speaker path. `service_config.multi_speaker` only controls orchestration and response policies.
 
 ## 5. SGLang-Omni validation
 

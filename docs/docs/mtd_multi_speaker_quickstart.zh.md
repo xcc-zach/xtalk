@@ -116,8 +116,10 @@ curl http://127.0.0.1:18604/health
 将 [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) 中的以下配置合并进现有 X-Talk 配置：
 
 - `speaker_diarization`：配置统一的 `MossTranscribeDiarize` 和 runtime 地址。
-- `service_config.multi_speaker`：启用多说话人链路和响应策略。
+- `service_config.multi_speaker`：配置多说话人编排和响应策略。
 - `service_config.multi_speaker.diarization`：配置通用 snapshot 缓冲与 partial 调度。MTD 专属注册音频布局和 exemplar 策略由 `MossTranscribeDiarize` 内部维护。
+
+说话人分离链路始终使用 16 kHz 单声道 PCM16 音频，采样率不可配置。
 
 核心配置示例：
 
@@ -134,18 +136,15 @@ curl http://127.0.0.1:18604/health
   },
   "service_config": {
     "multi_speaker": {
-      "enabled": true,
-      "response_policy": "all",
+      "response_policy": "focus_only",
+      "focus_speaker_ids": ["S01"],
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
-        "sample_rate": 16000,
         "pre_buffer_s": 1.0,
         "partial": {
           "interval_s": 1.0,
-          "first_partial_min_s": 0.8,
-          "publish_unchanged": false,
-          "abort_on_vad_end": true
+          "first_partial_min_s": 0.8
         }
       }
     }
@@ -180,7 +179,7 @@ curl http://127.0.0.1:18604/health
 3. SGLang 只返回新生成的后缀；客户端将后缀和本地已知的 prefix 拼回完整文本，解析完整时间线，裁掉 exemplar 区间后将当前音频时间戳归零。
 4. 客户端直接保留 fixed-prefix continuation 输出的 speaker label，不再做 exemplar 时间槽重叠映射，也不再重新分配标签。
 
-`abort_on_vad_end` 仍会及时取消客户端等待中的旧 partial，让 final 优先进入 manager worker。原生 transcription API 暂无公开的远端 request-ID cancel 接口，因此这是 HTTP 任务级的 best-effort cancel。
+VAD 结束时，客户端总会及时取消正在等待的过期 partial，让 final 优先进入 manager worker；内容未变化的 partial 也不会重复发布。原生 transcription API 暂无公开的远端 request-ID cancel 接口，因此取消属于 HTTP 任务级的 best-effort 行为。
 
 ## 4. 运行机制
 
@@ -192,7 +191,7 @@ curl http://127.0.0.1:18604/health
 6. 硬轮次结束后，`MultiSpeakerTurnContextManager` 按 `turn_id` 合并 ASR final 和 MTD timeline。
 7. `DefaultAgent` 同时接收 ASR 文本、speaker timeline 和 active speaker，用于理解谁在说话并记忆说话人自报信息。
 
-多说话人功能由 `service_config.multi_speaker.enabled` 控制。设置为 `false` 时，ASR final 继续沿用原有单说话人链路。
+配置 `speaker_diarization` 模型后，多说话人链路会自动启用；未配置该模型时，ASR final 继续沿用原有单说话人链路。`service_config.multi_speaker` 仅用于控制编排和响应策略。
 
 ## 5. SGLang-Omni 实测结果
 
