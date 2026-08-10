@@ -345,6 +345,12 @@ interface MessageRowState {
   actions: HTMLElement | null;
 }
 
+interface ChatSessionRowState {
+  row: HTMLElement;
+  button: HTMLButtonElement;
+  title: HTMLSpanElement;
+}
+
 type MessageContentPart =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; element: HTMLElement };
@@ -358,6 +364,9 @@ type MessageContentPart =
  * snapshot renders instead of flashing on every text or status update.
  */
 const messageRowStates = new Map<string, MessageRowState>();
+
+/** Reused sidebar rows keyed by persisted conversation identity. */
+const chatSessionRowStates = new Map<string, ChatSessionRowState>();
 
 const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
 const MAX_TOOL_UI_HISTORY_ITEMS = 200;
@@ -756,6 +765,20 @@ function setMainView(view: "orb" | "chat"): void {
 function renderChatSessions(): void {
   const activeSessionId = latestSnapshot.sessionId;
   const rows = persistedSessions.map((session) => {
+    let state = chatSessionRowStates.get(session.id);
+    if (state !== undefined) {
+      state.row.classList.toggle("is-active", session.id === activeSessionId);
+      state.button.classList.toggle("is-active", session.id === activeSessionId);
+      state.button.setAttribute(
+        "aria-current",
+        session.id === activeSessionId ? "page" : "false",
+      );
+      state.title.textContent =
+        session.title?.trim() || t("sidebar.newConversation");
+      state.title.title = state.title.textContent;
+      return state.row;
+    }
+
     const row = document.createElement("div");
     row.className = "chat-session-row";
     row.dataset.sessionId = session.id;
@@ -821,13 +844,24 @@ function renderChatSessions(): void {
     trash.append(trashPath);
     deleteButton.append(trash);
     deleteButton.addEventListener("click", () => {
-      openDeleteSessionDialog(session.id, session.title);
+      const currentSession = persistedSessions.find(
+        (candidate) => candidate.id === session.id,
+      );
+      openDeleteSessionDialog(session.id, currentSession?.title ?? null);
     });
     row.append(deleteButton);
+    state = { row, button, title };
+    chatSessionRowStates.set(session.id, state);
     return row;
   });
 
-  elements.chatSessionList.replaceChildren(...rows);
+  const activeSessionIds = new Set(persistedSessions.map((session) => session.id));
+  for (const sessionId of chatSessionRowStates.keys()) {
+    if (!activeSessionIds.has(sessionId)) {
+      chatSessionRowStates.delete(sessionId);
+    }
+  }
+  reconcileStableChildren(elements.chatSessionList, rows);
   elements.newChatButton.classList.toggle(
     "is-active",
     activeSessionId === null,
