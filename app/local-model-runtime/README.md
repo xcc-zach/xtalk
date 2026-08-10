@@ -1,9 +1,9 @@
 # XTalk Local Model Runtime
 
 This crate is the native ONNX sidecar for optional desktop models. The first
-implemented engines are MOSS-TTS-Nano and the AgenticASR Refiner. It uses ONNX
-Runtime and native tokenizers directly and does not depend on Python, PyTorch,
-Transformers, FastAPI, or Uvicorn.
+implemented engines are MOSS-TTS-Nano, the AgenticASR Refiner, and CAM++
+speaker embeddings. It uses ONNX Runtime and native preprocessing directly and
+does not depend on Python, PyTorch, Transformers, FastAPI, or Uvicorn.
 
 ## Run the MOSS HTTP service
 
@@ -62,3 +62,28 @@ curl http://127.0.0.1:18084/v1/models
 The runtime always uses greedy decoding and the model's no-thinking chat
 template. `POST /v1/chat/completions` accepts `model`, `messages`, and
 `max_tokens`, and advertises the stable model ID `agentic-asr-refiner`.
+
+## Run CAM++
+
+The CAM++ snapshot contains `campplus.onnx`. The service accepts 16 kHz mono
+PCM16 snapshots and returns one normalized 192-dimensional speaker embedding:
+
+```bash
+cargo run --release -- \
+  --service campplus \
+  --backend coreml \
+  --ort-dylib /path/to/libonnxruntime.dylib \
+  --model-root /path/to/campplus \
+  --port 18085
+
+curl -X POST \
+  -F 'request_id=manual-test' \
+  -F 'sample_rate=16000' \
+  -F 'is_final=true' \
+  -F 'audio=@/path/to/audio.s16le.pcm;type=audio/pcm' \
+  http://127.0.0.1:18085/v1/speaker/embeddings
+```
+
+The native feature pipeline uses 25 ms Povey windows, a 10 ms frame shift,
+80 log-mel bins, and per-utterance mean normalization. `coreml` is available on
+macOS; managed `auto` selection prefers CUDA, then CoreML, then CPU.
