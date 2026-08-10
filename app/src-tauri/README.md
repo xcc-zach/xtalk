@@ -48,6 +48,8 @@ The script selects the Rust host target, downloads its official sherpa shared
 distribution, validates the SHA-256 from
 `resources/manifests/native-runtimes.lock.json`, and stages the included
 Sherpa server and ONNX Runtime 1.27 together. It also builds the Rust runtimes;
+the shared native ONNX sidecar serves CAM++ embeddings through
+`managed://campplus`, selecting CoreML on macOS and CPU or CUDA elsewhere;
 the managed MTD runtime is statically linked from the immutable
 moss-transcribe.cpp and ggml revisions in
 `resources/manifests/moss-transcribe-runtime.lock.json` with native CPU tuning
