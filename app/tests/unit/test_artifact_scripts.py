@@ -251,6 +251,38 @@ def test_managed_runtime_stages_only_onnx_cuda_provider_files(
     assert not (destination / "unrelated.txt").exists()
 
 
+def test_managed_runtime_declares_complete_wake_word_model_layout() -> None:
+    """Stage every model file required by the sherpa keyword spotter."""
+
+    module = load_script("prepare_managed_runtime")
+
+    assert module.WAKE_WORD_MODEL_FILES == (
+        "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+        "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+        "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+        "tokens.txt",
+    )
+    assert (
+        APP_ROOT / "resources" / "models" / "wake-word" / "keywords.txt"
+    ).read_text(encoding="utf-8").strip() == (
+        "n ǐ h ǎo x iǎo k è :3.0 #0.25 @你好小克"
+    )
+
+
+def test_windows_stages_sherpa_onnx_runtime_beside_sidecars() -> None:
+    """Override a conflicting system ONNX Runtime during Windows startup."""
+
+    config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.windows.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert config["bundle"]["resources"] == {
+        "../resources/managed-runtime/sherpa/onnxruntime.dll": "onnxruntime.dll"
+    }
+
+
 def test_local_models_example_uses_managed_speech_and_shared_llm() -> None:
     """Keep managed examples aligned on their shared LLM configuration."""
 

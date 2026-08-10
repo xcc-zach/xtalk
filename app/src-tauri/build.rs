@@ -11,6 +11,10 @@ const APP_COMMANDS: &[&str] = &[
     "install_tool_directory",
     "remove_installed_tool",
     "set_tool_enabled",
+    "get_wake_word_settings",
+    "pause_wake_word",
+    "resume_wake_word",
+    "set_wake_word_enabled",
     "shutdown_backend",
 ];
 

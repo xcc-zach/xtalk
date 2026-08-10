@@ -45,7 +45,8 @@
       "binaries/app-backend",
       "binaries/local-model-runtime",
       "binaries/mlx-model-runtime",
-      "binaries/sherpa-onnx-offline-websocket-server"
+      "binaries/sherpa-onnx-offline-websocket-server",
+      "binaries/sherpa-onnx-keyword-spotter-microphone"
     ],
     "resources": {
       "../resources/licenses/silero-vad-LICENSE.txt": "licenses/silero-vad-LICENSE.txt",
@@ -57,6 +58,7 @@
       "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",
       "../resources/managed-runtime/sherpa/": "managed-runtime/sherpa/",
       "../resources/models/audio/silero_vad.onnx": "models/audio/silero_vad.onnx",
+      "../resources/models/wake-word/": "models/wake-word/",
       "binaries/app-backend-runtime/": "app-backend-runtime/"
     },
     "macOS": {

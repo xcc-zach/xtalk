@@ -12,14 +12,22 @@ import {
   getNativeInstalledTools,
   getNativeModelConfigSelection,
   getNativeToolUiSource,
+  getNativeWakeWordSettings,
   installNativeToolDirectory,
+  listenNativeAppBackgrounding,
   listenNativeManagedModelProgress,
+  listenNativeWakeWordDetected,
+  listenNativeWakeWordStatus,
+  pauseNativeWakeWord,
   removeNativeInstalledTool,
+  resumeNativeWakeWord,
   setNativeToolEnabled,
+  setNativeWakeWordEnabled,
   type NativeManagedModelProgress,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
   type NativeWebSearchSettings,
+  type NativeWakeWordSettings,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
@@ -67,6 +75,17 @@ const BACKEND_SUMMARY_KEYS: Record<BackendState, TranslationKey> = {
   unconfigured: "service.summary.unconfigured",
 };
 
+const WAKE_WORD_SUMMARY_KEYS: Record<
+  NativeWakeWordSettings["state"],
+  TranslationKey
+> = {
+  disabled: "wakeWord.stateDisabled",
+  starting: "wakeWord.stateStarting",
+  listening: "wakeWord.stateListening",
+  paused: "wakeWord.statePaused",
+  error: "wakeWord.stateError",
+};
+
 const elements = {
   app: requireElement<HTMLElement>("app"),
   backendStatusDot: requireElement<HTMLElement>("backend-status-dot"),
@@ -106,6 +125,12 @@ const elements = {
     "web-search-api-key-cancel-button",
   ),
   webSearchStatus: requireElement<HTMLElement>("web-search-status"),
+  wakeWordEnabledToggle: requireElement<HTMLInputElement>(
+    "wake-word-enabled-toggle",
+  ),
+  wakeWordPhrase: requireElement<HTMLElement>("wake-word-phrase"),
+  wakeWordStatus: requireElement<HTMLElement>("wake-word-status"),
+  wakeWordSummary: requireElement<HTMLElement>("wake-word-summary"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
   developerToolsStatus: requireElement<HTMLElement>(
     "developer-tools-status",
@@ -217,6 +242,10 @@ let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
 let webSearchSettings: NativeWebSearchSettings | null = null;
+let wakeWordSettings: NativeWakeWordSettings | null = null;
+let wakeWordOperation = false;
+let pendingWakeWordActivation = false;
+let backgroundingRequested = false;
 let pendingWebSearchApiKey: string | null = null;
 let enableWebSearchAfterKeyDialog = false;
 let installedTools: NativeToolDefinition[] = [];
@@ -388,6 +417,9 @@ function applyUiLanguage(): void {
   renderInstalledTools(installedTools);
   if (webSearchSettings !== null) {
     renderWebSearchSettings(webSearchSettings);
+  }
+  if (wakeWordSettings !== null) {
+    renderWakeWordSettings(wakeWordSettings);
   }
   updateDeveloperToolsStatus();
   renderSnapshot(latestSnapshot);
@@ -808,6 +840,7 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
   updateControls(activeAdapter.snapshot);
   try {
     await activeAdapter.switchSession(sessionId);
+    await resumeWakeWordAfterConversation();
     setMainView(sessionId === null ? "orb" : "chat");
     await refreshChatSessions();
     if (isCompactLayout()) {
@@ -822,6 +855,9 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
     sessionOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
     renderChatSessions();
+    if (backgroundingRequested) {
+      void disconnectSession();
+    }
   }
 }
 
@@ -1364,6 +1400,7 @@ function isStoredToolUIHistoryItem(
 }
 
 function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
+  const previousConnectionState = latestSnapshot.connectionState;
   const nextSessionActivityKey = `${snapshot.sessionId ?? ""}:${
     snapshot.messages.filter((message) => message.final).length
   }`;
@@ -1372,6 +1409,13 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     nextSessionActivityKey !== sessionActivityKey;
   sessionActivityKey = nextSessionActivityKey;
   latestSnapshot = snapshot;
+  if (
+    snapshot.connectionState === "disconnected" &&
+    (previousConnectionState === "connected" ||
+      previousConnectionState === "reconnecting")
+  ) {
+    void resumeWakeWordAfterConversation();
+  }
   toolUIAdapter?.bindSession(snapshot.sessionId);
   if (activeToolUISessionId !== snapshot.sessionId) {
     switchToolUISession(snapshot.sessionId);
@@ -1699,6 +1743,30 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
   updateToolControls();
 }
 
+function renderWakeWordSettings(settings: NativeWakeWordSettings): void {
+  wakeWordSettings = settings;
+  elements.wakeWordEnabledToggle.checked = settings.enabled;
+  elements.wakeWordPhrase.textContent = settings.phrase;
+  elements.wakeWordSummary.textContent = t(
+    WAKE_WORD_SUMMARY_KEYS[settings.state],
+  );
+  const statusKey: TranslationKey =
+    settings.state === "disabled"
+      ? "wakeWord.disabled"
+      : settings.state === "starting"
+        ? "wakeWord.starting"
+        : settings.state === "listening"
+          ? "wakeWord.listening"
+          : settings.state === "paused"
+            ? "wakeWord.paused"
+            : "wakeWord.error";
+  elements.wakeWordStatus.textContent = t(statusKey, {
+    phrase: settings.phrase,
+    error: settings.lastError ?? t("wakeWord.stateError"),
+  });
+  elements.wakeWordEnabledToggle.disabled = wakeWordOperation;
+}
+
 function renderWebSearchSettings(settings: NativeWebSearchSettings): void {
   webSearchSettings = settings;
   elements.webSearchEnabledToggle.checked = settings.enabled;
@@ -1732,6 +1800,8 @@ function updateToolControls(): void {
     webSearchSettings === null;
   elements.webSearchConfigureKeyButton.disabled =
     busy || webSearchSettings === null;
+  elements.wakeWordEnabledToggle.disabled =
+    wakeWordOperation || wakeWordSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
   >("input, button")) {
@@ -1818,6 +1888,39 @@ async function refreshWebSearchSettings(): Promise<NativeWebSearchSettings> {
   return settings;
 }
 
+async function refreshWakeWordSettings(): Promise<NativeWakeWordSettings> {
+  const settings = await getNativeWakeWordSettings();
+  renderWakeWordSettings(settings);
+  return settings;
+}
+
+async function updateWakeWordEnabled(enabled: boolean): Promise<void> {
+  if (wakeWordOperation) {
+    return;
+  }
+  if (!enabled) {
+    pendingWakeWordActivation = false;
+  }
+  wakeWordOperation = true;
+  elements.wakeWordEnabledToggle.disabled = true;
+  try {
+    const conversationActive =
+      latestSnapshot.connectionState === "connected" ||
+      latestSnapshot.connectionState === "reconnecting";
+    renderWakeWordSettings(
+      await setNativeWakeWordEnabled(enabled, !conversationActive),
+    );
+  } catch (error) {
+    await refreshWakeWordSettings().catch(() => undefined);
+    showError("wakeWord.updateFailed", { error });
+  } finally {
+    wakeWordOperation = false;
+    if (wakeWordSettings !== null) {
+      renderWakeWordSettings(wakeWordSettings);
+    }
+  }
+}
+
 async function detachCurrentAdapter(): Promise<void> {
   const previousAdapter = adapter;
   unsubscribeToolUI?.();
@@ -1830,6 +1933,7 @@ async function detachCurrentAdapter(): Promise<void> {
   renderSnapshot(EMPTY_SNAPSHOT);
   if (previousAdapter) {
     await previousAdapter.disconnect().catch(() => undefined);
+    await resumeWakeWordAfterConversation();
   }
 }
 
@@ -1877,6 +1981,9 @@ async function discoverBackend(): Promise<void> {
   } finally {
     discoveringBackend = false;
     updateControls(latestSnapshot);
+    if (pendingWakeWordActivation) {
+      void activatePendingWakeWordConversation();
+    }
   }
 }
 
@@ -2228,7 +2335,53 @@ async function initializeApplication(): Promise<void> {
   }
 }
 
-async function connectSession(): Promise<void> {
+async function initializeNativeWakeWord(): Promise<void> {
+  await listenNativeWakeWordStatus(renderWakeWordSettings);
+  await listenNativeWakeWordDetected((event) => {
+    pendingWakeWordActivation = true;
+    elements.wakeWordStatus.textContent = t("wakeWord.detected", {
+      phrase: event.phrase,
+    });
+    void activatePendingWakeWordConversation();
+  });
+  await listenNativeAppBackgrounding(() => {
+    backgroundingRequested = true;
+    pendingWakeWordActivation = false;
+    void disconnectSession();
+  });
+  await refreshWakeWordSettings();
+}
+
+async function activatePendingWakeWordConversation(): Promise<void> {
+  if (!pendingWakeWordActivation) {
+    return;
+  }
+  if (discoveringBackend || backendState === "loading" || sessionOperation) {
+    return;
+  }
+  if (adapter === null || backendState !== "ready") {
+    pendingWakeWordActivation = false;
+    await resumeWakeWordAfterConversation();
+    return;
+  }
+  pendingWakeWordActivation = false;
+  backgroundingRequested = false;
+  await connectSession(true);
+}
+
+async function resumeWakeWordAfterConversation(): Promise<void> {
+  if (!wakeWordSettings?.enabled) {
+    return;
+  }
+  try {
+    renderWakeWordSettings(await resumeNativeWakeWord());
+  } catch (error) {
+    await refreshWakeWordSettings().catch(() => undefined);
+    showError("wakeWord.updateFailed", { error });
+  }
+}
+
+async function connectSession(startNewConversation = false): Promise<void> {
   const activeAdapter = adapter;
   if (!activeAdapter || sessionOperation) {
     return;
@@ -2238,23 +2391,42 @@ async function connectSession(): Promise<void> {
   showError(null);
   updateControls(activeAdapter.snapshot);
   try {
+    renderWakeWordSettings(await pauseNativeWakeWord());
+    if (startNewConversation) {
+      await activeAdapter.switchSession(null);
+    }
     await activeAdapter.connect();
     scheduleChatSessionsRefresh();
   } catch (error) {
     showError("voice.connectFailed", { error });
+    await resumeWakeWordAfterConversation();
   } finally {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
+    if (backgroundingRequested) {
+      void disconnectSession();
+    }
   }
 }
 
 async function disconnectSession(): Promise<void> {
   const activeAdapter = adapter;
-  if (!activeAdapter || sessionOperation) {
+  if (sessionOperation) {
+    return;
+  }
+  if (!activeAdapter) {
+    backgroundingRequested = false;
+    await resumeWakeWordAfterConversation();
+    return;
+  }
+  if (activeAdapter.snapshot.connectionState === "disconnected") {
+    backgroundingRequested = false;
+    await resumeWakeWordAfterConversation();
     return;
   }
 
   sessionOperation = true;
+  backgroundingRequested = false;
   showError(null);
   updateControls(activeAdapter.snapshot);
   try {
@@ -2264,6 +2436,7 @@ async function disconnectSession(): Promise<void> {
   } finally {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
+    await resumeWakeWordAfterConversation();
   }
 }
 
@@ -2371,6 +2544,9 @@ elements.installToolDirectoryButton.addEventListener("click", () => {
 elements.webSearchEnabledToggle.addEventListener("change", () => {
   updateWebSearchEnabled(elements.webSearchEnabledToggle.checked);
 });
+elements.wakeWordEnabledToggle.addEventListener("change", () => {
+  void updateWakeWordEnabled(elements.wakeWordEnabledToggle.checked);
+});
 elements.webSearchConfigureKeyButton.addEventListener("click", () => {
   openWebSearchApiKeyDialog(false);
 });
@@ -2474,4 +2650,14 @@ updateNetworkStatus();
 setSidebarOpen(false, false);
 renderSnapshot(EMPTY_SNAPSHOT);
 resizeMessageInput();
-void initializeApplication();
+
+async function initializeDesktopApplication(): Promise<void> {
+  try {
+    await initializeNativeWakeWord();
+  } catch (error) {
+    showError("wakeWord.updateFailed", { error });
+  }
+  await initializeApplication();
+}
+
+void initializeDesktopApplication();

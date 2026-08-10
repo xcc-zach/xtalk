@@ -14,9 +14,12 @@ src-tauri/binaries/app-backend-runtime/
 src-tauri/binaries/local-model-runtime-*
 src-tauri/binaries/mlx-model-runtime-*
 src-tauri/binaries/sherpa-onnx-offline-websocket-server-*
+src-tauri/binaries/sherpa-onnx-keyword-spotter-microphone-*
 resources/managed-runtime/ort-tts/*
 resources/managed-runtime/mlx-swift_Cmlx.bundle/
 resources/managed-runtime/sherpa/*
+resources/models/wake-word/*.onnx
+resources/models/wake-word/tokens.txt
 !resources/managed-runtime/ort-tts/README.md
 !resources/managed-runtime/sherpa/README.md
 src-tauri/gen/

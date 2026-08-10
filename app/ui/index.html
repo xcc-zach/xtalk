@@ -135,6 +135,42 @@
 
           <details class="settings-accordion">
             <summary>
+              <span data-i18n="wakeWord.title">后台语音唤醒</span>
+              <span id="wake-word-summary" class="summary-value">关闭</span>
+            </summary>
+            <div class="settings-accordion-content settings-section">
+              <label class="wake-word-setting">
+                <span>
+                  <strong data-i18n="wakeWord.enable">启用后台语音唤醒</strong>
+                  <small data-i18n="wakeWord.description">
+                    关闭窗口后继续在本机监听唤醒词，不保存或上传音频。
+                  </small>
+                </span>
+                <input
+                  id="wake-word-enabled-toggle"
+                  type="checkbox"
+                  aria-label="启用后台语音唤醒"
+                  data-i18n-aria-label="wakeWord.enableLabel"
+                />
+              </label>
+              <div class="settings-path">
+                <span data-i18n="wakeWord.phrase">唤醒词</span>
+                <code id="wake-word-phrase">你好小克</code>
+              </div>
+              <p
+                id="wake-word-status"
+                class="settings-status"
+                role="status"
+                aria-live="polite"
+                data-i18n="wakeWord.loading"
+              >
+                正在读取语音唤醒状态
+              </p>
+            </div>
+          </details>
+
+          <details class="settings-accordion">
+            <summary>
               <span id="model-config-title" data-i18n="model.title">模型配置</span>
             </summary>
             <div class="settings-accordion-content settings-section">

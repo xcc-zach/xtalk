@@ -3,6 +3,6 @@
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>XTalk uses the microphone only while you are in a voice conversation.</string>
+    <string>XTalk uses the microphone for voice conversations and optional local background wake-word detection.</string>
   </dict>
 </plist>

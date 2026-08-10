@@ -104,12 +104,16 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-For a build that supports managed SenseVoice and MOSS services, also stage
-their target-specific native runtimes:
+For a build that supports managed SenseVoice, MOSS, and local background wake,
+also stage their target-specific native runtimes. The microphone executable
+must come from a sherpa-onnx build whose runtime libraries match
+`--sherpa-ort-library`:
 
 ```bash
 python scripts/prepare_managed_runtime.py \
   --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-keyword-spotter /path/to/sherpa-onnx-keyword-spotter-microphone \
+  --sherpa-kws-model-dir /path/to/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20 \
   --sherpa-ort-library /path/to/sherpa/libonnxruntime \
   --tts-ort-library /path/to/tts/libonnxruntime
 ```
@@ -176,14 +180,17 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-Stage the managed-model runtimes. The sherpa server, sherpa ONNX Runtime
-library, and TTS ONNX Runtime library must all target the same platform as the
-App. The script builds the Rust MOSS runtime itself. On Apple Silicon it also
-builds the Swift/MLX runtime and copies its Metal resources:
+Stage the managed-model and wake-word runtimes. The sherpa server, keyword
+spotter, KWS model, sherpa ONNX Runtime library, and TTS ONNX Runtime library
+must all target the same platform as the App. The script builds the Rust MOSS
+runtime itself. On Apple Silicon it also builds the Swift/MLX runtime and
+copies its Metal resources:
 
 ```bash
 python scripts/prepare_managed_runtime.py \
   --sherpa-server /path/to/sherpa-onnx-offline-websocket-server \
+  --sherpa-keyword-spotter /path/to/sherpa-onnx-keyword-spotter-microphone \
+  --sherpa-kws-model-dir /path/to/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20 \
   --sherpa-ort-library /path/to/sherpa/libonnxruntime.dylib \
   --tts-ort-library /path/to/tts/libonnxruntime.dylib
 ```
@@ -397,6 +404,15 @@ FastEnhancer stay disabled; the sidecar runs the packaged Silero model and emits
 server speech boundaries before the configured ASR. This lets
 `server_configs/sample.json` work unchanged while preserving any explicit
 user-provided `vad` configuration.
+
+Background voice wake is opt-in. When enabled, closing the main window hides it
+to the system tray instead of exiting. Tauri supervises the packaged
+`sherpa-onnx-keyword-spotter-microphone` process and listens locally for
+`你好小克`; no wake audio is stored or uploaded. A detection stops the keyword
+spotter before showing the window and opening a fresh XTalk session, so the
+existing proactive Agent greeting starts the conversation without simultaneous
+microphone ownership. Ending the conversation resumes keyword detection. Use
+the tray Quit action for a full sidecar and application shutdown.
 
 Architecture details are documented in
 [`docs/architecture.md`](docs/architecture.md) and

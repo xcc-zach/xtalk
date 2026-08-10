@@ -13,6 +13,13 @@ LOCAL_RUNTIME_MANIFEST = APP_ROOT / "local-model-runtime" / "Cargo.toml"
 MLX_RUNTIME_PACKAGE = APP_ROOT / "local-model-runtime-mlx"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 MANAGED_RESOURCES = APP_ROOT / "resources" / "managed-runtime"
+WAKE_WORD_RESOURCES = APP_ROOT / "resources" / "models" / "wake-word"
+WAKE_WORD_MODEL_FILES = (
+    "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+    "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+    "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+    "tokens.txt",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple")
     parser.add_argument("--sherpa-server", required=True, type=Path)
+    parser.add_argument("--sherpa-keyword-spotter", required=True, type=Path)
+    parser.add_argument("--sherpa-kws-model-dir", required=True, type=Path)
     parser.add_argument("--sherpa-ort-library", required=True, type=Path)
     parser.add_argument("--tts-ort-library", required=True, type=Path)
     parser.add_argument("--sherpa-cuda-runtime-dir", type=Path)
@@ -85,6 +94,28 @@ def require_file(path: Path, label: str) -> Path:
 
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
+        raise FileNotFoundError(f"{label} is missing: {resolved}")
+    return resolved
+
+
+def require_directory(path: Path, label: str) -> Path:
+    """Resolve and validate one explicit runtime directory.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Input path.
+    label : str
+        Human-readable input name.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved directory path.
+    """
+
+    resolved = path.expanduser().resolve()
+    if not resolved.is_dir():
         raise FileNotFoundError(f"{label} is missing: {resolved}")
     return resolved
 
@@ -301,6 +332,14 @@ def main() -> int:
     args = parse_args()
     target = resolve_target_triple(args.target_triple)
     sherpa_server = require_file(args.sherpa_server, "sherpa server")
+    sherpa_keyword_spotter = require_file(
+        args.sherpa_keyword_spotter,
+        "sherpa keyword spotter",
+    )
+    sherpa_kws_model_dir = require_directory(
+        args.sherpa_kws_model_dir,
+        "sherpa keyword-spotting model directory",
+    )
     sherpa_ort = require_file(args.sherpa_ort_library, "sherpa ONNX Runtime")
     tts_ort = require_file(args.tts_ort_library, "TTS ONNX Runtime")
     local_runtime = require_file(
@@ -332,6 +371,20 @@ def main() -> int:
         / f"sherpa-onnx-offline-websocket-server-{target}"
         f"{'.exe' if 'windows' in target else ''}",
     )
+    copy_file(
+        sherpa_keyword_spotter,
+        TAURI_BINARIES
+        / f"sherpa-onnx-keyword-spotter-microphone-{target}"
+        f"{'.exe' if 'windows' in target else ''}",
+    )
+    for filename in WAKE_WORD_MODEL_FILES:
+        copy_file(
+            require_file(
+                sherpa_kws_model_dir / filename,
+                f"sherpa keyword-spotting model file {filename}",
+            ),
+            WAKE_WORD_RESOURCES / filename,
+        )
     copy_file(
         mlx_runtime,
         TAURI_BINARIES
