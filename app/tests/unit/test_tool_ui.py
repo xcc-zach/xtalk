@@ -1013,7 +1013,9 @@ def test_sidebar_delete_flow_confirms_before_deleting() -> None:
     assert 'className = "chat-session-row"' in render
     assert 'row.classList.toggle("is-active"' in render
     assert 'className = "chat-session-delete"' in render
-    assert "openDeleteSessionDialog(session.id, session.title)" in render
+    assert "chatSessionRowStates.get(session.id)" in render
+    assert "reconcileStableChildren(elements.chatSessionList, rows)" in render
+    assert "openDeleteSessionDialog(session.id, currentSession?.title ?? null)" in render
 
     delete_logic = logic.split(
         "async function deletePendingSession()", maxsplit=1
