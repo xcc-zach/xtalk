@@ -182,6 +182,13 @@ class DefaultAgent(Agent):
                     yield item
             finally:
                 self._asr_final_response_generating = False
+        if context_type == "multi_speaker_final":
+            self._asr_final_response_generating = True
+            try:
+                async for item in self._handle_multi_speaker_final(context_data):
+                    yield item
+            finally:
+                self._asr_final_response_generating = False
         if context_type == "asr_partial":
             async for item in self._handle_asr_partial(context_data["text"]):
                 yield item
@@ -322,6 +329,47 @@ class DefaultAgent(Agent):
         # reset backchannel state
         self._already_backchanneled_text = ""
         self._turn_already_to_backchannel_response = {}
+
+    async def _handle_multi_speaker_final(
+        self,
+        context_data: dict[str, Any],
+    ) -> AsyncIterator[AgentOutput]:
+        """Record speaker-aware user context and optionally answer it."""
+
+        asr_text = str(context_data.get("asr_text") or "")
+        structured_text = self._format_multi_speaker_turn(context_data)
+        self._append_or_update_partial_human_message(asr_text, final=True)
+        if self.messages and isinstance(self.messages[-1], HumanMessage):
+            self.messages[-1].content = structured_text
+        else:
+            self._chat_history.append_message(HumanMessage(content=structured_text))
+        if bool(context_data.get("should_respond", True)):
+            async for item in self._stream_messages():
+                yield item
+            yield AgentTurnBoundary()
+        self._flush_pending_final_reports()
+        self._already_backchanneled_text = ""
+        self._turn_already_to_backchannel_response = {}
+
+    @staticmethod
+    def _format_multi_speaker_turn(context_data: dict[str, Any]) -> str:
+        """Render the joined turn into one structured human message."""
+
+        turn_id = int(context_data.get("turn_id") or 0)
+        asr_text = str(context_data.get("asr_text") or "")
+        diarization_text = str(context_data.get("diarization_text") or "")
+        active_speaker = context_data.get("active_speaker_id")
+        active_speaker_text = str(active_speaker) if active_speaker else "未确定"
+        return (
+            f'<multi_speaker_turn turn_id="{turn_id}">\n'
+            "规则：ASR transcript 用于准确语义，speaker timeline 用于判断谁在说话。"
+            "同一会话的 [S01]、[S02] 等标签表示稳定说话人；记住各标签自报的姓名，"
+            "不要混淆。只回答 active speaker 的最后一个明确请求。\n"
+            f"<asr_transcript>{asr_text}</asr_transcript>\n"
+            f"<speaker_timeline>{diarization_text}</speaker_timeline>\n"
+            f"<active_speaker>{active_speaker_text}</active_speaker>\n"
+            "</multi_speaker_turn>"
+        )
 
     def _handle_response_update(
         self,

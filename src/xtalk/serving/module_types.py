@@ -12,6 +12,7 @@ from .modules.tts_manager import TTSManager
 from .modules.tts_response_coordinator import TTSResponseCoordinator
 from .modules.turn_taking_manager import TurnTakingManager
 from .modules.vad_manager import VADManager
+from .modules.multi_speaker_turn_context_manager import MultiSpeakerTurnContextManager
 
 __all__ = [
     "OutputGateway",
@@ -28,4 +29,5 @@ __all__ = [
     "TTSResponseCoordinator",
     "TurnTakingManager",
     "VADManager",
+    "MultiSpeakerTurnContextManager",
 ]
