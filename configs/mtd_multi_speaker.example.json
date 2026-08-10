@@ -1,6 +1,6 @@
 {
   "speaker_diarization": {
-    "type": "OfficialMtdClient",
+    "type": "MossTranscribeDiarize",
     "params": {
       "base_url": "http://127.0.0.1:18604",
       "request_timeout_s": 15.0,
