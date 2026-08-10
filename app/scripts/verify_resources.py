@@ -16,12 +16,29 @@ REQUIRED_AUDIO_MODEL_IDS = {"silero-vad"}
 MANAGED_MODEL_MANIFEST_PATH = (
     APP_ROOT / "resources" / "manifests" / "managed-models.lock.json"
 )
+NATIVE_RUNTIME_MANIFEST_PATH = (
+    APP_ROOT / "resources" / "manifests" / "native-runtimes.lock.json"
+)
 REQUIRED_MANAGED_MODEL_IDS = {
+    "agentic-asr-refiner",
+    "agentic-asr-refiner-mlx",
+    "matcha-icefall-zh-en",
     "sensevoice-small",
     "sensevoice-small-mlx",
     "moss-tts-nano",
     "moss-tts-nano-mlx",
 }
+REQUIRED_NATIVE_RUNTIME_TARGETS = {
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+}
+REQUIRED_BUILTIN_TOOL_IDS = {"current_time", "web_search"}
+BUILTIN_TOOLS_PATH = APP_ROOT / "resources" / "tools"
+CREDENTIALS_PATH = APP_ROOT / "resources" / "credentials.json"
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, object]:
@@ -256,11 +273,95 @@ def verify_managed_model_manifest(
             if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
                 raise ValueError("managed model file size is invalid")
 
+        archives = raw_service.get("archives", [])
+        if not isinstance(archives, list):
+            raise ValueError("managed service archives must be an array")
+        for raw_archive in archives:
+            if not isinstance(raw_archive, dict):
+                raise ValueError("managed archive record must be an object")
+            archive_path = raw_archive.get("path")
+            if archive_path not in service_paths:
+                raise ValueError(
+                    "managed archive must reference a downloaded service file"
+                )
+            if raw_archive.get("format") != "tar-bz2":
+                raise ValueError("managed archive format is unsupported")
+
+        required_paths = raw_service.get("required_paths", [])
+        if not isinstance(required_paths, list):
+            raise ValueError("managed required_paths must be an array")
+        for relative_path in required_paths:
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or Path(relative_path).is_absolute()
+                or ".." in Path(relative_path).parts
+            ):
+                raise ValueError("managed required path is unsafe")
+
     missing = REQUIRED_MANAGED_MODEL_IDS - seen
     if missing:
         raise ValueError(
             f"missing managed models: {', '.join(sorted(missing))}"
         )
+
+
+def verify_native_runtime_manifest(
+    path: Path = NATIVE_RUNTIME_MANIFEST_PATH,
+) -> None:
+    """Validate locked Sherpa/ORT archives for desktop build targets.
+
+    Parameters
+    ----------
+    path : pathlib.Path, optional
+        Native runtime lock manifest path.
+
+    Raises
+    ------
+    ValueError
+        Raised when a target, immutable URL, or SHA-256 is invalid.
+    """
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("unsupported native-runtime manifest schema")
+    version = payload.get("sherpa_onnx_version")
+    targets = payload.get("targets")
+    if not isinstance(version, str) or not version or not isinstance(targets, dict):
+        raise ValueError("native-runtime manifest requires a version and targets")
+    missing = REQUIRED_NATIVE_RUNTIME_TARGETS - set(targets)
+    if missing:
+        raise ValueError(
+            f"missing native runtime targets: {', '.join(sorted(missing))}"
+        )
+    release_prefix = (
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+        f"v{version}/"
+    )
+    for target, raw_record in targets.items():
+        if (
+            not isinstance(target, str)
+            or not target
+            or not isinstance(raw_record, dict)
+            or set(raw_record) != {"archive", "sha256", "url"}
+        ):
+            raise ValueError("native-runtime target record is invalid")
+        archive = raw_record["archive"]
+        source = raw_record["url"]
+        expected_hash = raw_record["sha256"]
+        if (
+            not isinstance(archive, str)
+            or Path(archive).name != archive
+            or not isinstance(source, str)
+            or source != release_prefix + archive
+            or not isinstance(expected_hash, str)
+            or len(expected_hash) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_hash
+            )
+        ):
+            raise ValueError(f"native-runtime record for {target} is invalid")
 
 
 def verify_no_bundled_default_config() -> None:
@@ -283,6 +384,151 @@ def verify_no_bundled_default_config() -> None:
         raise ValueError("Tauri bundle must not package config/default.json")
 
 
+def verify_builtin_tools_and_credentials() -> None:
+    """Validate the publishable built-in tool and credential registries.
+
+    Raises
+    ------
+    ValueError
+        Raised when a registry is malformed, required resources are absent,
+        or Tauri does not bundle them at their runtime paths.
+    FileNotFoundError
+        Raised when a declared built-in tool file is absent.
+    """
+
+    catalog = json.loads(
+        (BUILTIN_TOOLS_PATH / "builtin_tools.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if (
+        not isinstance(catalog, dict)
+        or set(catalog) != {"version", "tools"}
+        or catalog["version"] != 1
+        or not isinstance(catalog["tools"], list)
+    ):
+        raise ValueError("built-in tool catalog is invalid")
+    seen_tools: set[str] = set()
+    for entry in catalog["tools"]:
+        if (
+            not isinstance(entry, dict)
+            or not {"id", "path", "enabled_by_default"}.issubset(entry)
+            or not set(entry).issubset(
+                {"id", "path", "enabled_by_default", "can_disable"}
+            )
+        ):
+            raise ValueError("built-in tool catalog entry is invalid")
+        identifier = entry["id"]
+        relative_path = entry["path"]
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or identifier in seen_tools
+            or not isinstance(relative_path, str)
+            or not relative_path
+            or Path(relative_path).is_absolute()
+            or ".." in Path(relative_path).parts
+            or not isinstance(entry["enabled_by_default"], bool)
+            or not isinstance(entry.get("can_disable", True), bool)
+        ):
+            raise ValueError("built-in tool catalog entry is invalid")
+        seen_tools.add(identifier)
+        tool_directory = BUILTIN_TOOLS_PATH / relative_path
+        manifest_path = tool_directory / "xtalk_tool.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entrypoint = (
+            manifest.get("entrypoint")
+            if isinstance(manifest, dict)
+            else None
+        )
+        if not isinstance(entrypoint, str) or entrypoint.count(":") != 1:
+            raise ValueError("built-in tool entrypoint is invalid")
+        module_name, factory_name = entrypoint.split(":")
+        if not module_name or not factory_name:
+            raise ValueError("built-in tool entrypoint is invalid")
+        module_path = tool_directory / f"{module_name}.py"
+        if not module_path.is_file():
+            raise FileNotFoundError(module_path)
+
+    missing_tools = REQUIRED_BUILTIN_TOOL_IDS - seen_tools
+    if missing_tools:
+        raise ValueError(
+            f"missing required built-in tools: {', '.join(sorted(missing_tools))}"
+        )
+    current_time = next(
+        entry for entry in catalog["tools"] if entry["id"] == "current_time"
+    )
+    if current_time.get("can_disable", True):
+        raise ValueError("the current-time built-in must remain enabled")
+
+    credentials = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    if (
+        not isinstance(credentials, dict)
+        or set(credentials) != {"version", "credentials", "bindings"}
+        or credentials["version"] != 1
+        or not isinstance(credentials["credentials"], list)
+        or not isinstance(credentials["bindings"], list)
+    ):
+        raise ValueError("credential registry is invalid")
+    serialized_credentials = json.dumps(credentials).lower()
+    if any(name in serialized_credentials for name in ('"secret"', '"value"')):
+        raise ValueError("credential registry must not contain secret values")
+    credential_ids: set[str] = set()
+    for definition in credentials["credentials"]:
+        allowed_keys = {"id", "display_name", "environment", "inject_environment"}
+        inject_environment = definition.get("inject_environment")
+        if (
+            not isinstance(definition, dict)
+            or set(definition) - allowed_keys
+            or not isinstance(definition["id"], str)
+            or not definition["id"]
+            or definition["id"] in credential_ids
+            or not isinstance(definition["environment"], list)
+            or not definition["environment"]
+            or not all(
+                isinstance(name, str) and name
+                for name in definition["environment"]
+            )
+            or (
+                inject_environment is not None
+                and (
+                    not isinstance(inject_environment, str)
+                    or not inject_environment
+                    or inject_environment not in definition["environment"]
+                )
+            )
+        ):
+            raise ValueError("credential registry definition is invalid")
+        credential_ids.add(definition["id"])
+    builtin_ids = {f"builtin:{identifier}" for identifier in seen_tools}
+    for binding in credentials["bindings"]:
+        if (
+            not isinstance(binding, dict)
+            or set(binding)
+            != {"tool_id", "credential_id", "inject_environment"}
+            or binding["tool_id"] not in builtin_ids
+            or binding["credential_id"] not in credential_ids
+            or not isinstance(binding["inject_environment"], str)
+            or not binding["inject_environment"]
+        ):
+            raise ValueError("credential registry binding is invalid")
+
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resources = tauri_config.get("bundle", {}).get("resources", {})
+    if not isinstance(resources, dict):
+        raise ValueError("Tauri bundle resources must be an object")
+    if resources.get("../resources/tools/") != "tools/":
+        raise ValueError("Tauri bundle must package the built-in tool directory")
+    if resources.get("../resources/credentials.json") != "credentials.json":
+        raise ValueError("Tauri bundle must package the credential registry")
+
+
 def main() -> int:
     """Run all resource checks.
 
@@ -296,6 +542,8 @@ def main() -> int:
     verify_manifest(load_manifest())
     verify_audio_model_manifest()
     verify_managed_model_manifest()
+    verify_native_runtime_manifest()
+    verify_builtin_tools_and_credentials()
     print("resource verification passed")
     return 0
 

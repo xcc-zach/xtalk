@@ -1,5 +1,6 @@
 .build/
 .swiftpm/
+.DS_Store
 .pytest_cache/
 .venv/
 __pycache__/
@@ -12,15 +13,16 @@ resources/manifests/core-artifacts.lock.json
 src-tauri/binaries/app-backend-*
 src-tauri/binaries/app-backend-runtime/
 src-tauri/binaries/local-model-runtime-*
+src-tauri/binaries/matcha-model-runtime-*
 src-tauri/binaries/mlx-model-runtime-*
 src-tauri/binaries/sherpa-onnx-offline-websocket-server-*
 src-tauri/binaries/sherpa-onnx-keyword-spotter-microphone-*
 resources/managed-runtime/ort-tts/*
+resources/managed-runtime/ort/*
 resources/managed-runtime/mlx-swift_Cmlx.bundle/
 resources/managed-runtime/sherpa/*
 resources/models/wake-word/*.onnx
 resources/models/wake-word/tokens.txt
-!resources/managed-runtime/ort-tts/README.md
-!resources/managed-runtime/sherpa/README.md
+!resources/managed-runtime/ort/README.md
 src-tauri/gen/
 src-tauri/target/

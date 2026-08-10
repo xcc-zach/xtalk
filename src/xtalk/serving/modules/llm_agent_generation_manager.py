@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
+from uuid import uuid4
 
 from ...models import Agent, Models
 from ...models.agents import AgentOutput, AgentTurnBoundary
@@ -17,6 +19,7 @@ from ..events import (
     LLMAgentResponseUpdate,
     LLMFirstChunk,
     LLMModelSwitchRequested,
+    TTSResponseClosed,
     ToolCallOccurred,
     TurnLLMAgentPauseRequested,
     TurnLLMAgentResumeRequested,
@@ -33,14 +36,32 @@ from ..interfaces import Manager
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _ResponseOutputState:
+    """Track one agent stream's current response output."""
+
+    response_id: str | None = None
+    accumulated_text: str = ""
+    first_chunk_generated: bool = False
+    tts_started: bool = False
+
+    def reset(self) -> None:
+        """Clear the completed response while preserving the stream."""
+
+        self.response_id = None
+        self.accumulated_text = ""
+        self.first_chunk_generated = False
+        self.tts_started = False
+
+
 class LLMAgentConsumptionManager(Manager):
     """Consume one or more agent streams and forward their output downstream.
 
     Notes
     -----
-    Multiple agent streams may be active concurrently. Their text output is
-    merged into one shared turn response and appended to the shared TTS queue in
-    arrival order.
+    Multiple agent streams may be active concurrently. Each stream owns an
+    independent response so asynchronous tool reports cannot reset or append to
+    a response that is already playing.
     """
 
     def __init__(
@@ -56,15 +77,21 @@ class LLMAgentConsumptionManager(Manager):
         self.config: dict[str, Any] = config or {}
 
         self._active_streams: dict[asyncio.Task[None], AsyncIterator[AgentOutput]] = {}
+        self._response_states: dict[asyncio.Task[None], _ResponseOutputState] = {}
         self._persistent_streams: set[asyncio.Task[None]] = set()
         self._streams_lock = asyncio.Lock()
         self._output_lock = asyncio.Lock()
+        self._response_close_waiters: dict[str, asyncio.Event] = {}
         self._resume_event = asyncio.Event()
         self._resume_event.set()
 
-        self._turn_accumulated_text = ""
-        self._turn_first_chunk_generated = False
-        self._turn_tts_started = False
+    @Manager.event_handler(TTSResponseClosed, priority=-110)
+    async def _handle_tts_response_closed(self, event: TTSResponseClosed) -> None:
+        """Release a tool call after its preceding response has settled."""
+
+        waiter = self._response_close_waiters.get(event.response_id)
+        if waiter is not None:
+            waiter.set()
 
     @Manager.event_handler(LLMModelSwitchRequested, priority=100)
     async def _handle_llm_model_switch(self, event: LLMModelSwitchRequested) -> None:
@@ -142,15 +169,13 @@ class LLMAgentConsumptionManager(Manager):
 
         iterator = event.stream.__aiter__()
         async with self._streams_lock:
-            if not self._active_streams:
-                self._reset_turn_output_state()
-
             task = asyncio.create_task(
                 self._consume_stream(
                     iterator=iterator,
                 )
             )
             self._active_streams[task] = iterator
+            self._response_states[task] = _ResponseOutputState()
             if event.persistent:
                 self._persistent_streams.add(task)
 
@@ -208,6 +233,7 @@ class LLMAgentConsumptionManager(Manager):
         await self.event_bus.publish(
             TurnTTSStopRequested(
                 session_id=self.session_id,
+                response_id=None,
                 reason=event.reason,
             ),
             wait_for_completion=True,
@@ -249,7 +275,7 @@ class LLMAgentConsumptionManager(Manager):
                 self.session_id,
             )
             await self._publish_error("llm_stream_error", str(exc))
-            await self._finish_current_turn()
+            await self._finish_response(task)
         finally:
             await self._finalize_stream(
                 task=task,
@@ -269,11 +295,15 @@ class LLMAgentConsumptionManager(Manager):
                 return
 
             if isinstance(item, AgentTurnBoundary):
-                await self._finish_current_turn_locked()
+                await self._finish_response_locked(task)
                 return
 
-            if not self._turn_first_chunk_generated:
-                self._turn_first_chunk_generated = True
+            state = self._response_states.get(task)
+            if state is None:
+                return
+
+            if not state.first_chunk_generated:
+                state.first_chunk_generated = True
                 await self.event_bus.publish(LLMFirstChunk(session_id=self.session_id))
 
             if isinstance(item, dict):
@@ -283,6 +313,8 @@ class LLMAgentConsumptionManager(Manager):
                         self.session_id,
                     )
                     return
+                if item["name"] != "tool_call_result":
+                    await self._wait_for_pre_tool_playback_locked(task)
                 await self._publish_tool_call(item)
                 return
 
@@ -290,16 +322,22 @@ class LLMAgentConsumptionManager(Manager):
             if not chunk_text:
                 return
 
-            self._turn_accumulated_text += chunk_text
-            accumulated_text = self._turn_accumulated_text
-            should_start_tts = not self._turn_tts_started
+            if state.response_id is None:
+                state.response_id = uuid4().hex
+            response_id = state.response_id
+            state.accumulated_text += chunk_text
+            accumulated_text = state.accumulated_text
+            should_start_tts = not state.tts_started
             if should_start_tts:
-                self._turn_tts_started = True
+                state.tts_started = True
 
-            await self._publish_llm_response_update(accumulated_text)
+            await self._publish_llm_response_update(response_id, accumulated_text)
             if should_start_tts:
                 await self.event_bus.publish(
-                    TurnTTSStartRequested(session_id=self.session_id),
+                    TurnTTSStartRequested(
+                        session_id=self.session_id,
+                        response_id=response_id,
+                    ),
                     wait_for_completion=True,
                 )
             logger.debug(
@@ -312,9 +350,38 @@ class LLMAgentConsumptionManager(Manager):
             await self.event_bus.publish(
                 TurnTTSTextAppendRequested(
                     session_id=self.session_id,
+                    response_id=response_id,
                     text=chunk_text,
                 ),
+                wait_for_completion=True,
             )
+
+    async def _wait_for_pre_tool_playback_locked(
+        self,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Flush and settle one stream's spoken preamble before a tool call."""
+
+        state = self._response_states.get(task)
+        if state is None or not (state.accumulated_text or state.tts_started):
+            return
+
+        response_id = state.response_id
+        waiter: asyncio.Event | None = None
+        if response_id is not None and state.tts_started:
+            waiter = asyncio.Event()
+            self._response_close_waiters[response_id] = waiter
+
+        try:
+            await self._finish_response_locked(task)
+            if waiter is not None:
+                await waiter.wait()
+        finally:
+            if (
+                response_id is not None
+                and self._response_close_waiters.get(response_id) is waiter
+            ):
+                self._response_close_waiters.pop(response_id, None)
 
     async def _finalize_stream(
         self,
@@ -322,35 +389,39 @@ class LLMAgentConsumptionManager(Manager):
         task: asyncio.Task[None],
         iterator: AsyncIterator[AgentOutput],
     ) -> None:
-        """Finalize one stream and emit turn-finish events when it is the last."""
+        """Finalize one stream and finish only its current response."""
 
         try:
-            should_finish = False
             async with self._streams_lock:
                 popped_iterator = self._active_streams.pop(task, None)
                 self._persistent_streams.discard(task)
                 if popped_iterator is None:
                     return
-                should_finish = not self._active_streams
-            if should_finish:
-                await self._finish_current_turn()
+            await self._finish_response(task)
+            self._response_states.pop(task, None)
         finally:
             await self._close_iterator(iterator)
 
-    async def _finish_current_turn(self) -> None:
-        """Finish the current shared turn under the output lock."""
+    async def _finish_response(self, task: asyncio.Task[None]) -> None:
+        """Finish one stream-owned response under the output lock."""
 
         async with self._output_lock:
-            await self._finish_current_turn_locked()
+            await self._finish_response_locked(task)
 
-    async def _finish_current_turn_locked(self) -> None:
-        """Flush and finish the current turn while holding the output lock."""
+    async def _finish_response_locked(self, task: asyncio.Task[None]) -> None:
+        """Flush one response while holding the output lock."""
 
-        final_text = self._turn_accumulated_text
-        tts_started = self._turn_tts_started
+        state = self._response_states.get(task)
+        if state is None:
+            return
+        response_id = state.response_id
+        final_text = state.accumulated_text
+        tts_started = state.tts_started
         has_text_output = bool(final_text) or tts_started
-        self._reset_turn_output_state()
+        state.reset()
         if not has_text_output:
+            return
+        if response_id is None:
             return
         if tts_started:
             logger.debug(
@@ -360,9 +431,13 @@ class LLMAgentConsumptionManager(Manager):
                 len(final_text),
             )
             await self.event_bus.publish(
-                TurnTTSFlushRequested(session_id=self.session_id)
+                TurnTTSFlushRequested(
+                    session_id=self.session_id,
+                    response_id=response_id,
+                ),
+                wait_for_completion=True,
             )
-        await self._publish_llm_response_finish(final_text)
+        await self._publish_llm_response_finish(response_id, final_text)
 
     def _detach_interruptible_streams_locked(
         self,
@@ -375,8 +450,9 @@ class LLMAgentConsumptionManager(Manager):
             if task not in self._persistent_streams
         ]
         iterators = [self._active_streams.pop(task) for task in tasks]
+        for task in tasks:
+            self._response_states.pop(task, None)
         self._resume_event.set()
-        self._reset_turn_output_state()
         return tasks, iterators
 
     def _detach_all_streams_locked(
@@ -387,17 +463,10 @@ class LLMAgentConsumptionManager(Manager):
         tasks = list(self._active_streams.keys())
         iterators = list(self._active_streams.values())
         self._active_streams.clear()
+        self._response_states.clear()
         self._persistent_streams.clear()
         self._resume_event.set()
-        self._reset_turn_output_state()
         return tasks, iterators
-
-    def _reset_turn_output_state(self) -> None:
-        """Reset the shared per-turn output state."""
-
-        self._turn_accumulated_text = ""
-        self._turn_first_chunk_generated = False
-        self._turn_tts_started = False
 
     async def _cancel_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
         """Cancel the provided tasks and await their completion."""
@@ -433,24 +502,36 @@ class LLMAgentConsumptionManager(Manager):
         except (asyncio.CancelledError, Exception):
             pass
 
-    async def _publish_llm_response_update(self, text: str) -> None:
-        """Publish an incremental merged response update."""
+    async def _publish_llm_response_update(
+        self,
+        response_id: str,
+        text: str,
+    ) -> None:
+        """Publish an incremental update for one response."""
 
         await self.event_bus.publish(
             LLMAgentResponseUpdate(
                 session_id=self.session_id,
+                response_id=response_id,
                 text=text,
-            )
+            ),
+            wait_for_completion=True,
         )
 
-    async def _publish_llm_response_finish(self, text: str) -> None:
-        """Publish the final merged response for the current turn."""
+    async def _publish_llm_response_finish(
+        self,
+        response_id: str,
+        text: str,
+    ) -> None:
+        """Publish the final generated text for one response."""
 
         await self.event_bus.publish(
             LLMAgentResponseFinish(
                 session_id=self.session_id,
+                response_id=response_id,
                 text=text,
-            )
+            ),
+            wait_for_completion=True,
         )
 
     async def _publish_tool_call(self, tool_call: dict[str, Any]) -> None:
@@ -471,7 +552,8 @@ class LLMAgentConsumptionManager(Manager):
                     session_id=self.session_id,
                     name=str(name),
                     args=dict(args) if isinstance(args, dict) else {},
-                )
+                ),
+                wait_for_completion=True,
             )
         except Exception as exc:
             logger.error(
@@ -499,6 +581,7 @@ class LLMAgentConsumptionManager(Manager):
             tasks, iterators = self._detach_all_streams_locked()
         await self._cancel_tasks(tasks)
         await self._close_iterators(iterators)
+        self._response_close_waiters.clear()
 
         agent = self.models.get(Agent)
         if agent is not None and hasattr(agent, "tool_engine"):

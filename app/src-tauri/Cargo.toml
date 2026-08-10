@@ -19,13 +19,24 @@ path = "src/main.rs"
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+bzip2 = { version = "0.4", features = ["static"] }
 getrandom = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tar = "0.4"
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 tauri-plugin-dialog = "=2.7.2"
 tauri-plugin-shell = "=2.3.5"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["crypto-rust", "sync-secret-service"] }

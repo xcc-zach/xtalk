@@ -12,7 +12,11 @@ use sentencepiece::SentencePieceProcessor;
 
 use crate::manifest::{BuiltinVoice, ModelAssets, TtsConfig};
 use crate::OnnxBackend;
-use crate::{audio::ReferenceAudio, wav::trim_and_fade_trailing_audio};
+use crate::{
+    audio::ReferenceAudio,
+    text::{clause_boundary_count, clause_chunks, contains_cjk, sentence_chunks},
+    wav::trim_and_fade_trailing_audio,
+};
 
 /// Request parameters accepted by the native MOSS inference engine.
 pub(crate) struct SynthesisOptions<'a> {
@@ -110,6 +114,28 @@ impl MossEngine {
     /// Return the reference-audio channel count expected by the codec.
     pub(crate) fn reference_channels(&self) -> usize {
         self.assets.codec_channels
+    }
+
+    /// Split normalized input into stable inference chunks.
+    pub(crate) fn split_text_chunks(&self, text: &str) -> Result<Vec<String>> {
+        let mut chunks = Vec::new();
+        for sentence in sentence_chunks(text) {
+            let token_count = self
+                .tokenizer
+                .encode(&sentence)
+                .context("SentencePiece tokenization failed")?
+                .len();
+            if contains_cjk(&sentence) && token_count > 20 && clause_boundary_count(&sentence) >= 2
+            {
+                chunks.extend(clause_chunks(&sentence));
+            } else {
+                chunks.push(sentence);
+            }
+        }
+        if chunks.is_empty() {
+            bail!("input text must not be empty");
+        }
+        Ok(chunks)
     }
 
     /// Synthesize one text request into 48 kHz mono PCM samples.
@@ -424,7 +450,12 @@ impl MossEngine {
     }
 }
 
-fn create_session(path: &Path, cpu_threads: usize, backend: OnnxBackend) -> Result<Session> {
+/// Create an optimized ONNX session for one managed model graph.
+pub(crate) fn create_session(
+    path: &Path,
+    cpu_threads: usize,
+    backend: OnnxBackend,
+) -> Result<Session> {
     let builder = Session::builder()?;
     let builder = match backend {
         OnnxBackend::Cpu => builder,

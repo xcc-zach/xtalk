@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ class _FakeAdapter:
         "selected_session_ids": ["thr-test"],
         "reason": "The project path and task match.",
     }
+    model_catalog: list[Any] = []
 
     async def __aenter__(self) -> _FakeAdapter:
         """Return this fake client."""
@@ -46,6 +49,12 @@ class _FakeAdapter:
 
         self.operations.append(("validate", (model, effort)))
         return model
+
+    async def list_models(self) -> list[Any]:
+        """Return the current deterministic model catalog."""
+
+        self.operations.append(("models", None))
+        return list(self.model_catalog)
 
     async def start_thread(
         self,
@@ -130,10 +139,127 @@ def _load_codex_bundle(tmp_path: Path) -> tuple[list[type[Any]], Any]:
         data_root / "tools",
         builtin_tools_root=app_root / "resources" / "tools",
     )
-    module = sys.modules[tools[0].__module__]
+    codex_tool = next(
+        tool for tool in tools if tool.name == "codex_session_search"
+    )
+    module = sys.modules[codex_tool.__module__]
+    tools = [tool for tool in tools if tool.__module__ == module.__name__]
     module._adapter_factory = _FakeAdapter
+    module._CODEX_CACHE = None
     _FakeAdapter.operations = []
+    _FakeAdapter.model_catalog = [
+        module.CodexModelInfo(
+            id="gpt-5.6-sol",
+            model="gpt-5.6-sol",
+            display_name="GPT-5.6 Sol",
+            description="Frontier coding model.",
+            is_default=True,
+            default_reasoning_effort="high",
+            supported_reasoning_efforts=["medium", "high", "xhigh"],
+        )
+    ]
     return tools, module
+
+
+def test_codex_resolves_and_caches_user_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass a validated external CLI and its Node.js directory to the SDK."""
+
+    _tools, module = _load_codex_bundle(tmp_path)
+    executable = tmp_path / "node-bin" / "codex"
+    executable.parent.mkdir()
+    executable.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        module,
+        "_candidate_codex_paths",
+        lambda: iter((executable,)),
+    )
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def run_version(
+        command: list[str],
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="codex-cli 0.144.4\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", run_version)
+
+    first = module._resolve_user_codex()
+    second = module._resolve_user_codex()
+    path, environment, version = first
+
+    assert second == first
+    assert path == executable
+    assert version == "codex-cli 0.144.4"
+    assert environment["PATH"].split(os.pathsep)[0] == str(executable.parent)
+    assert calls[0][0] == [str(executable), "--version"]
+    assert len(calls) == 1
+
+
+def test_codex_replaces_cache_after_executable_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search again only after the cached executable path becomes invalid."""
+
+    _tools, module = _load_codex_bundle(tmp_path)
+    first = tmp_path / "node-v1" / "codex"
+    second = tmp_path / "node-v2" / "codex"
+    for executable in (first, second):
+        executable.parent.mkdir()
+        executable.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        executable.chmod(0o755)
+    monkeypatch.setattr(
+        module,
+        "_candidate_codex_paths",
+        lambda: iter((first, second)),
+    )
+    calls: list[list[str]] = []
+
+    def run_version(
+        command: list[str],
+        **_kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=f"codex-cli {Path(command[0]).parent.name}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", run_version)
+
+    assert module._resolve_user_codex()[0] == first
+    first.unlink()
+    assert module._resolve_user_codex()[0] == second
+    assert len(calls) == 2
+
+
+def test_codex_prompts_for_install_when_user_cli_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return an actionable install command instead of using a bundled CLI."""
+
+    _tools, module = _load_codex_bundle(tmp_path)
+    monkeypatch.setattr(
+        module,
+        "_candidate_codex_paths",
+        lambda: iter((tmp_path / "missing-codex",)),
+    )
+
+    with pytest.raises(RuntimeError, match="npm install -g @openai/codex"):
+        module._resolve_user_codex()
 
 
 async def _invoke(tool: type[Any], tool_input: Any, module: Any) -> Any:
@@ -154,7 +280,7 @@ async def _invoke(tool: type[Any], tool_input: Any, module: Any) -> Any:
 def test_codex_catalog_toggle_loads_all_operations_atomically(
     tmp_path: Path,
 ) -> None:
-    """Expose five operations from one disabled-by-default built-in entry."""
+    """Expose six operations from one disabled-by-default built-in entry."""
 
     tools, module = _load_codex_bundle(tmp_path)
 
@@ -162,11 +288,14 @@ def test_codex_catalog_toggle_loads_all_operations_atomically(
         "codex_session_search",
         "codex_session_create",
         "codex_session_continue",
+        "codex_models_list",
         "codex_session_set_model",
         "codex_session_delete",
     ]
     assert "Default tool for new requests" in tools[1].__doc__
     assert "exact session ID" in tools[2].__doc__
+    assert "never guessed" in tools[3].__doc__
+    assert "codex_models_list" in tools[4].__doc__
     assert module._STORE.path == (
         tmp_path / "data" / "tool-data" / "codex" / "codex_sessions.sqlite3"
     )
@@ -181,6 +310,19 @@ def test_codex_session_lifecycle_persists_settings_and_uses_resolver(
     by_name = {tool.name: tool for tool in tools}
 
     async def scenario() -> None:
+        catalog = await _invoke(
+            by_name["codex_models_list"],
+            module.CodexModelsInput(),
+            module,
+        )
+        assert catalog.models[0].id == "gpt-5.6-sol"
+        assert catalog.models[0].supported_reasoning_efforts == [
+            "medium",
+            "high",
+            "xhigh",
+        ]
+        assert "| gpt-5.6-sol | GPT-5.6 Sol | high |" in catalog.message
+
         create = await _invoke(
             by_name["codex_session_create"],
             module.CodexCreateInput(
@@ -245,6 +387,7 @@ def test_codex_session_lifecycle_persists_settings_and_uses_resolver(
     assert resolver_payload[0]["query"] == "README documentation project"
     assert resolver_payload[0]["candidates"][0]["session_id"] == "thr-test"
     assert ("archive", "thr-test") in _FakeAdapter.operations
+    assert ("models", None) in _FakeAdapter.operations
     with pytest.raises(ValueError, match="not found"):
         module._STORE.require("thr-test")
 

@@ -5,7 +5,7 @@
   "identifier": "com.xtalk.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:source",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../ui/dist"
   },
@@ -25,7 +25,8 @@
     ],
     "security": {
       "capabilities": [
-        "main"
+        "main",
+        "whiteboard"
       ],
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; frame-src http://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       "devCsp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:1420 ws://localhost:1420; frame-src http://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
@@ -44,6 +45,7 @@
     "externalBin": [
       "binaries/app-backend",
       "binaries/local-model-runtime",
+      "binaries/matcha-model-runtime",
       "binaries/mlx-model-runtime",
       "binaries/sherpa-onnx-offline-websocket-server",
       "binaries/sherpa-onnx-keyword-spotter-microphone"
@@ -53,10 +55,11 @@
       "../resources/licenses/mlx-audio-swift-LICENSE.txt": "licenses/mlx-audio-swift-LICENSE.txt",
       "../resources/licenses/mlx-swift-LICENSE.txt": "licenses/mlx-swift-LICENSE.txt",
       "../resources/manifests/managed-models.lock.json": "manifests/managed-models.lock.json",
+      "../resources/credentials.json": "credentials.json",
+      "../examples/local_models_matcha.json": "examples/local_models_matcha.json",
       "../resources/tools/": "tools/",
-      "../resources/managed-runtime/ort-tts/": "managed-runtime/ort-tts/",
+      "../resources/managed-runtime/ort/": "managed-runtime/ort/",
       "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",
-      "../resources/managed-runtime/sherpa/": "managed-runtime/sherpa/",
       "../resources/models/audio/silero_vad.onnx": "models/audio/silero_vad.onnx",
       "../resources/models/wake-word/": "models/wake-word/",
       "binaries/app-backend-runtime/": "app-backend-runtime/"

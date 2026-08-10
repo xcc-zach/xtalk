@@ -19,6 +19,8 @@ from ..events import (
     TTSChunkReady,
     TTSPlaybackFinished,
     TTSPlaybackStopped,
+    TTSResponseClosed,
+    TTSStarted,
     TTSStopped,
     TTSStreamingTextAccepted,
     TTSTextDeliveryFinished,
@@ -117,6 +119,9 @@ class TTSPlaybackManager(Manager):
         )
         self._current_response_text = ""
         self._pending_text = ""
+        self._generated_text_by_response: dict[str, str] = {}
+        self._finished_text_by_response: dict[str, str] = {}
+        self._active_response_id: str | None = None
         self._segments: deque[_PlaybackSegment] = deque()
         self._started_waiting_for_preparation: deque[_PlaybackSegment] = deque()
         self._prepared_waiting_for_start: deque[_PlaybackSegment] = deque()
@@ -159,25 +164,66 @@ class TTSPlaybackManager(Manager):
     def _reset_all_state(self) -> None:
         """Reset all cached response and playback-tracking state."""
 
+        response_id = self._active_response_id
         self._reset_playback_tracking()
         self._current_response_text = ""
         self._pending_text = ""
+        self._active_response_id = None
+        if response_id is not None:
+            self._generated_text_by_response.pop(response_id, None)
+            self._finished_text_by_response.pop(response_id, None)
+
+    def _matches_active_response(self, response_id: str) -> bool:
+        """Return whether an event belongs to the active playback response."""
+
+        return bool(
+            self._active_response_id
+            and (not response_id or response_id == self._active_response_id)
+        )
 
     @Manager.event_handler(LLMAgentResponseUpdate, priority=20)
     async def _cache_response_update(self, event: LLMAgentResponseUpdate) -> None:
         """Track the active response text without emitting frontend-facing updates."""
 
         next_text = event.text or ""
-        if self._current_response_text and not next_text.startswith(
-            self._current_response_text
-        ):
-            self._reset_all_state()
-        self._current_response_text = next_text
+        self._generated_text_by_response[event.response_id] = next_text
+        if event.response_id == self._active_response_id:
+            self._current_response_text = next_text
+
+    @Manager.event_handler(TTSStarted, priority=20)
+    async def _activate_response(self, event: TTSStarted) -> None:
+        """Initialize playback accounting before the response reaches the client."""
+
+        if not event.response_id:
+            return
+        if self._active_response_id == event.response_id:
+            return
+        if self._active_response_id is not None:
+            logger.error(
+                "TTS response started before prior playback closed - session: %s, "
+                "active: %s, incoming: %s",
+                self.session_id,
+                self._active_response_id,
+                event.response_id,
+            )
+            return
+        self._reset_playback_tracking()
+        self._active_response_id = event.response_id
+        self._current_response_text = self._generated_text_by_response.get(
+            event.response_id,
+            "",
+        )
+        self._pending_text = self._finished_text_by_response.get(
+            event.response_id,
+            "",
+        )
 
     @Manager.event_handler(TTSTextSynthesisStarted, priority=20)
     async def _start_text_segment(self, event: TTSTextSynthesisStarted) -> None:
         """Bind the next FIFO regular TTS segment to paced audio delivery."""
 
+        if not self._matches_active_response(event.response_id):
+            return
         text = event.text or ""
         if not text:
             return
@@ -221,6 +267,8 @@ class TTSPlaybackManager(Manager):
     ) -> None:
         """Append text to an immutable StreamingTextTTS L1 timeline."""
 
+        if not self._matches_active_response(event.response_id):
+            return
         text = event.text or ""
         if not text:
             return
@@ -247,6 +295,8 @@ class TTSPlaybackManager(Manager):
     @Manager.event_handler(TTSChunkReady, priority=20)
     async def _track_generated_chunk(self, event: TTSChunkReady) -> None:
         """Track generated chunk durations in FIFO order for playback acks."""
+        if not self._matches_active_response(event.response_id):
+            return
         chunk_ms = self._chunk_duration_ms(
             audio_chunk=event.audio_chunk,
             sample_rate=event.sample_rate,
@@ -271,6 +321,8 @@ class TTSPlaybackManager(Manager):
     async def _prepare_text_segment(self, event: TTSTextSynthesized) -> None:
         """Bind complete final PCM and start alignment without waiting for delivery."""
 
+        if not self._matches_active_response(event.response_id):
+            return
         text = event.text or ""
         if not text:
             return
@@ -311,6 +363,8 @@ class TTSPlaybackManager(Manager):
     ) -> None:
         """Close the current FIFO delivery without delaying audio preparation."""
 
+        if not self._matches_active_response(event.response_id):
+            return
         segment = self._collecting_segment or self._streaming_segment
         if segment is None:
             logger.warning(
@@ -417,7 +471,8 @@ class TTSPlaybackManager(Manager):
     @Manager.event_handler(TTSChunkPlayed, priority=20)
     async def _publish_response_update(self, event: TTSChunkPlayed) -> None:
         """Advance played text according to frontend playback confirmations."""
-        del event
+        if not self._matches_active_response(event.response_id):
+            return
         if not self._generated_chunk_ms:
             return
         remaining_ms = max(0.0, self._generated_chunk_ms.popleft())
@@ -989,8 +1044,10 @@ class TTSPlaybackManager(Manager):
         await self.event_bus.publish(
             ResponseUpdate(
                 session_id=self.session_id,
+                response_id=self._active_response_id or "",
                 text=text,
-            )
+            ),
+            wait_for_completion=True,
         )
 
     @Manager.event_handler(LLMAgentResponseFinish, priority=20)
@@ -998,25 +1055,28 @@ class TTSPlaybackManager(Manager):
         """Cache the latest generated response until playback finishes."""
 
         next_text = event.text or ""
-        if self._current_response_text and not next_text.startswith(
-            self._current_response_text
-        ):
-            self._reset_all_state()
-        self._current_response_text = next_text
-        self._pending_text = next_text
+        self._generated_text_by_response[event.response_id] = next_text
+        self._finished_text_by_response[event.response_id] = next_text
+        if event.response_id == self._active_response_id:
+            self._current_response_text = next_text
+            self._pending_text = next_text
 
-    @Manager.event_handler(TTSPlaybackFinished, priority=20)
+    @Manager.event_handler(TTSPlaybackFinished, priority=-100)
     async def _publish_response_finish(self, event: TTSPlaybackFinished) -> None:
         """Publish response-finish after frontend playback completion."""
 
-        del event
+        if not self._matches_active_response(event.response_id):
+            return
+        response_id = self._active_response_id
+        if response_id is None:
+            return
         if not self._received_audio:
             logger.warning(
                 "TTS playback finished without generated audio; discarding unplayed "
                 "response - session: %s",
                 self.session_id,
             )
-            self._reset_all_state()
+            await self._close_response(response_id)
             return
         played_text = self._build_reported_text()
         if len(self._reported_text) > len(played_text):
@@ -1026,7 +1086,7 @@ class TTSPlaybackManager(Manager):
                 "TTS playback finished without playback-confirmed text - session: %s",
                 self.session_id,
             )
-            self._reset_all_state()
+            await self._close_response(response_id)
             return
         if self._pending_text and played_text != self._pending_text:
             logger.warning(
@@ -1039,40 +1099,55 @@ class TTSPlaybackManager(Manager):
         try:
             await self._commit_playback_text(played_text)
         finally:
-            self._reset_all_state()
+            await self._close_response(response_id)
 
     @Manager.event_handler(TTSStopped, priority=20)
     async def _handle_tts_stopped(self, event: TTSStopped) -> None:
         """Wait for the frontend's exact playback position after an early stop."""
 
-        del event
+        if not self._matches_active_response(event.response_id):
+            return
         self._awaiting_stop_ack = True
         self._cancel_stop_commit_task()
         turn_id = self._turn_id
+        response_id = self._active_response_id
+        if response_id is None:
+            return
         self._stop_commit_task = asyncio.create_task(
-            self._commit_stopped_playback_after_timeout(turn_id)
+            self._commit_stopped_playback_after_timeout(turn_id, response_id)
         )
 
-    @Manager.event_handler(TTSPlaybackStopped, priority=20)
+    @Manager.event_handler(TTSPlaybackStopped, priority=-100)
     async def _handle_tts_playback_stopped(
         self,
         event: TTSPlaybackStopped,
     ) -> None:
         """Apply unacknowledged browser playback before committing interruption."""
 
-        if not self._awaiting_stop_ack:
+        if (
+            not self._awaiting_stop_ack
+            or not self._matches_active_response(event.response_id)
+        ):
             return
         self._cancel_stop_commit_task()
         self._played_without_segment_ms += max(0.0, event.played_audio_ms)
         await self._apply_pending_playback_time()
         await self._commit_stopped_playback()
 
-    async def _commit_stopped_playback_after_timeout(self, turn_id: int) -> None:
+    async def _commit_stopped_playback_after_timeout(
+        self,
+        turn_id: int,
+        response_id: str,
+    ) -> None:
         """Fall back to completed-chunk progress for older frontend clients."""
 
         try:
             await asyncio.sleep(self._stop_ack_timeout_ms / 1000.0)
-            if turn_id != self._turn_id or not self._awaiting_stop_ack:
+            if (
+                turn_id != self._turn_id
+                or response_id != self._active_response_id
+                or not self._awaiting_stop_ack
+            ):
                 return
             logger.warning(
                 "Timed out waiting for frontend TTS stop position - session: %s",
@@ -1085,6 +1160,9 @@ class TTSPlaybackManager(Manager):
     async def _commit_stopped_playback(self) -> None:
         """Commit the force-aligned prefix after playback has actually stopped."""
 
+        response_id = self._active_response_id
+        if response_id is None:
+            return
         await self._wait_for_alignment_grace()
         played_text = self._build_reported_text()
         if len(self._reported_text) > len(played_text):
@@ -1093,7 +1171,7 @@ class TTSPlaybackManager(Manager):
             if played_text:
                 await self._commit_playback_text(played_text)
         finally:
-            self._reset_all_state()
+            await self._close_response(response_id)
 
     async def _wait_for_alignment_grace(self) -> None:
         """Briefly wait for precise alignment before committing an interruption."""
@@ -1114,8 +1192,24 @@ class TTSPlaybackManager(Manager):
         await self.event_bus.publish(
             ResponseFinish(
                 session_id=self.session_id,
+                response_id=self._active_response_id or "",
                 text=text,
-            )
+            ),
+            wait_for_completion=True,
+        )
+
+    async def _close_response(self, response_id: str) -> None:
+        """Clear playback state and publish the response-delivery barrier."""
+
+        if response_id != self._active_response_id:
+            return
+        self._reset_all_state()
+        await self.event_bus.publish(
+            TTSResponseClosed(
+                session_id=self.session_id,
+                response_id=response_id,
+            ),
+            wait_for_completion=True,
         )
 
     async def shutdown(self) -> None:

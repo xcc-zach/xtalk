@@ -2,9 +2,26 @@
   "version": 1,
   "tools": [
     {
+      "id": "current_time",
+      "path": "current_time",
+      "enabled_by_default": true,
+      "can_disable": false
+    },
+    {
+      "id": "web_search",
+      "path": "web_search",
+      "enabled_by_default": false
+    },
+    {
       "id": "timer",
       "path": "timer",
       "enabled_by_default": true
+    },
+    {
+      "id": "whiteboard",
+      "path": "whiteboard",
+      "enabled_by_default": true,
+      "can_disable": true
     },
     {
       "id": "codex",

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import plistlib
+import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -55,6 +56,218 @@ def test_sha256_file_matches_known_digest(tmp_path: Path) -> None:
     )
 
 
+def test_source_build_reads_versions_from_fresh_artifacts(tmp_path: Path) -> None:
+    """Derive lock metadata from newly built source packages."""
+
+    module = load_script("build_from_source")
+    wheel = tmp_path / "xtalk-test.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "xtalk-9.8.7.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: xtalk\nVersion: 9.8.7\n",
+        )
+
+    assert module.wheel_version(wheel) == "9.8.7"
+    assert module.parse_npm_pack_path(
+        json.dumps([{"filename": "xtalk-client-1.2.3.tgz"}])
+    ) == Path("xtalk-client-1.2.3.tgz")
+
+
+def test_source_build_uses_an_app_local_npm_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid user-global npm cache permissions during release builds."""
+
+    module = load_script("build_from_source")
+    monkeypatch.setattr(module, "APP_ROOT", tmp_path)
+
+    environment = module.npm_environment()
+
+    assert environment["npm_config_cache"] == str(
+        tmp_path / ".build" / "npm-cache"
+    )
+    assert (tmp_path / ".build" / "npm-cache").is_dir()
+
+
+def test_source_build_preserves_a_virtual_environment_python_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the selected virtual environment and its installed packages."""
+
+    module = load_script("build_from_source")
+    base_python = tmp_path / "base" / "python3.12"
+    environment_python = tmp_path / "venv" / "bin" / "python"
+    base_python.parent.mkdir(parents=True)
+    base_python.write_bytes(b"python")
+    environment_python.parent.mkdir(parents=True)
+    environment_python.symlink_to(base_python)
+    monkeypatch.setattr(module, "python_version", lambda _path: (3, 12))
+
+    assert module.resolve_sidecar_python(environment_python) == environment_python
+
+
+def test_tauri_release_build_is_wired_to_repository_sources() -> None:
+    """Rebuild root Python and frontend inputs before each Tauri package."""
+
+    package = json.loads((APP_ROOT / "package.json").read_text(encoding="utf-8"))
+    tauri = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8")
+    )
+
+    assert package["dependencies"]["xtalk-client"] == "file:../frontend"
+    assert package["scripts"]["build:source"].startswith(
+        "python3 scripts/build_from_source.py"
+    )
+    assert package["scripts"]["package:macos"] == (
+        "python3 scripts/package_macos_release.py"
+    )
+    assert package["scripts"]["package:macos:local"] == (
+        "python3 scripts/package_macos_release.py --local"
+    )
+    assert tauri["build"]["beforeBuildCommand"] == "npm run build:source"
+
+
+def test_macos_local_build_entrypoint_checks_prerequisites() -> None:
+    """Require prerequisite validation before the packaging entrypoint."""
+
+    entrypoint = APP_ROOT / "scripts" / "build_macos_local.sh"
+    logic = entrypoint.read_text(encoding="utf-8")
+
+    assert logic.startswith("#!/usr/bin/env bash")
+    assert "--check-only" in logic
+    assert "npm run package:macos:local" in logic
+    assert "Toolchain components are never installed automatically" in logic
+    assert entrypoint.stat().st_mode & 0o111
+
+
+def test_distribution_packaging_requires_external_apple_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a public release that would silently fall back to ad-hoc signing."""
+
+    module = load_script("package_macos_release")
+    monkeypatch.delenv("APPLE_SIGNING_IDENTITY", raising=False)
+    monkeypatch.delenv("APPLE_NOTARY_KEYCHAIN_PROFILE", raising=False)
+
+    with pytest.raises(ValueError, match="APPLE_SIGNING_IDENTITY"):
+        module.distribution_credentials()
+
+    monkeypatch.setenv(
+        "APPLE_SIGNING_IDENTITY",
+        "Developer ID Application: XTalk (TEAMID)",
+    )
+    with pytest.raises(ValueError, match="APPLE_NOTARY_KEYCHAIN_PROFILE"):
+        module.distribution_credentials()
+
+
+def test_failed_macos_release_removes_partial_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never leave an invalid App or DMG at a publishable output path."""
+
+    module = load_script("package_macos_release")
+    app = tmp_path / "XTalk.app"
+    output = tmp_path / "XTalk.dmg"
+    monkeypatch.setattr(module, "APP_OUTPUT", app)
+
+    def fail_build(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        app.mkdir(parents=True)
+        output.write_bytes(b"partial")
+        raise subprocess.CalledProcessError(1, ["npm"])
+
+    monkeypatch.setattr(module.subprocess, "run", fail_build)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        module.run_release(
+            local=True,
+            output=output,
+            identity="-",
+            notary_profile=None,
+        )
+
+    assert not app.exists()
+    assert not output.exists()
+
+
+def test_macos_release_prepares_runtime_before_tauri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Make native runtime preparation part of the packaging entrypoint."""
+
+    module = load_script("package_macos_release")
+    app = tmp_path / "XTalk.app"
+    output = tmp_path / "XTalk.dmg"
+    events: list[str] = []
+    monkeypatch.setattr(module, "APP_OUTPUT", app)
+    monkeypatch.setattr(
+        module,
+        "prepare_native_runtime",
+        lambda: events.append("runtime"),
+    )
+
+    def complete_command(
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        events.append(Path(command[0]).name)
+        if command[0] == "npm":
+            app.mkdir(parents=True)
+        else:
+            output.write_bytes(b"dmg")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", complete_command)
+
+    module.run_release(
+        local=True,
+        output=output,
+        identity="-",
+        notary_profile=None,
+    )
+
+    assert events[:2] == ["runtime", "npm"]
+    assert app.is_dir()
+    assert output.is_file()
+
+
+def test_mlx_runtime_uses_the_top_level_product_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ignore duplicate MLX resource bundles nested in test products."""
+
+    module = load_script("prepare_managed_runtime")
+    package = tmp_path / "mlx-runtime"
+    products = package / ".build" / "xcode" / "Build" / "Products" / "Release"
+    executable = products / "xtalk-mlx-model-runtime"
+    bundle = products / "mlx-swift_Cmlx.bundle"
+    nested_bundle = (
+        products
+        / "XTalkMLXRuntimeTests.xctest"
+        / "Contents"
+        / "Resources"
+        / "mlx-swift_Cmlx.bundle"
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"runtime")
+    bundle.mkdir()
+    nested_bundle.mkdir(parents=True)
+    monkeypatch.setattr(module, "MLX_RUNTIME_PACKAGE", package)
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0),
+    )
+
+    assert module.build_mlx_runtime(debug=False) == (executable, bundle)
+
+
 def test_resolve_app_relative_rejects_escape() -> None:
     """Reject manifest paths that escape the app directory."""
 
@@ -85,6 +298,30 @@ def test_release_has_no_bundled_default_model_config() -> None:
     module = load_script("verify_resources")
 
     module.verify_no_bundled_default_config()
+
+
+def test_release_bundles_builtin_tools_and_secret_free_credential_registry() -> None:
+    """Keep required built-ins and credential metadata in every package."""
+
+    module = load_script("verify_resources")
+
+    module.verify_builtin_tools_and_credentials()
+
+
+def test_native_credentials_pin_each_supported_platform_backend() -> None:
+    """Pin the credential abstraction to each operating-system store backend."""
+
+    manifest = (APP_ROOT / "src-tauri" / "Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "features = [\"apple-native\"]" in manifest
+    assert "features = [\"windows-native\"]" in manifest
+    assert (
+        "features = [\"crypto-rust\", \"sync-secret-service\"]"
+        in manifest
+    )
+    assert manifest.count('keyring = { version = "=3.6.3"') == 3
 
 
 def test_wheel_requirement_adds_sorted_unique_extras() -> None:
@@ -131,7 +368,146 @@ def test_backend_build_requires_managed_model_client_modules(
 
     with zipfile.ZipFile(wheel, "a") as archive:
         archive.writestr("xtalk/models/tts/moss_tts_nano.py", "")
+    with pytest.raises(ValueError, match="sherpa_onnx_tts"):
+        module.validate_required_wheel_modules(wheel)
+
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("xtalk/models/tts/sherpa_onnx_tts.py", "")
     module.validate_required_wheel_modules(wheel)
+
+
+def test_sidecar_lock_is_exact_except_for_codex() -> None:
+    """Lock the frozen Python graph while selecting Codex at build time."""
+
+    module = load_script("build_backend")
+
+    requirements = module.validate_sidecar_lock()
+
+    assert requirements
+    assert all("==" in requirement for requirement in requirements)
+    assert not any(
+        requirement.lower().startswith("openai-codex")
+        for requirement in requirements
+    )
+    pyproject = (APP_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"openai-codex"' in pyproject
+    assert "openai-codex==" not in pyproject
+
+
+def test_backend_freezer_excludes_bundled_codex_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Package the Codex SDK while requiring a user-installed CLI."""
+
+    module = load_script("build_backend")
+    build_root = tmp_path / "backend"
+    monkeypatch.setattr(module, "BUILD_ROOT", build_root)
+    commands: list[list[str]] = []
+
+    def build(command: list[str], **_kwargs: object) -> None:
+        commands.append(command)
+        output = build_root / "dist" / "app-backend"
+        (output / "app-backend-runtime").mkdir(parents=True)
+        (output / "app-backend").write_bytes(b"backend")
+
+    monkeypatch.setattr(module, "run", build)
+
+    module.build_onedir(Path("/python3.12"), "aarch64-apple-darwin")
+
+    command = commands[0]
+    assert "openai_codex" in command
+    assert "codex_cli_bin" in command
+    codex_index = command.index("codex_cli_bin")
+    assert command[codex_index - 1] == "--exclude-module"
+
+
+def test_native_runtime_lock_supports_common_desktop_targets() -> None:
+    """Pin official verified Sherpa/ORT bundles for desktop platforms."""
+
+    module = load_script("download_managed_runtime")
+    targets = {
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-pc-windows-msvc",
+        "x86_64-pc-windows-msvc",
+    }
+
+    for target in targets:
+        record = module.load_target_record(target)
+        assert len(record["sha256"]) == 64
+        assert record["archive"] in record["url"]
+    verifier = load_script("verify_resources")
+    verifier.verify_native_runtime_manifest()
+
+
+def test_native_runtime_download_context_keeps_tls_verification() -> None:
+    """Use a trusted CA bundle without disabling certificate verification."""
+
+    module = load_script("download_managed_runtime")
+
+    context = module.verified_tls_context()
+
+    assert context.check_hostname is True
+    assert context.verify_mode.name == "CERT_REQUIRED"
+
+
+def test_native_runtime_archive_materializes_only_internal_links(
+    tmp_path: Path,
+) -> None:
+    """Materialize loader aliases without trusting external symlinks."""
+
+    module = load_script("download_managed_runtime")
+    source = tmp_path / "server"
+    source.write_bytes(b"runtime")
+    archive_path = tmp_path / "runtime.tar.bz2"
+    with tarfile.open(archive_path, "w:bz2") as archive:
+        archive.add(source, arcname="runtime/bin/server")
+        archive.add(source, arcname="runtime/lib/libonnxruntime.so.1.27.0")
+        internal_link = tarfile.TarInfo("runtime/lib/libonnxruntime.so.1")
+        internal_link.type = tarfile.SYMTYPE
+        internal_link.linkname = "libonnxruntime.so.1.27.0"
+        archive.addfile(internal_link)
+        link = tarfile.TarInfo("runtime/lib/external")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/tmp/external"
+        archive.addfile(link)
+
+    destination = tmp_path / "extracted"
+    module.extract_regular_files(archive_path, destination)
+
+    assert (destination / "runtime" / "bin" / "server").read_bytes() == b"runtime"
+    assert (
+        destination / "runtime" / "lib" / "libonnxruntime.so.1"
+    ).read_bytes() == b"runtime"
+    assert not (destination / "runtime" / "lib" / "external").exists()
+
+
+def test_native_runtime_locates_colocated_macos_sherpa_and_ort(
+    tmp_path: Path,
+) -> None:
+    """Use the server and ORT from the same verified Sherpa archive."""
+
+    module = load_script("download_managed_runtime")
+    server = tmp_path / "bin" / "sherpa-onnx-offline-websocket-server"
+    library = tmp_path / "lib"
+    server.parent.mkdir()
+    library.mkdir()
+    server.write_bytes(b"server")
+    (library / "libsherpa-onnx-c-api.dylib").write_bytes(b"sherpa")
+    ort = library / "libonnxruntime.1.27.0.dylib"
+    ort.write_bytes(b"ort")
+
+    actual_server, actual_library, actual_ort = module.locate_runtime_inputs(
+        tmp_path,
+        "aarch64-apple-darwin",
+    )
+
+    assert actual_server == server
+    assert actual_library == library
+    assert actual_ort == ort
 
 
 def test_macos_packager_links_framework_metadata_to_resources(
@@ -164,26 +540,65 @@ def test_macos_packager_links_framework_metadata_to_resources(
     ) == "canonical"
 
 
-def test_macos_packager_signs_both_codex_hosts_with_v8_entitlements(
+def test_macos_packager_prunes_duplicate_resource_runtime(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preserve V8 executable-memory rights in both runtime layouts."""
+    """Keep only metadata in Resources after validating both layouts."""
 
     module = load_script("package_macos_dmg")
     app = tmp_path / "XTalk.app"
-    relative_host = Path("codex_cli_bin/bin/codex-code-mode-host")
-    hosts = [
-        app / "Contents" / "Frameworks" / relative_host,
-        app
-        / "Contents"
-        / "Resources"
-        / "app-backend-runtime"
-        / relative_host,
-    ]
-    for host in hosts:
-        host.parent.mkdir(parents=True, exist_ok=True)
-        host.write_bytes(b"host")
+    frameworks = app / "Contents" / "Frameworks"
+    resources = app / "Contents" / "Resources" / "app-backend-runtime"
+    metadata_name = "example-1.0.dist-info"
+    for root in (frameworks, resources):
+        (root / metadata_name).mkdir(parents=True)
+        (root / metadata_name / "METADATA").write_text(
+            "metadata",
+            encoding="utf-8",
+        )
+        (root / "package").mkdir()
+        (root / "package" / "module.py").write_text(
+            "value = 1\n",
+            encoding="utf-8",
+        )
+        (root / "libpython3.12.dylib").write_bytes(b"python")
+
+    removed_count, removed_bytes = module.prune_duplicate_resource_runtime(app)
+
+    assert removed_count == 2
+    assert removed_bytes > 0
+    assert (frameworks / "package" / "module.py").is_file()
+    assert (frameworks / "libpython3.12.dylib").is_file()
+    assert sorted(path.name for path in resources.iterdir()) == [metadata_name]
+
+
+def test_macos_packager_rejects_different_runtime_layouts(
+    tmp_path: Path,
+) -> None:
+    """Do not remove a Resources runtime that contains a unique entry."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    frameworks = app / "Contents" / "Frameworks"
+    resources = app / "Contents" / "Resources" / "app-backend-runtime"
+    frameworks.mkdir(parents=True)
+    resources.mkdir(parents=True)
+    (frameworks / "shared").write_bytes(b"framework")
+    (resources / "shared").write_bytes(b"resource")
+    (resources / "unique").write_bytes(b"resource-only")
+
+    with pytest.raises(ValueError, match="runtime layouts differ"):
+        module.prune_duplicate_resource_runtime(app)
+
+
+def test_macos_packager_does_not_require_a_bundled_codex_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sign only code owned by the App when Codex is user-installed."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
     backend = app / "Contents" / "MacOS" / "app-backend"
     backend.parent.mkdir(parents=True)
     backend.write_bytes(b"backend")
@@ -192,29 +607,151 @@ def test_macos_packager_signs_both_codex_hosts_with_v8_entitlements(
 
     module.sign_app(app, "-")
 
-    codex_commands = [
-        command
-        for command in commands
-        if str(module.CODEX_HOST_ENTITLEMENTS) in command
+    assert all("codex_cli_bin" not in " ".join(command) for command in commands)
+    assert any(command[-1] == str(backend) for command in commands)
+
+
+def test_macos_packager_explicitly_signs_managed_runtime_libraries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repair invalid upstream dylib signatures before signing the App."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    backend = app / "Contents" / "MacOS" / "app-backend"
+    runtime = app / "Contents" / "Resources" / "managed-runtime" / "ort"
+    library = runtime / "libonnxruntime.1.27.0.dylib"
+    backend.parent.mkdir(parents=True)
+    backend.write_bytes(b"backend")
+    runtime.mkdir(parents=True)
+    library.write_bytes(b"runtime")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module, "run", commands.append)
+
+    module.sign_app(app, "-")
+
+    library_sign = next(
+        index
+        for index, command in enumerate(commands)
+        if command[-1] == str(library) and "--sign" in command
+    )
+    app_sign = next(
+        index
+        for index, command in enumerate(commands)
+        if command[-1] == str(app) and "--sign" in command
+    )
+    assert library_sign < app_sign
+    assert ["codesign", "--verify", "--strict", str(library)] in commands
+
+
+def test_macos_packager_timestamps_developer_id_signatures() -> None:
+    """Use secure timestamps for artifacts submitted to notarization."""
+
+    module = load_script("package_macos_dmg")
+
+    assert module.signing_options("-") == ["--options", "runtime"]
+    assert module.signing_options("Developer ID Application: XTalk") == [
+        "--options",
+        "runtime",
+        "--timestamp",
     ]
-    assert [Path(command[-1]) for command in codex_commands] == hosts
-    assert all(
-        "--options" in command and "runtime" in command
-        for command in codex_commands
+
+
+def test_macos_packager_notarizes_and_assesses_the_dmg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require signing, notarization, stapling, and Gatekeeper assessment."""
+
+    module = load_script("package_macos_dmg")
+    output = tmp_path / "XTalk.dmg"
+    output.write_bytes(b"dmg")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module, "run", commands.append)
+
+    module.sign_and_notarize_dmg(
+        output,
+        "Developer ID Application: XTalk (TEAMID)",
+        "xtalk-release",
     )
 
+    assert any("notarytool" in command for command in commands)
+    assert any(command[1:3] == ["stapler", "staple"] for command in commands)
+    assert any(command[0] == "spctl" for command in commands)
 
-def test_codex_host_entitlements_allow_v8_executable_memory() -> None:
-    """Keep every hardened-runtime entitlement required by the V8 host."""
 
-    payload = plistlib.loads(
-        (APP_ROOT / "src-tauri" / "CodexHostEntitlements.plist").read_bytes()
-    )
-    assert payload == {
-        "com.apple.security.cs.allow-jit": True,
-        "com.apple.security.cs.allow-unsigned-executable-memory": True,
-        "com.apple.security.cs.disable-library-validation": True,
-    }
+def test_macos_packager_signs_local_dmg_ad_hoc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Give local CI disk images a verifiable ad-hoc signature."""
+
+    module = load_script("package_macos_dmg")
+    output = tmp_path / "XTalk.dmg"
+    output.write_bytes(b"dmg")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module, "run", commands.append)
+
+    module.sign_dmg(output, "-")
+
+    assert commands == [
+        ["codesign", "--force", "--sign", "-", str(output)],
+        ["codesign", "--verify", "--strict", str(output)],
+    ]
+
+
+def test_macos_packager_rejects_external_bundle_links(
+    tmp_path: Path,
+) -> None:
+    """Prevent release bundles from linking back to the build machine."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    external = tmp_path / "build-only-runtime"
+    external.write_bytes(b"runtime")
+    link = app / "Contents" / "Frameworks" / "runtime"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(external)
+
+    with pytest.raises(ValueError, match="external or broken link"):
+        module.verify_internal_bundle_links(app)
+
+
+def test_macos_packager_smoke_tests_matcha_without_external_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Launch Matcha exactly as a published signed App will launch it."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    runtime = app / "Contents" / "MacOS" / "matcha-model-runtime"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"runtime")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run_runtime(
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="help", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run_runtime)
+
+    module.smoke_test_matcha_runtime(app)
+
+    assert calls == [
+        (
+            [str(runtime), "--help"],
+            {
+                "capture_output": True,
+                "text": True,
+                "check": False,
+            },
+        )
+    ]
 
 
 def test_managed_runtime_uses_target_specific_binary_names() -> None:
@@ -229,6 +766,34 @@ def test_managed_runtime_uses_target_specific_binary_names() -> None:
     )
     assert module.target_supports_mlx("aarch64-apple-darwin")
     assert not module.target_supports_mlx("x86_64-unknown-linux-gnu")
+
+
+def test_windows_local_runtime_uses_one_static_crt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Align native tokenizer libraries on the Windows static CRT."""
+
+    module = load_script("prepare_managed_runtime")
+    calls: list[dict[str, object]] = []
+
+    def record_command(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str],
+    ) -> None:
+        del command, cwd, check
+        calls.append(env)
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+    monkeypatch.setenv("RUSTFLAGS", "-C debuginfo=1")
+
+    module.build_local_runtime("x86_64-pc-windows-msvc", True)
+
+    assert calls[0]["RUSTFLAGS"] == (
+        "-C debuginfo=1 -C target-feature=+crt-static"
+    )
 
 
 def test_managed_runtime_stages_only_onnx_cuda_provider_files(
@@ -279,15 +844,85 @@ def test_windows_stages_sherpa_onnx_runtime_beside_sidecars() -> None:
     )
 
     assert config["bundle"]["resources"] == {
-        "../resources/managed-runtime/sherpa/onnxruntime.dll": "onnxruntime.dll"
+        "../resources/managed-runtime/ort/onnxruntime.dll": "onnxruntime.dll"
     }
+
+
+def test_managed_runtime_finds_shared_sherpa_libraries(
+    tmp_path: Path,
+) -> None:
+    """Stage sherpa's shared API without treating ONNX Runtime as sherpa."""
+
+    module = load_script("prepare_managed_runtime")
+    (tmp_path / "libsherpa-onnx-c-api.dylib").write_bytes(b"c-api")
+    (tmp_path / "libsherpa-onnx-cxx-api.dylib").write_bytes(b"cxx-api")
+    (tmp_path / "libonnxruntime.1.27.0.dylib").write_bytes(b"ort")
+
+    libraries = module.sherpa_shared_libraries(
+        tmp_path,
+        "aarch64-apple-darwin",
+    )
+
+    assert [path.name for path in libraries] == [
+        "libsherpa-onnx-c-api.dylib",
+        "libsherpa-onnx-cxx-api.dylib",
+    ]
+
+
+def test_matcha_macos_build_embeds_packaged_runtime_rpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Let the signed Matcha sidecar resolve packaged sherpa libraries."""
+
+    module = load_script("prepare_managed_runtime")
+    commands: list[tuple[list[str], dict[str, str]]] = []
+
+    def record_command(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str],
+    ) -> None:
+        del cwd, check
+        commands.append((command, env))
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+    monkeypatch.setenv("RUSTFLAGS", "-C target-cpu=apple-m1")
+
+    module.build_matcha_runtime(
+        "aarch64-apple-darwin",
+        False,
+        tmp_path,
+    )
+
+    assert len(commands) == 1
+    assert commands[0][1]["RUSTFLAGS"] == (
+        "-C target-cpu=apple-m1 "
+        "-C link-arg=-Wl,-rpath,"
+        "@executable_path/../Resources/managed-runtime/ort"
+    )
+
+
+def test_managed_runtime_reset_preserves_readme(tmp_path: Path) -> None:
+    """Remove stale generated runtimes without deleting tracked guidance."""
+
+    module = load_script("prepare_managed_runtime")
+    (tmp_path / "README.md").write_text("tracked", encoding="utf-8")
+    (tmp_path / "libonnxruntime.1.28.0.dylib").write_bytes(b"stale")
+
+    module.reset_generated_runtime_files(tmp_path)
+
+    assert (tmp_path / "README.md").is_file()
+    assert not (tmp_path / "libonnxruntime.1.28.0.dylib").exists()
 
 
 def test_local_models_example_uses_managed_speech_and_shared_llm() -> None:
     """Keep managed examples aligned on their shared LLM configuration."""
 
     example = json.loads(
-        (APP_ROOT / "examples" / "local_models.json").read_text(
+        (APP_ROOT / "examples" / "local_models_moss_tts.json").read_text(
             encoding="utf-8"
         )
     )
@@ -326,3 +961,18 @@ def test_mlx_local_models_example_selects_native_managed_engine() -> None:
     assert example["tts"]["params"]["voices"][0]["path"].startswith(
         "managed://moss-tts-nano/"
     )
+
+
+def test_matcha_local_models_example_uses_sherpa_tts_client() -> None:
+    """Keep the Matcha managed example aligned with its HTTP client."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_matcha.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert example["tts"] == {
+        "type": "SherpaOnnxTTS",
+        "params": {"base_url": "managed://matcha-icefall-zh-en"},
+    }

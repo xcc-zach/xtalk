@@ -11,8 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import PROTOCOL_VERSION, StartupConfig, build_effective_config
+from .desktop_tool_bridge import DesktopToolCallBridge
+from .frontend_text_log import FrontendTextLogMiddleware
 from .security import STARTUP_TOKEN_HEADER, SidecarSecurityMiddleware
 from .tool_ui import ToolUIBroker
+from .whiteboard_store import get_whiteboard_store
 from .xtalk_adapter import build_xtalk_runtime, mount_xtalk_routes
 
 
@@ -52,6 +55,10 @@ def create_application(
     )
     app.state.sidecar_ready = False
 
+    app.add_middleware(
+        FrontendTextLogMiddleware,
+        log_path=startup.data_dir / "frontend-text.log",
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(startup.origins),
@@ -103,11 +110,83 @@ def create_application(
             await callback_result
         return {"status": "shutting_down"}
 
+    @app.delete("/app/api/sessions/{session_id}")
+    async def _delete_session(session_id: str) -> dict[str, str]:
+        """Delete one persisted chat session owned by the desktop identity.
+
+        The desktop UI talks to a single anonymous identity, so the delete is
+        scoped by that identity. Any live service for the session is stopped
+        before its SQLite rows are removed, letting the ``chat_messages``
+        foreign key cascade clean up the history.
+
+        Parameters
+        ----------
+        session_id : str
+            Identifier of the persisted session to delete.
+
+        Returns
+        -------
+        dict[str, str]
+            Status acknowledgment once the session and its rows are removed.
+
+        Raises
+        ------
+        fastapi.HTTPException
+            Raised with 404 when persistence or the desktop identity is
+            unavailable, or the session is not owned by that identity.
+        """
+
+        persistence = xtalk_runtime._persistence
+        user_id = xtalk_runtime._anonymous_user_id
+        if (
+            persistence is None
+            or user_id is None
+            or not persistence.user_owns_session(user_id, session_id)
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Session not found",
+            )
+        # Stop the in-memory service first so any final message flush happens
+        # before the rows it targets are removed from the SQLite store.
+        service_manager = xtalk_runtime._service_manager
+        if service_manager is not None:
+            await service_manager.remove_service(session_id)
+        # The persistence store lives in the public ``xtalk`` package, so the
+        # App reuses its connection and lock directly for the deletion.
+        with persistence._lock, persistence._connect() as conn:
+            conn.execute(
+                "DELETE FROM chat_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            )
+        return {"status": "ok"}
+
+    @app.get("/app/api/whiteboard")
+    async def _whiteboard(session_id: str) -> dict[str, Any]:
+        """Return one conversation's whiteboard text snapshot for the App.
+
+        Each conversation owns an independent Markdown document. The trusted
+        whiteboard window polls this read-only endpoint with the active
+        conversation's session id and renders the returned text as Markdown.
+
+        Parameters
+        ----------
+        session_id : str
+            Persisted chat session owning the requested board.
+
+        Returns
+        -------
+        dict[str, Any]
+            Normalized ``{version, text, revision, updated_at}`` snapshot.
+        """
+
+        return get_whiteboard_store(session_id).snapshot()
+
     if tool_ui_broker is not None:
 
         @app.post("/app/api/tool-ui/frames")
         async def _create_tool_ui_frame(payload: dict[str, Any]) -> dict[str, str]:
-            """Create one short-lived sandbox-frame document ticket."""
+            """Create one runtime-scoped sandbox-frame document ticket."""
 
             if set(payload) != {"source"} or not isinstance(
                 payload["source"],
@@ -124,6 +203,16 @@ def create_application(
             except ValueError as exc:
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
             return {"ticket": ticket}
+
+        @app.get("/app/api/tool-ui/events")
+        async def _tool_ui_events(session_id: str) -> dict[str, Any]:
+            """Return replayable Tool UI events for the active App session."""
+
+            try:
+                events = await tool_ui_broker.snapshot(session_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"events": events}
 
         @app.get("/tool-ui-frame/{ticket}")
         async def _tool_ui_frame(ticket: str) -> HTMLResponse:
@@ -184,11 +273,14 @@ def build_application(
     """
 
     effective_config = build_effective_config(startup)
-    tool_ui_broker = ToolUIBroker()
+    tool_call_bridge = DesktopToolCallBridge()
+    effective_config.setdefault("service_config", {})[
+        "_desktop_tool_call_bridge"
+    ] = tool_call_bridge
+    tool_ui_broker = ToolUIBroker(bridge=tool_call_bridge)
     xtalk_runtime = build_xtalk_runtime(
         effective_config,
         tools_root=startup.data_dir / "tools",
-        web_search_enabled=startup.web_search_enabled,
         builtin_tools_root=startup.builtin_tools_root,
         anonymous_user_id=startup.anonymous_user_id,
         tool_ui_broker=tool_ui_broker,

@@ -36,8 +36,34 @@
       h1 { margin: 0; font-size: 17px; letter-spacing: -0.02em; }
       .status, .message, .meta { overflow-wrap: anywhere; color: rgb(127 127 127); }
       .status { margin-top: 4px; font-size: 13px; }
-      .message { margin-top: 6px; max-height: 120px; overflow: hidden; font-size: 12px; white-space: pre-wrap; }
+      .message { margin-top: 6px; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.5; }
       .message:empty, .meta:empty { display: none; }
+      .message > :first-child { margin-top: 0; }
+      .message > :last-child { margin-bottom: 0; }
+      .message p, .message blockquote, .message pre, .message ul, .message ol,
+      .message .table-scroll { margin: 7px 0; }
+      .message h1, .message h2, .message h3, .message h4, .message h5, .message h6 {
+        margin: 10px 0 6px;
+        color: CanvasText;
+        font-size: 1em;
+      }
+      .message ul, .message ol { padding-left: 22px; }
+      .message blockquote { padding-left: 10px; border-left: 3px solid rgb(127 127 127 / 28%); }
+      .message code {
+        padding: 1px 4px;
+        border-radius: 5px;
+        background: rgb(127 127 127 / 12%);
+        color: CanvasText;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .message pre { overflow: auto; padding: 9px 10px; border-radius: 8px; background: rgb(127 127 127 / 10%); }
+      .message pre code { padding: 0; background: transparent; white-space: pre; }
+      .message a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+      .message hr { border: 0; border-top: 1px solid rgb(127 127 127 / 25%); }
+      .table-scroll { max-width: 100%; overflow-x: auto; }
+      .message table { width: max-content; min-width: 100%; border-collapse: collapse; color: CanvasText; }
+      .message th, .message td { padding: 5px 8px; border: 1px solid rgb(127 127 127 / 25%); text-align: left; }
+      .message th { background: rgb(127 127 127 / 8%); font-weight: 650; }
       .meta { margin-top: 5px; font-size: 11px; }
       .badge {
         padding: 8px 12px;
@@ -48,6 +74,7 @@
         font-weight: 620;
       }
       .badge.complete { color: #16855b; }
+      .badge.cancelled { color: rgb(127 127 127); }
       .badge.failed { color: #c2414b; }
       @media (max-width: 520px) {
         .card { grid-template-columns: 48px minmax(0, 1fr); padding: 14px; }
@@ -73,36 +100,378 @@
       <span id="badge" class="badge">Running</span>
     </main>
     <script>
+      const { language } = window.xtalkToolUI.context;
+      const locale = language.toLowerCase().startsWith("zh") ? "zh" : "en";
       const byId = (id) => document.getElementById(id);
-      const labels = {
-        codex_session_search: "Search session",
-        codex_session_create: "New session",
-        codex_session_continue: "Continue session",
-        codex_session_set_model: "Change model",
-        codex_session_delete: "Archive session",
+      const copy = {
+        en: {
+          title: "Codex",
+          preparing: "Preparing…",
+          running: "Running",
+          complete: "Complete",
+          cancelled: "Cancelled",
+          failed: "Failed",
+          seconds: "s",
+          actions: {
+            codex_session_search: "Search session",
+            codex_session_create: "New session",
+            codex_session_continue: "Continue session",
+            codex_models_list: "Available models",
+            codex_session_set_model: "Change model",
+            codex_session_delete: "Archive session",
+          },
+          statuses: {},
+        },
+        zh: {
+          title: "Codex",
+          preparing: "准备中…",
+          running: "运行中",
+          complete: "已完成",
+          cancelled: "已取消",
+          failed: "失败",
+          seconds: "秒",
+          actions: {
+            codex_session_search: "搜索会话",
+            codex_session_create: "新建会话",
+            codex_session_continue: "继续会话",
+            codex_models_list: "可用模型",
+            codex_session_set_model: "更改模型",
+            codex_session_delete: "归档会话",
+          },
+          statuses: {
+            "Creating Codex session": "正在创建 Codex 会话",
+            "Searching Codex sessions": "正在搜索 Codex 会话",
+            "Continuing Codex session": "正在继续 Codex 会话",
+            "Loading Codex models": "正在获取 Codex 模型",
+            "Codex models loaded": "Codex 模型已获取",
+            "Updating Codex model": "正在更新 Codex 模型",
+            "Archiving Codex session": "正在归档 Codex 会话",
+            "Validating Codex model": "正在验证 Codex 模型",
+            "Codex is working": "Codex 正在处理",
+            "Codex completed": "Codex 已完成",
+            "No Codex sessions found": "未找到 Codex 会话",
+            "Resolving target session": "正在匹配目标会话",
+            "Session search completed": "会话搜索已完成",
+            "Codex model updated": "Codex 模型已更新",
+            "Codex session archived": "Codex 会话已归档",
+            "Stopping Codex": "正在停止 Codex",
+            "Codex stopped": "Codex 已停止",
+            "Codex failed": "Codex 失败",
+          },
+        },
+      }[locale];
+      const localizeStatus = (value, running, failed, cancelled) => {
+        const fallback = cancelled
+          ? copy.cancelled
+          : failed
+            ? copy.failed
+            : running
+              ? copy.running
+              : copy.complete;
+        const raw = String(value || "");
+        if (!raw) return fallback;
+        const elapsedMatch = raw.match(/\s*·\s*(\d+)s$/i);
+        const phase = elapsedMatch ? raw.slice(0, elapsedMatch.index).trim() : raw;
+        let localized = copy.statuses[phase] || phase;
+        if (locale === "zh" && phase.startsWith("Codex failed")) {
+          localized = `${copy.statuses["Codex failed"]}${phase.slice("Codex failed".length)}`;
+        }
+        return elapsedMatch
+          ? `${localized} · ${elapsedMatch[1]} ${copy.seconds}`
+          : localized;
+      };
+      const isInternalAsyncNotice = (value) =>
+        /\.\s*Tool call ID:\s*.+?\.\s*The final result will be delivered asynchronously\.\s*$/.test(
+          String(value || ""),
+        );
+      const safeLinkTarget = (value) => {
+        const target = String(value || "").trim();
+        return /^(?:https?:|mailto:)/i.test(target) ? target : null;
+      };
+      const appendInlineMarkdown = (parent, markdown) => {
+        let remaining = String(markdown || "");
+        while (remaining) {
+          let match = remaining.match(/^\\([\\`*_[\]{}()#+.!|>~-])/);
+          if (match) {
+            parent.append(document.createTextNode(match[1]));
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^(`+)([\s\S]*?)\1(?!`)/);
+          if (match) {
+            const code = document.createElement("code");
+            code.textContent = match[2].replace(/^ | $/g, "");
+            parent.append(code);
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^\[([^\]]+)]\(([^\s)]+)(?:\s+["'][^"']*["'])?\)/);
+          if (match) {
+            const target = safeLinkTarget(match[2]);
+            if (target) {
+              const link = document.createElement("a");
+              link.href = target;
+              link.rel = "noreferrer noopener";
+              appendInlineMarkdown(link, match[1]);
+              parent.append(link);
+            } else {
+              appendInlineMarkdown(parent, match[1]);
+            }
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^<((?:https?:\/\/|mailto:)[^>]+)>/i);
+          if (match) {
+            const link = document.createElement("a");
+            link.href = match[1];
+            link.rel = "noreferrer noopener";
+            link.textContent = match[1];
+            parent.append(link);
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^(\*\*|__)(?=\S)([\s\S]*?\S)\1/);
+          if (match) {
+            const strong = document.createElement("strong");
+            appendInlineMarkdown(strong, match[2]);
+            parent.append(strong);
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^~~(?=\S)([\s\S]*?\S)~~/);
+          if (match) {
+            const deleted = document.createElement("del");
+            appendInlineMarkdown(deleted, match[1]);
+            parent.append(deleted);
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          match = remaining.match(/^(\*|_)(?=\S)([\s\S]*?\S)\1/);
+          if (match) {
+            const emphasis = document.createElement("em");
+            appendInlineMarkdown(emphasis, match[2]);
+            parent.append(emphasis);
+            remaining = remaining.slice(match[0].length);
+            continue;
+          }
+          const nextToken = remaining.slice(1).search(/[\\`*_[~<]/);
+          const length = nextToken < 0 ? remaining.length : nextToken + 1;
+          parent.append(document.createTextNode(remaining.slice(0, length)));
+          remaining = remaining.slice(length);
+        }
+      };
+      const splitTableRow = (line) => {
+        let value = String(line || "").trim();
+        if (value.startsWith("|")) value = value.slice(1);
+        if (value.endsWith("|") && !value.endsWith("\\|")) value = value.slice(0, -1);
+        const cells = [];
+        let cell = "";
+        let escaped = false;
+        let codeTicks = 0;
+        for (let index = 0; index < value.length; index += 1) {
+          const character = value[index];
+          if (escaped) {
+            cell += character;
+            escaped = false;
+          } else if (character === "\\") {
+            escaped = true;
+            cell += character;
+          } else if (character === "`") {
+            let count = 1;
+            while (value[index + count] === "`") count += 1;
+            const ticks = "`".repeat(count);
+            codeTicks = codeTicks === count ? 0 : codeTicks === 0 ? count : codeTicks;
+            cell += ticks;
+            index += count - 1;
+          } else if (character === "|" && codeTicks === 0) {
+            cells.push(cell.trim().replace(/\\\|/g, "|"));
+            cell = "";
+          } else {
+            cell += character;
+          }
+        }
+        cells.push(cell.trim().replace(/\\\|/g, "|"));
+        return cells;
+      };
+      const tableAlignment = (line) => {
+        const cells = splitTableRow(line);
+        if (!cells.length || !cells.every((cell) => /^:?-{3,}:?$/.test(cell))) return null;
+        return cells.map((cell) =>
+          cell.startsWith(":") && cell.endsWith(":")
+            ? "center"
+            : cell.endsWith(":")
+              ? "right"
+              : "left",
+        );
+      };
+      const startsMarkdownBlock = (lines, index) => {
+        const line = lines[index] || "";
+        return (
+          /^\s*$/.test(line) ||
+          /^\s{0,3}(?:`{3,}|~{3,})/.test(line) ||
+          /^\s{0,3}#{1,6}\s+/.test(line) ||
+          /^\s{0,3}(?:[-*_]\s*){3,}$/.test(line) ||
+          /^\s{0,3}>\s?/.test(line) ||
+          /^\s{0,3}(?:[-+*]|\d+[.)])\s+/.test(line) ||
+          (index + 1 < lines.length && tableAlignment(lines[index + 1]) !== null)
+        );
+      };
+      const renderMarkdown = (container, markdown) => {
+        const lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
+        const fragment = document.createDocumentFragment();
+        let index = 0;
+        while (index < lines.length) {
+          const line = lines[index];
+          if (/^\s*$/.test(line)) {
+            index += 1;
+            continue;
+          }
+          const fence = line.match(/^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)\s*$/);
+          if (fence) {
+            const marker = fence[1][0];
+            const minimum = fence[1].length;
+            const content = [];
+            index += 1;
+            while (index < lines.length && !new RegExp(`^\\s{0,3}${marker}{${minimum},}\\s*$`).test(lines[index])) {
+              content.push(lines[index]);
+              index += 1;
+            }
+            if (index < lines.length) index += 1;
+            const pre = document.createElement("pre");
+            const code = document.createElement("code");
+            if (fence[2]) code.dataset.language = fence[2];
+            code.textContent = content.join("\n");
+            pre.append(code);
+            fragment.append(pre);
+            continue;
+          }
+          const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+          if (heading) {
+            const element = document.createElement(`h${heading[1].length}`);
+            appendInlineMarkdown(element, heading[2]);
+            fragment.append(element);
+            index += 1;
+            continue;
+          }
+          if (/^\s{0,3}(?:[-*_]\s*){3,}$/.test(line)) {
+            fragment.append(document.createElement("hr"));
+            index += 1;
+            continue;
+          }
+          if (/^\s{0,3}>\s?/.test(line)) {
+            const quoteLines = [];
+            while (index < lines.length && /^\s{0,3}>\s?/.test(lines[index])) {
+              quoteLines.push(lines[index].replace(/^\s{0,3}>\s?/, ""));
+              index += 1;
+            }
+            const quote = document.createElement("blockquote");
+            renderMarkdown(quote, quoteLines.join("\n"));
+            fragment.append(quote);
+            continue;
+          }
+          const listItem = line.match(/^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/);
+          if (listItem) {
+            const ordered = /^\d/.test(listItem[1]);
+            const list = document.createElement(ordered ? "ol" : "ul");
+            while (index < lines.length) {
+              const candidate = lines[index].match(/^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/);
+              if (!candidate || /^\d/.test(candidate[1]) !== ordered) break;
+              const item = document.createElement("li");
+              appendInlineMarkdown(item, candidate[2]);
+              list.append(item);
+              index += 1;
+            }
+            fragment.append(list);
+            continue;
+          }
+          const alignments = index + 1 < lines.length ? tableAlignment(lines[index + 1]) : null;
+          if (alignments) {
+            const headers = splitTableRow(line);
+            if (headers.length === alignments.length) {
+              const wrapper = document.createElement("div");
+              wrapper.className = "table-scroll";
+              const table = document.createElement("table");
+              const head = document.createElement("thead");
+              const headRow = document.createElement("tr");
+              headers.forEach((value, cellIndex) => {
+                const cell = document.createElement("th");
+                cell.style.textAlign = alignments[cellIndex];
+                appendInlineMarkdown(cell, value);
+                headRow.append(cell);
+              });
+              head.append(headRow);
+              table.append(head);
+              index += 2;
+              const body = document.createElement("tbody");
+              while (index < lines.length && lines[index].includes("|") && !/^\s*$/.test(lines[index])) {
+                const values = splitTableRow(lines[index]);
+                const row = document.createElement("tr");
+                alignments.forEach((alignment, cellIndex) => {
+                  const cell = document.createElement("td");
+                  cell.style.textAlign = alignment;
+                  appendInlineMarkdown(cell, values[cellIndex] || "");
+                  row.append(cell);
+                });
+                body.append(row);
+                index += 1;
+              }
+              table.append(body);
+              wrapper.append(table);
+              fragment.append(wrapper);
+              continue;
+            }
+          }
+          const paragraphLines = [line.trim()];
+          index += 1;
+          while (index < lines.length && !startsMarkdownBlock(lines, index)) {
+            paragraphLines.push(lines[index].trim());
+            index += 1;
+          }
+          const paragraph = document.createElement("p");
+          appendInlineMarkdown(paragraph, paragraphLines.join("\n"));
+          fragment.append(paragraph);
+        }
+        container.replaceChildren(fragment);
       };
       const render = (event, message = "") => {
-        const failed = /failed|error/i.test(event.status || "");
-        let displayMessage = message;
-        let details = labels[event.toolName] || String(event.toolName || "").replaceAll("_", " ");
-        if (message.startsWith("{")) {
+        const outcome = event.outcome || (event.running ? "running" : "complete");
+        const cancelled = outcome === "cancelled";
+        const failed = !cancelled && /failed|error/i.test(event.status || "");
+        let displayMessage = isInternalAsyncNotice(message) ? "" : message;
+        let details = copy.actions[event.toolName] || String(event.toolName || "").replaceAll("_", " ");
+        if (displayMessage.startsWith("{")) {
           try {
-            const output = JSON.parse(message);
-            displayMessage = output.message || message;
+            const output = JSON.parse(displayMessage);
+            displayMessage = output.message || displayMessage;
             const settings = [output.model, output.effort].filter(Boolean).join(" · ");
             details = [details, settings].filter(Boolean).join(" · ");
           } catch (_) {
             displayMessage = message;
           }
         }
-        byId("title").textContent = "Codex";
-        byId("status").textContent = event.status || (event.running ? "Running" : "Complete");
-        byId("message").textContent = displayMessage;
+        byId("title").textContent = copy.title;
+        byId("status").textContent = localizeStatus(
+          event.status,
+          event.running,
+          failed,
+          cancelled,
+        );
+        renderMarkdown(byId("message"), displayMessage);
         byId("meta").textContent = details;
-        byId("badge").textContent = failed ? "Failed" : event.running ? "Running" : "Complete";
-        byId("badge").classList.toggle("complete", !event.running && !failed);
+        byId("badge").textContent = cancelled
+          ? copy.cancelled
+          : failed
+            ? copy.failed
+            : event.running
+              ? copy.running
+              : copy.complete;
+        byId("badge").classList.toggle("complete", outcome === "complete" && !failed);
+        byId("badge").classList.toggle("cancelled", cancelled);
         byId("badge").classList.toggle("failed", failed);
       };
+      byId("title").textContent = copy.title;
+      byId("status").textContent = copy.preparing;
+      byId("badge").textContent = copy.running;
       window.xtalkToolUI.status((event) => render(event));
       window.xtalkToolUI.emit((event) => render(event, event.message));
     </script>

@@ -17,11 +17,23 @@ const clientMap: ActionToFunctionMap = {
         conversation.state.streamState = 'speaking';
     },
     "client_audio_playback_finished": async (data, websocket, conversation, outputAudioSession) => {
+        if (typeof data?.response_id !== "string" || !data.response_id) {
+            return;
+        }
         conversation.state.streamState = 'idle';
-        websocket.sendJson({ action: "tts_playback_finished" })
+        websocket.sendJson({
+            action: "tts_playback_finished",
+            response_id: data.response_id,
+        })
     },
     "client_audio_chunk_played": async (data, websocket, conversation, outputAudioSession) => {
-        websocket.sendJson({ action: "tts_chunk_played" })
+        if (typeof data?.response_id !== "string" || !data.response_id) {
+            return;
+        }
+        websocket.sendJson({
+            action: "tts_chunk_played",
+            response_id: data.response_id,
+        })
     }
 };
 

@@ -12,7 +12,17 @@ from pathlib import Path
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = APP_ROOT.parent
 CORE_IMPORT = re.compile(r"""from\s+["']xtalk-client/|import\s+["']xtalk-client/""")
-PUBLIC_XTALK_MODULES = frozenset({"xtalk.models.agents.tools"})
+APPROVED_XTALK_MODULES = frozenset(
+    {
+        "xtalk.models.agents.default",
+        "xtalk.models.agents.interfaces",
+        "xtalk.models.agents.tools",
+        "xtalk.models.agents.tools.utils",
+        "xtalk.models.asr.sherpa_onnx_asr",
+        "xtalk.models.tts.moss_tts_nano",
+        "xtalk.models.tts.sherpa_onnx_tts",
+    }
+)
 FORBIDDEN_PATHS = (
     "frontend/src/platforms/tauri.ts",
     "frontend/src/bases/local-capabilities.ts",
@@ -33,7 +43,9 @@ def iter_python_sources() -> list[Path]:
     return sorted(
         path
         for path in APP_ROOT.rglob("*.py")
-        if not any(part in {".venv", ".build"} for part in path.parts)
+        if not any(
+            part in {".venv", ".build", "build"} for part in path.parts
+        )
     )
 
 
@@ -48,7 +60,7 @@ def verify_python_imports() -> None:
                 for alias in node.names:
                     if (
                         alias.name == "xtalk"
-                        or alias.name in PUBLIC_XTALK_MODULES
+                        or alias.name in APPROVED_XTALK_MODULES
                         or not alias.name.startswith("xtalk.")
                     ):
                         continue
@@ -57,7 +69,7 @@ def verify_python_imports() -> None:
                 module = node.module or ""
                 if (
                     module.startswith("xtalk.")
-                    and module not in PUBLIC_XTALK_MODULES
+                    and module not in APPROVED_XTALK_MODULES
                 ):
                     violations.append(f"{path.relative_to(APP_ROOT)}:{node.lineno}: from {module}")
     if violations:

@@ -1,4 +1,4 @@
-"""Integration checks driven by the repository sample model configuration."""
+"""Integration checks driven by an explicitly configured model configuration."""
 
 from __future__ import annotations
 
@@ -11,9 +11,10 @@ import pytest
 from backend.config import StartupConfig, build_effective_config
 from backend.xtalk_adapter import build_xtalk_runtime
 
+from config_path import require_test_config_path
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-SAMPLE_CONFIG = REPOSITORY_ROOT / "server_configs" / "sample.json"
 VAD_MODEL = (
     REPOSITORY_ROOT
     / "app"
@@ -24,13 +25,15 @@ VAD_MODEL = (
 )
 
 
-def build_launch_config(tmp_path: Path) -> StartupConfig:
-    """Create a launch configuration that reads the required sample config.
+def build_launch_config(tmp_path: Path, config_path: Path) -> StartupConfig:
+    """Create a launch configuration that reads the given model config.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Temporary application data directory.
+    config_path : pathlib.Path
+        Existing model configuration file to launch with.
 
     Returns
     -------
@@ -46,7 +49,7 @@ def build_launch_config(tmp_path: Path) -> StartupConfig:
         {
             "protocol_version": 1,
             "token": "integration-token-with-at-least-32-bytes",
-            "config_path": str(SAMPLE_CONFIG),
+            "config_path": str(config_path),
             "data_dir": str(tmp_path),
             "origins": ["tauri://localhost"],
             "config_fallbacks": {
@@ -60,11 +63,12 @@ def build_launch_config(tmp_path: Path) -> StartupConfig:
     )
 
 
-def test_effective_config_uses_repository_sample(tmp_path: Path) -> None:
-    """Load all base model slots from ``server_configs/sample.json``."""
+def test_effective_config_uses_configured_sample(tmp_path: Path) -> None:
+    """Load all base model slots from the configured model configuration."""
 
-    effective = build_effective_config(build_launch_config(tmp_path))
-    sample = json.loads(SAMPLE_CONFIG.read_text(encoding="utf-8"))
+    config_path = require_test_config_path()
+    effective = build_effective_config(build_launch_config(tmp_path, config_path))
+    sample = json.loads(config_path.read_text(encoding="utf-8"))
     for slot in ("asr", "llm_agent", "tts"):
         assert effective[slot] == sample[slot]
     assert effective["vad"] == {
@@ -90,6 +94,7 @@ def test_configured_runtime_builds_from_sample(tmp_path: Path) -> None:
 
     if os.environ.get("XTALK_RUN_MODEL_TESTS") != "1":
         pytest.skip("set XTALK_RUN_MODEL_TESTS=1 to instantiate configured models")
-    effective = build_effective_config(build_launch_config(tmp_path))
+    config_path = require_test_config_path()
+    effective = build_effective_config(build_launch_config(tmp_path, config_path))
     runtime = build_xtalk_runtime(effective)
     assert runtime is not None

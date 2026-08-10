@@ -5,12 +5,14 @@ import {
   applyNativeToolChanges,
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
+  deleteNativeCredential,
   ensureNativeBackendStarted,
+  getNativeCredentials,
   getNativeManagedModelPlan,
   getNativeBackendConnection,
-  getNativeWebSearchSettings,
   getNativeInstalledTools,
   getNativeModelConfigSelection,
+  getNativeRecommendedModelConfig,
   getNativeToolUiSource,
   getNativeWakeWordSettings,
   installNativeToolDirectory,
@@ -21,16 +23,19 @@ import {
   pauseNativeWakeWord,
   removeNativeInstalledTool,
   resumeNativeWakeWord,
+  saveNativeCredential,
   setNativeToolEnabled,
   setNativeWakeWordEnabled,
+  type NativeBackendConnection,
   type NativeManagedModelProgress,
+  type NativeCredentialDefinition,
   type NativeModelConfigSelection,
   type NativeToolDefinition,
-  type NativeWebSearchSettings,
   type NativeWakeWordSettings,
 } from "./adapters/native-capabilities";
 import {
   XtalkClientAdapter,
+  type DesktopMessage,
   type DesktopSessionSnapshot,
   type DesktopSessionSummary,
 } from "./adapters/xtalk-client-adapter";
@@ -56,6 +61,11 @@ import {
   ToolUIFrame,
   type ToolUICapabilities,
 } from "./tool-ui-frame";
+import {
+  listenWhiteboardWindowHidden,
+  persistWhiteboardVisiblePreference,
+  setWhiteboardWindowVisible,
+} from "./whiteboard-window";
 
 const EMPTY_SNAPSHOT: DesktopSessionSnapshot = {
   connectionState: "disconnected",
@@ -85,6 +95,7 @@ const WAKE_WORD_SUMMARY_KEYS: Record<
   paused: "wakeWord.statePaused",
   error: "wakeWord.stateError",
 };
+const WHITEBOARD_TOOL_ID = "builtin:whiteboard";
 
 const elements = {
   app: requireElement<HTMLElement>("app"),
@@ -106,25 +117,48 @@ const elements = {
   selectModelConfigButton: requireElement<HTMLButtonElement>(
     "select-model-config-button",
   ),
-  webSearchEnabledToggle: requireElement<HTMLInputElement>(
-    "web-search-enabled-toggle",
+  firstLaunchDialog: requireElement<HTMLDialogElement>(
+    "first-launch-dialog",
   ),
-  webSearchConfigureKeyButton: requireElement<HTMLButtonElement>(
-    "web-search-configure-key-button",
+  recommendedConfigButton: requireElement<HTMLButtonElement>(
+    "recommended-config-button",
   ),
-  webSearchApiKeyDialog: requireElement<HTMLDialogElement>(
-    "web-search-api-key-dialog",
+  customConfigButton: requireElement<HTMLButtonElement>(
+    "custom-config-button",
   ),
-  webSearchApiKeyForm: requireElement<HTMLFormElement>(
-    "web-search-api-key-form",
+  firstLaunchCancelButton: requireElement<HTMLButtonElement>(
+    "first-launch-cancel-button",
   ),
-  webSearchApiKeyDialogInput: requireElement<HTMLInputElement>(
-    "web-search-api-key-dialog-input",
+  llmKeyDialog: requireElement<HTMLDialogElement>("llm-key-dialog"),
+  llmKeyForm: requireElement<HTMLFormElement>("llm-key-form"),
+  llmKeyInput: requireElement<HTMLInputElement>("llm-key-input"),
+  llmKeySkipButton: requireElement<HTMLButtonElement>(
+    "llm-key-skip-button",
   ),
-  webSearchApiKeyCancelButton: requireElement<HTMLButtonElement>(
-    "web-search-api-key-cancel-button",
+  credentialsList: requireElement<HTMLElement>("credentials-list"),
+  credentialsStatus: requireElement<HTMLElement>("credentials-status"),
+  credentialDialog: requireElement<HTMLDialogElement>("credential-dialog"),
+  credentialForm: requireElement<HTMLFormElement>("credential-form"),
+  credentialDialogLabel: requireElement<HTMLElement>("credential-dialog-label"),
+  credentialDialogInput: requireElement<HTMLInputElement>(
+    "credential-dialog-input",
   ),
-  webSearchStatus: requireElement<HTMLElement>("web-search-status"),
+  credentialCancelButton: requireElement<HTMLButtonElement>(
+    "credential-cancel-button",
+  ),
+  deleteSessionDialog: requireElement<HTMLDialogElement>(
+    "delete-session-dialog",
+  ),
+  deleteSessionForm: requireElement<HTMLFormElement>("delete-session-form"),
+  deleteSessionDialogBody: requireElement<HTMLElement>(
+    "delete-session-dialog-body",
+  ),
+  deleteSessionCancelButton: requireElement<HTMLButtonElement>(
+    "delete-session-cancel-button",
+  ),
+  applyCredentialChangesButton: requireElement<HTMLButtonElement>(
+    "apply-credential-changes-button",
+  ),
   wakeWordEnabledToggle: requireElement<HTMLInputElement>(
     "wake-word-enabled-toggle",
   ),
@@ -214,11 +248,38 @@ const elements = {
     "close-managed-progress-button",
   ),
   callButton: requireElement<HTMLButtonElement>("call-button"),
+  whiteboardButton: requireElement<HTMLButtonElement>("whiteboard-button"),
   muteButton: requireElement<HTMLButtonElement>("mute-button"),
   retryButton: requireElement<HTMLButtonElement>("retry-button"),
   languageSelect: requireElement<HTMLSelectElement>("language-select"),
   languageSummary: requireElement<HTMLElement>("language-summary"),
 };
+
+// Diagnostic trace for the whiteboard window flow. The desktop shell reads
+// this key to see exactly where a toggle stops when the window does not open.
+const WHITEBOARD_TRACE_KEY = "xtalk.whiteboard.trace";
+
+function traceWhiteboard(step: string, details?: unknown): void {
+  try {
+    localStorage.setItem(
+      WHITEBOARD_TRACE_KEY,
+      JSON.stringify({
+        step,
+        details: details === undefined ? null : String(details),
+        at: Date.now(),
+      }),
+    );
+  } catch {
+    // The trace must never break the whiteboard flow itself.
+  }
+}
+
+window.addEventListener("error", (event) => {
+  traceWhiteboard(
+    "window-error",
+    event.error instanceof Error ? event.error.message : event.message,
+  );
+});
 
 let adapter: XtalkClientAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -229,8 +290,9 @@ let sessionOperation = false;
 let sendingText = false;
 let modelConfigOperation = false;
 let toolOperation = false;
-let webSearchChangesPending = false;
+let credentialOperation = false;
 let developerToolChangesPending = false;
+let credentialChangesPending = false;
 let diagnosticsOpen = false;
 let toolsDialogOpen = false;
 let managedProgressState: "closed" | "running" | "failed" = "closed";
@@ -241,14 +303,16 @@ let sidebarOpen = false;
 let sessionListOperation = false;
 let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
-let webSearchSettings: NativeWebSearchSettings | null = null;
 let wakeWordSettings: NativeWakeWordSettings | null = null;
 let wakeWordOperation = false;
 let pendingWakeWordActivation = false;
 let backgroundingRequested = false;
-let pendingWebSearchApiKey: string | null = null;
-let enableWebSearchAfterKeyDialog = false;
+let recommendedConfigPath: string | null = null;
+let credentials: NativeCredentialDefinition[] = [];
+let selectedCredentialId: string | null = null;
 let installedTools: NativeToolDefinition[] = [];
+let whiteboardVisible = false;
+let whiteboardAutoShown = false;
 let activeToolUISessionId: string | null = null;
 let toolUIOrder = 0;
 let toolUIHistory: ToolUIHistoryItem[] = [];
@@ -256,15 +320,19 @@ let toolUILiveExpanded = false;
 const toolUILive = new Map<string, ToolUILiveItem>();
 const toolUIRows = new Map<string, ToolUIRow>();
 const toolUISourceCache = new Map<string, Promise<string>>();
+let toolUIFrameLanguage = getResolvedLanguage();
 const toolUICapabilities = new Map<
   string,
   Partial<ToolUICapabilities>
 >();
 let persistedSessions: DesktopSessionSummary[] = [];
 let sessionListError: string | null = null;
+let backendConnection: NativeBackendConnection | null = null;
+let pendingDeleteSessionId: string | null = null;
 let latestSnapshot = EMPTY_SNAPSHOT;
 let sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionActivityKey = "";
+const ACTIVE_SESSION_STORAGE_KEY = "xtalk.desktop.active-session.v1";
 let backendStatusKey: TranslationKey = "service.starting";
 let visibleError:
   | {
@@ -297,26 +365,37 @@ interface ToolUIRow {
   mode: "live" | "history";
 }
 
+interface MessageRowState {
+  row: HTMLElement;
+  body: HTMLElement;
+  contentHost: HTMLElement;
+  spans: HTMLSpanElement[];
+  actions: HTMLElement | null;
+}
+
+type MessageContentPart =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; id: string; element: HTMLElement };
+
+/**
+ * Reused message row elements keyed by stable desktop message identity.
+ *
+ * Tool UI rows are embedded inside assistant messages, and WKWebView reloads
+ * an iframe whenever its element is removed and reinserted into the document.
+ * Keeping message rows stable means embedded tool iframes stay mounted across
+ * snapshot renders instead of flashing on every text or status update.
+ */
+const messageRowStates = new Map<string, MessageRowState>();
+
 const TOOL_UI_HISTORY_PREFIX = "xtalk.tool-ui-history.v1:";
 const MAX_TOOL_UI_HISTORY_ITEMS = 200;
 const MESSAGE_COPY_CONFIRMATION_MS = 1_600;
-const IME_COMPOSITION_COMMIT_GUARD_MS = 250;
 const copiedMessageIds = new Set<string>();
 const copiedMessageTimers = new Map<string, number>();
 let messageInputCompositionActive = false;
-let messageInputCompositionCommitPending = false;
-let messageInputCompositionGuardTimer: number | null = null;
+let messageInputCompositionEnterHeld = false;
 
-/** Clear the one-key guard created when an IME composition is committed. */
-function clearMessageInputCompositionGuard(): void {
-  messageInputCompositionCommitPending = false;
-  if (messageInputCompositionGuardTimer !== null) {
-    window.clearTimeout(messageInputCompositionGuardTimer);
-    messageInputCompositionGuardTimer = null;
-  }
-}
-
-/** Return whether an Enter key belongs to an active or just-ended IME edit. */
+/** Return whether Enter is confirming an IME edit or is still the same held key. */
 function isMessageInputCompositionEnter(event: KeyboardEvent): boolean {
   if (event.key !== "Enter") {
     return false;
@@ -326,13 +405,10 @@ function isMessageInputCompositionEnter(event: KeyboardEvent): boolean {
     messageInputCompositionActive ||
     event.keyCode === 229
   ) {
+    messageInputCompositionEnterHeld = true;
     return true;
   }
-  if (messageInputCompositionCommitPending) {
-    clearMessageInputCompositionGuard();
-    return true;
-  }
-  return false;
+  return messageInputCompositionEnterHeld;
 }
 
 function requireElement<T extends HTMLElement>(id: string): T {
@@ -392,6 +468,7 @@ function setBackendStatus(
 }
 
 function applyUiLanguage(): void {
+  resetToolUIRowsIfLanguageChanged();
   translateDocument();
   renderVisibleError();
   const preference = getLanguagePreference();
@@ -415,15 +492,14 @@ function applyUiLanguage(): void {
   updateNetworkStatus();
   renderModelConfigSelection({ configPath: modelConfigPath });
   renderInstalledTools(installedTools);
-  if (webSearchSettings !== null) {
-    renderWebSearchSettings(webSearchSettings);
-  }
   if (wakeWordSettings !== null) {
     renderWakeWordSettings(wakeWordSettings);
   }
+  renderCredentials(credentials);
   updateDeveloperToolsStatus();
   renderSnapshot(latestSnapshot);
   renderManagedProgress();
+  updateWhiteboardButton();
 }
 
 function isCompactLayout(): boolean {
@@ -451,6 +527,7 @@ function setSidebarOpen(open: boolean, moveFocus = true): void {
 function setDiagnosticsOpen(open: boolean): void {
   if (open) {
     setToolsDialogOpen(false, false);
+    void refreshCredentials().catch(() => undefined);
   }
   diagnosticsOpen = open;
   elements.debugDrawer.classList.toggle("is-open", open);
@@ -490,10 +567,16 @@ function managedServiceName(serviceId: string): string {
       return "SenseVoice Small";
     case "sensevoice-small-mlx":
       return "SenseVoice Small (MLX)";
+    case "agentic-asr-refiner":
+      return "AgenticASR Refiner";
+    case "agentic-asr-refiner-mlx":
+      return "AgenticASR Refiner (MLX)";
     case "moss-tts-nano":
       return "MOSS-TTS-Nano";
     case "moss-tts-nano-mlx":
       return "MOSS-TTS-Nano (MLX)";
+    case "matcha-icefall-zh-en":
+      return "Matcha Icefall (ZH/EN)";
     default:
       return serviceId;
   }
@@ -702,6 +785,11 @@ function setMainView(view: "orb" | "chat"): void {
 function renderChatSessions(): void {
   const activeSessionId = latestSnapshot.sessionId;
   const rows = persistedSessions.map((session) => {
+    const row = document.createElement("div");
+    row.className = "chat-session-row";
+    row.dataset.sessionId = session.id;
+    row.classList.toggle("is-active", session.id === activeSessionId);
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chat-session-button";
@@ -730,7 +818,42 @@ function renderChatSessions(): void {
     button.addEventListener("click", () => {
       void switchChatSession(session.id);
     });
-    return button;
+    row.append(button);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "chat-session-delete";
+    deleteButton.setAttribute(
+      "aria-label",
+      t("sidebar.deleteSessionAria"),
+    );
+    deleteButton.title = t("sidebar.delete");
+    const trash = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    );
+    trash.setAttribute("viewBox", "0 0 24 24");
+    trash.setAttribute("aria-hidden", "true");
+    trash.setAttribute("fill", "none");
+    trash.setAttribute("stroke", "currentColor");
+    trash.setAttribute("stroke-width", "2");
+    trash.setAttribute("stroke-linecap", "round");
+    trash.setAttribute("stroke-linejoin", "round");
+    const trashPath = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    trashPath.setAttribute(
+      "d",
+      "M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+    );
+    trash.append(trashPath);
+    deleteButton.append(trash);
+    deleteButton.addEventListener("click", () => {
+      openDeleteSessionDialog(session.id, session.title);
+    });
+    row.append(deleteButton);
+    return row;
   });
 
   elements.chatSessionList.replaceChildren(...rows);
@@ -764,6 +887,66 @@ function updateSessionControls(): void {
     "button",
   )) {
     button.disabled = unavailable || sessionListOperation;
+  }
+}
+
+function openDeleteSessionDialog(
+  sessionId: string,
+  title: string | null,
+): void {
+  pendingDeleteSessionId = sessionId;
+  const displayTitle = title?.trim() || t("sidebar.newConversation");
+  elements.deleteSessionDialogBody.textContent = t(
+    "sidebar.deleteConfirm",
+    { title: displayTitle },
+  );
+  elements.deleteSessionDialog.showModal();
+  elements.deleteSessionCancelButton.focus();
+}
+
+function cancelDeleteSessionDialog(): void {
+  pendingDeleteSessionId = null;
+  elements.deleteSessionDialog.close();
+}
+
+async function deletePendingSession(): Promise<void> {
+  const sessionId = pendingDeleteSessionId;
+  pendingDeleteSessionId = null;
+  elements.deleteSessionDialog.close();
+  if (sessionId === null || backendConnection === null) {
+    return;
+  }
+  try {
+    const response = await fetch(
+      `${backendConnection.origin}/app/api/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          "X-XTalk-App-Token": backendConnection.launchToken,
+          Origin: "tauri://localhost",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    persistedSessions = persistedSessions.filter(
+      (session) => session.id !== sessionId,
+    );
+    try {
+      localStorage.removeItem(`${TOOL_UI_HISTORY_PREFIX}${sessionId}`);
+    } catch {
+      // Keep the in-memory cleanup even when storage is unavailable.
+    }
+    if (latestSnapshot.sessionId === sessionId) {
+      await switchChatSession(null);
+    } else {
+      renderChatSessions();
+    }
+  } catch (error) {
+    showError("sidebar.deleteFailed", { error });
+    renderChatSessions();
   }
 }
 
@@ -841,6 +1024,12 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
   try {
     await activeAdapter.switchSession(sessionId);
     await resumeWakeWordAfterConversation();
+    persistActiveSessionId(sessionId);
+    // Switching conversations collapses the whiteboard so the previous
+    // conversation's board never follows into the newly opened chat. The
+    // first whiteboard tool emit in the new conversation auto-opens it again.
+    whiteboardAutoShown = false;
+    await setWhiteboardVisible(false);
     setMainView(sessionId === null ? "orb" : "chat");
     await refreshChatSessions();
     if (isCompactLayout()) {
@@ -859,6 +1048,29 @@ async function switchChatSession(sessionId: string | null): Promise<void> {
       void disconnectSession();
     }
   }
+}
+
+/**
+ * Reads the app-owned active session independently of the sidecar's random port.
+ *
+ * @returns The last selected persisted session, or `null` for a new chat.
+ */
+function readActiveSessionId(): string | null {
+  const sessionId = localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+  return sessionId?.trim() || null;
+}
+
+/**
+ * Persists the selected session across full application and sidecar restarts.
+ *
+ * @param sessionId Persisted session identifier, or `null` for a new chat.
+ */
+function persistActiveSessionId(sessionId: string | null): void {
+  if (sessionId === null) {
+    localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
 }
 
 function updateNetworkStatus(): void {
@@ -1064,25 +1276,83 @@ function updateOrbPresentation(snapshot: DesktopSessionSnapshot): void {
   elements.orbCaption.textContent = t("orb.openChatHint");
 }
 
+function whiteboardToolAvailable(): boolean {
+  return installedTools.some(
+    (tool) => tool.id === WHITEBOARD_TOOL_ID && tool.enabled,
+  );
+}
+
+function updateWhiteboardButton(): void {
+  elements.whiteboardButton.hidden = !whiteboardToolAvailable();
+  elements.whiteboardButton.classList.toggle("is-active", whiteboardVisible);
+  elements.whiteboardButton.setAttribute(
+    "aria-pressed",
+    String(whiteboardVisible),
+  );
+  const labelKey = whiteboardVisible ? "whiteboard.hide" : "whiteboard.show";
+  elements.whiteboardButton.setAttribute("aria-label", t(labelKey));
+  elements.whiteboardButton.title = t(labelKey);
+}
+
+async function setWhiteboardVisible(visible: boolean): Promise<void> {
+  whiteboardVisible = visible;
+  persistWhiteboardVisiblePreference(visible);
+  traceWhiteboard("persisted", visible);
+  try {
+    updateWhiteboardButton();
+    traceWhiteboard("button-updated");
+    await setWhiteboardWindowVisible(visible);
+    traceWhiteboard("invoke-ok", visible);
+  } catch (error) {
+    // The native whiteboard window is unavailable. Keep the button state
+    // consistent and surface the failure so it can be diagnosed.
+    traceWhiteboard(
+      "invoke-error",
+      error instanceof Error ? error.message : String(error),
+    );
+    console.error("Failed to toggle the whiteboard window.", error);
+  }
+}
+
+function handleWhiteboardEmit(): void {
+  if (whiteboardAutoShown && whiteboardVisible) {
+    return;
+  }
+  whiteboardAutoShown = true;
+  void setWhiteboardVisible(true);
+}
+
 function handleToolUIEvent(event: ToolUIEvent): void {
   const sessionId = event.sessionId ?? latestSnapshot.sessionId;
   if (sessionId === null || !toolHasUI(event.toolId)) {
     return;
   }
+  if (event.toolId === WHITEBOARD_TOOL_ID) {
+    if (event.type === "tool_ui.emit") {
+      handleWhiteboardEmit();
+    }
+    return;
+  }
+  const anchorMessageIndex =
+    sessionId === latestSnapshot.sessionId
+      ? findToolUIAnchorMessageIndex(latestSnapshot.messages)
+      : Number.MAX_SAFE_INTEGER;
   if (event.type === "tool_ui.emit") {
+    if (!event.running && sessionId === activeToolUISessionId) {
+      toolUILive.delete(event.callId);
+      removeToolUIRow(`live:${event.callId}`);
+    }
     const item: ToolUIHistoryItem = {
       kind: "history",
-      id: `history:${event.callId}:${event.sequence}`,
-      anchorMessageIndex:
-        sessionId === latestSnapshot.sessionId
-          ? latestSnapshot.messages.length
-          : Number.MAX_SAFE_INTEGER,
+      id: `history:${event.callId}`,
+      anchorMessageIndex,
       order: ++toolUIOrder,
       event: { ...event, sessionId },
     };
     const history = appendToolUIHistory(sessionId, item);
     if (sessionId === activeToolUISessionId) {
       toolUIHistory = history;
+      toolUIRows.get(item.id)?.frame?.emit(item.event);
     }
   } else if (sessionId === activeToolUISessionId) {
     const id = `live:${event.callId}`;
@@ -1092,7 +1362,7 @@ function handleToolUIEvent(event: ToolUIEvent): void {
         kind: "live",
         id,
         anchorMessageIndex:
-          existing?.anchorMessageIndex ?? latestSnapshot.messages.length,
+          existing?.anchorMessageIndex ?? anchorMessageIndex,
         order: existing?.order ?? ++toolUIOrder,
         event: { ...event, sessionId },
       });
@@ -1106,8 +1376,37 @@ function handleToolUIEvent(event: ToolUIEvent): void {
   renderSnapshot(latestSnapshot);
 }
 
+/**
+ * Finds the timeline boundary before the current turn's first AI reply.
+ *
+ * Tool UI observations arrive on an independent polling channel and may be
+ * delivered after the assistant response they preceded. Anchoring to the
+ * current message count would therefore place completed tool UI after that
+ * response. The latest user message identifies the current turn, and the
+ * first following assistant message is the stable insertion boundary.
+ *
+ * @param messages Conversation messages in display order.
+ * @returns Message index at which history UI should be inserted.
+ */
+function findToolUIAnchorMessageIndex(messages: DesktopMessage[]): number {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  for (let index = latestUserIndex + 1; index < messages.length; index += 1) {
+    if (messages[index]?.role === "assistant") {
+      return index;
+    }
+  }
+  return messages.length;
+}
+
 function switchToolUISession(sessionId: string | null): void {
   activeToolUISessionId = sessionId;
+  messageRowStates.clear();
   toolUILiveExpanded = false;
   toolUILive.clear();
   for (const row of toolUIRows.values()) {
@@ -1119,6 +1418,20 @@ function switchToolUISession(sessionId: string | null): void {
     (maximum, item) => Math.max(maximum, item.order),
     toolUIOrder,
   );
+}
+
+/** Recreates sandboxed tool documents after the resolved language changes. */
+function resetToolUIRowsIfLanguageChanged(): void {
+  const language = getResolvedLanguage();
+  if (toolUIFrameLanguage === language) {
+    return;
+  }
+  toolUIFrameLanguage = language;
+  for (const row of toolUIRows.values()) {
+    row.frame?.destroy();
+    row.element.remove();
+  }
+  toolUIRows.clear();
 }
 
 function renderLiveToolPanel(): void {
@@ -1164,9 +1477,39 @@ function renderLiveToolPanel(): void {
     ),
   );
   elements.liveToolContent.hidden = !toolUILiveExpanded;
-  elements.liveToolContent.replaceChildren(
-    ...items.map((item) => getOrCreateToolUIRow(item).element),
+  reconcileStableChildren(
+    elements.liveToolContent,
+    items.map((item) => getOrCreateToolUIRow(item).element),
   );
+}
+
+/**
+ * Reconciles children without detaching unchanged iframes.
+ *
+ * WKWebView resets an iframe browsing context when `replaceChildren` removes
+ * and reinserts the same node, leaving an already-mounted live UI at
+ * `about:blank`. Incremental reconciliation preserves existing frame contexts
+ * and only inserts, moves, or removes changed rows.
+ *
+ * @param container Element whose children should match the requested order.
+ * @param desiredChildren Child elements in display order.
+ */
+function reconcileStableChildren(
+  container: HTMLElement,
+  desiredChildren: HTMLElement[],
+): void {
+  const desired = new Set(desiredChildren);
+  for (const child of [...container.children]) {
+    if (!desired.has(child as HTMLElement)) {
+      child.remove();
+    }
+  }
+  for (const [index, child] of desiredChildren.entries()) {
+    const current = container.children.item(index);
+    if (current !== child) {
+      container.insertBefore(child, current);
+    }
+  }
 }
 
 function getOrCreateToolUIRow(item: ToolUITimelineItem): ToolUIRow {
@@ -1237,7 +1580,12 @@ async function hydrateToolUIRow(
     }
     const channelId = crypto.randomUUID();
     const frameUrl = await frameAdapter.createFrame(
-      createToolUIFrameDocument(source, channelId, row.mode),
+      createToolUIFrameDocument(
+        source,
+        channelId,
+        row.mode,
+        getResolvedLanguage(),
+      ),
     );
     if (
       toolUIRows.get(item.id) !== row ||
@@ -1257,7 +1605,6 @@ async function hydrateToolUIRow(
         });
         if (!capabilities[requiredCapability]) {
           row.element.hidden = true;
-          frame.destroy();
           if (item.kind === "live") {
             renderLiveToolPanel();
           }
@@ -1268,9 +1615,11 @@ async function hydrateToolUIRow(
           renderLiveToolPanel();
         }
       },
+      undefined,
     );
     row.frame = frame;
     fallback.replaceWith(frame.element);
+    frame.mount();
     if (item.kind === "live") {
       frame.status(item.event);
     } else {
@@ -1332,11 +1681,42 @@ function appendToolUIHistory(
   item: ToolUIHistoryItem,
 ): ToolUIHistoryItem[] {
   const history = readToolUIHistory(sessionId);
-  if (history.some((candidate) => candidate.id === item.id)) {
+  const existingIndex = history.findIndex(
+    (candidate) => candidate.id === item.id,
+  );
+  if (existingIndex !== -1) {
+    const existing = history[existingIndex]!;
+    item.anchorMessageIndex = Math.min(
+      item.anchorMessageIndex,
+      existing.anchorMessageIndex,
+    );
+    history[existingIndex] = item;
+    try {
+      localStorage.setItem(
+        `${TOOL_UI_HISTORY_PREFIX}${sessionId}`,
+        JSON.stringify(history),
+      );
+    } catch {
+      // Keep the in-memory update even when persistence is unavailable.
+    }
     return history;
   }
-  history.push(item);
-  let bounded = history
+  const callHistory = history.filter(
+    (candidate) => candidate.event.callId === item.event.callId,
+  );
+  if (callHistory.length > 0) {
+    item.anchorMessageIndex = Math.min(
+      item.anchorMessageIndex,
+      ...callHistory.map((candidate) => candidate.anchorMessageIndex),
+    );
+  }
+  const converged = item.event.running
+    ? history
+    : history.filter(
+        (candidate) => candidate.event.callId !== item.event.callId,
+      );
+  converged.push(item);
+  let bounded = converged
     .sort((left, right) => left.order - right.order)
     .slice(-MAX_TOOL_UI_HISTORY_ITEMS);
   const key = `${TOOL_UI_HISTORY_PREFIX}${sessionId}`;
@@ -1395,6 +1775,10 @@ function isStoredToolUIHistoryItem(
     typeof event.message === "string" &&
     typeof event.status === "string" &&
     typeof event.running === "boolean" &&
+    (event.outcome === undefined ||
+      event.outcome === "running" ||
+      event.outcome === "complete" ||
+      event.outcome === "cancelled") &&
     typeof event.emittedAt === "string"
   );
 }
@@ -1416,6 +1800,9 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   ) {
     void resumeWakeWordAfterConversation();
   }
+  if (snapshot.sessionId !== null) {
+    persistActiveSessionId(snapshot.sessionId);
+  }
   toolUIAdapter?.bindSession(snapshot.sessionId);
   if (activeToolUISessionId !== snapshot.sessionId) {
     switchToolUISession(snapshot.sessionId);
@@ -1432,35 +1819,29 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   elements.sessionDetail.textContent = snapshot.sessionId ?? "--";
   elements.userDetail.textContent = snapshot.userId ?? "--";
 
-  const messageElements = snapshot.messages.map((message) => {
-    const row = document.createElement("article");
-    row.className = `message-row message-row-${message.role}`;
-    row.setAttribute("aria-label", messageRoleLabel(message.role));
-
-    const body = document.createElement("div");
-    body.className = `message message-${message.role}`;
-    body.dataset.final = String(message.final);
-
-    const content = document.createElement("span");
-    content.className = "message-content";
-    content.textContent = message.content;
-
-    body.append(content);
-    row.append(body);
-    if (message.role === "assistant" && message.content.length > 0) {
-      const actions = document.createElement("div");
-      actions.className = "message-actions";
-      actions.append(createMessageCopyButton(message.id, message.content));
-      row.append(actions);
-    }
-    return row;
-  });
-
   const timelineItems = [...toolUIHistory].sort(
     (left, right) =>
       left.anchorMessageIndex - right.anchorMessageIndex ||
       left.order - right.order,
   );
+
+  const embeddedToolItemIds = new Set<string>();
+  const messageElements = snapshot.messages.map((message, messageIndex) => {
+    let state = messageRowStates.get(message.id);
+    if (state === undefined) {
+      state = createMessageRowState(message);
+      messageRowStates.set(message.id, state);
+    }
+    updateMessageRowState(
+      state,
+      message,
+      timelineItems,
+      messageIndex,
+      embeddedToolItemIds,
+    );
+    return state.row;
+  });
+
   const timelineElements: HTMLElement[] = [];
   for (let index = 0; index <= messageElements.length; index += 1) {
     if (index > 0) {
@@ -1468,6 +1849,7 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     }
     for (const item of timelineItems) {
       if (
+        !embeddedToolItemIds.has(item.id) &&
         Math.min(item.anchorMessageIndex, messageElements.length) === index
       ) {
         timelineElements.push(getOrCreateToolUIRow(item).element);
@@ -1475,8 +1857,11 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     }
   }
 
-  elements.messages.replaceChildren(...timelineElements);
-  if (timelineElements.length > 0) {
+  reconcileStableChildren(elements.messages, timelineElements);
+  if (
+    timelineElements.length > 0 &&
+    isScrolledNearBottom(elements.messages)
+  ) {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
   renderLiveToolPanel();
@@ -1486,6 +1871,213 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   renderChatSessions();
   if (shouldRefreshSessions) {
     scheduleChatSessionsRefresh();
+  }
+}
+
+/**
+ * Returns whether a scroll container is at or near its bottom edge.
+ *
+ * Renders happen frequently while tools stream status updates. Auto-scrolling
+ * only when the user is already near the bottom prevents the chat from yanking
+ * the viewport down while they scroll up through earlier messages.
+ *
+ * @param container Scrollable messages container.
+ * @returns Whether the container is within the auto-scroll threshold.
+ */
+function isScrolledNearBottom(container: HTMLElement): boolean {
+  return (
+    container.scrollHeight - container.scrollTop - container.clientHeight < 64
+  );
+}
+
+/**
+ * Creates one plain-text content span for an assistant message part.
+ *
+ * @param text Text rendered inside the span.
+ * @returns Span element carrying the message-content class.
+ */
+function createMessageContentSpan(text: string): HTMLSpanElement {
+  const content = document.createElement("span");
+  content.className = "message-content";
+  content.textContent = text;
+  return content;
+}
+
+/**
+ * Clamps a tool-call character offset into the current message bounds.
+ *
+ * @param offset Raw offset delivered by the backend.
+ * @param length Current message content length.
+ * @returns Integer offset between zero and the message length.
+ */
+function clampMessageOffset(offset: number, length: number): number {
+  if (!Number.isFinite(offset)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(length, Math.trunc(offset)));
+}
+
+/**
+ * Returns whether one character ends a spoken sentence.
+ *
+ * @param character Candidate sentence-terminating character.
+ * @returns Whether the character is a sentence boundary.
+ */
+function isSentenceBoundary(character: string): boolean {
+  return "。！？；!?;\n".includes(character);
+}
+
+/**
+ * Advances a tool-call offset to the end of the sentence containing it.
+ *
+ * Assistant text streams while a tool call is already emitted, so the exact
+ * recorded offset often lands mid-sentence. Rendering the tool card after the
+ * sentence keeps the chat readable: the acknowledgment is shown first, then
+ * the tool card, then the tool result.
+ *
+ * @param offset Recorded character offset inside the message.
+ * @param text Complete assistant message content.
+ * @returns Offset moved past the sentence boundary, when one exists.
+ */
+function advanceToSentenceBoundary(offset: number, text: string): number {
+  if (offset >= text.length) {
+    return text.length;
+  }
+  if (offset > 0 && isSentenceBoundary(text[offset - 1]!)) {
+    return offset;
+  }
+  let index = offset;
+  while (index < text.length) {
+    if (isSentenceBoundary(text[index]!)) {
+      return index + 1;
+    }
+    index += 1;
+  }
+  return text.length;
+}
+
+function createMessageRowState(message: DesktopMessage): MessageRowState {
+  const row = document.createElement("article");
+  row.className = `message-row message-row-${message.role}`;
+  row.setAttribute("aria-label", messageRoleLabel(message.role));
+
+  const body = document.createElement("div");
+  body.className = `message message-${message.role}`;
+
+  const contentHost = document.createElement("div");
+  contentHost.className = "message-content-group";
+
+  body.append(contentHost);
+  row.append(body);
+  return { row, body, contentHost, spans: [], actions: null };
+}
+
+function updateMessageRowState(
+  state: MessageRowState,
+  message: DesktopMessage,
+  timelineItems: ToolUITimelineItem[],
+  messageIndex: number,
+  embeddedToolItemIds: Set<string>,
+): void {
+  state.body.dataset.final = String(message.final);
+
+  const embeddable = message.role === "assistant"
+    ? timelineItems.filter(
+        (item): item is ToolUIHistoryItem =>
+          item.kind === "history" &&
+          item.anchorMessageIndex === messageIndex &&
+          typeof item.event.textOffset === "number",
+      )
+    : [];
+  const desiredParts: MessageContentPart[] = [];
+  if (embeddable.length > 0) {
+    const ordered = [...embeddable].sort(
+      (left, right) =>
+        (left.event.textOffset ?? 0) - (right.event.textOffset ?? 0) ||
+        left.order - right.order,
+    );
+    let cursor = 0;
+    for (const item of ordered) {
+      const offset = advanceToSentenceBoundary(
+        clampMessageOffset(
+          item.event.textOffset ?? 0,
+          message.content.length,
+        ),
+        message.content,
+      );
+      if (offset > cursor) {
+        desiredParts.push({
+          kind: "text",
+          text: message.content.slice(cursor, offset),
+        });
+        cursor = offset;
+      }
+      desiredParts.push({
+        kind: "tool",
+        id: item.id,
+        element: getOrCreateToolUIRow(item).element,
+      });
+      embeddedToolItemIds.add(item.id);
+    }
+    if (cursor < message.content.length) {
+      desiredParts.push({ kind: "text", text: message.content.slice(cursor) });
+    }
+  } else {
+    desiredParts.push({ kind: "text", text: message.content });
+  }
+  reconcileMessageContent(state, desiredParts);
+
+  if (message.role === "assistant" && message.content.length > 0) {
+    if (state.actions === null) {
+      state.actions = document.createElement("div");
+      state.actions.className = "message-actions";
+      state.row.append(state.actions);
+    }
+    state.actions.replaceChildren(
+      createMessageCopyButton(message.id, message.content),
+    );
+  } else if (state.actions !== null) {
+    state.actions.remove();
+    state.actions = null;
+  }
+}
+
+function reconcileMessageContent(
+  state: MessageRowState,
+  desiredParts: MessageContentPart[],
+): void {
+  const host = state.contentHost;
+  const remainingSpans = state.spans.slice();
+  const desiredElements: HTMLElement[] = [];
+  for (const part of desiredParts) {
+    if (part.kind === "text") {
+      const span = remainingSpans.shift() ?? createMessageContentSpan("");
+      span.textContent = part.text;
+      desiredElements.push(span);
+    } else {
+      desiredElements.push(part.element);
+    }
+  }
+  const usedSpans = desiredElements.filter(
+    (element): element is HTMLSpanElement =>
+      element.classList.contains("message-content"),
+  );
+  for (const span of remainingSpans) {
+    span.remove();
+  }
+  state.spans = usedSpans;
+
+  const desired = new Set(desiredElements);
+  for (const child of [...host.children]) {
+    if (!desired.has(child as HTMLElement)) {
+      child.remove();
+    }
+  }
+  for (const [index, element] of desiredElements.entries()) {
+    const current = host.children.item(index);
+    if (current !== element) {
+      host.insertBefore(element, current);
+    }
   }
 }
 
@@ -1643,6 +2235,7 @@ function renderModelConfigSelection(
 
 function renderInstalledTools(tools: NativeToolDefinition[]): void {
   installedTools = tools;
+  updateWhiteboardButton();
   if (tools.length === 0) {
     const empty = document.createElement("p");
     empty.className = "developer-tools-empty";
@@ -1685,18 +2278,31 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
     toggle.checked = tool.enabled;
+    toggle.disabled = !tool.canDisable;
+    toggle.dataset.required = String(!tool.canDisable);
     toggle.setAttribute(
       "aria-label",
-      t(tool.enabled ? "tools.disableName" : "tools.enableName", {
-        name: resolveToolDisplayName(tool.displayName),
-      }),
+      t(
+        !tool.canDisable
+          ? "tools.requiredName"
+          : tool.enabled
+            ? "tools.disableName"
+            : "tools.enableName",
+        {
+          name: resolveToolDisplayName(tool.displayName),
+        },
+      ),
     );
-    toggle.addEventListener("change", () => {
-      void updateInstalledToolEnabled(tool.id, toggle.checked);
-    });
+    if (tool.canDisable) {
+      toggle.addEventListener("change", () => {
+        void updateInstalledToolEnabled(tool.id, toggle.checked);
+      });
+    }
 
     const toggleText = document.createElement("span");
-    toggleText.textContent = t("tools.enabled");
+    toggleText.textContent = t(
+      tool.canDisable ? "tools.enabled" : "tools.required",
+    );
     toggleLabel.append(toggle, toggleText);
 
     actions.append(toggleLabel);
@@ -1767,19 +2373,67 @@ function renderWakeWordSettings(settings: NativeWakeWordSettings): void {
   elements.wakeWordEnabledToggle.disabled = wakeWordOperation;
 }
 
-function renderWebSearchSettings(settings: NativeWebSearchSettings): void {
-  webSearchSettings = settings;
-  elements.webSearchEnabledToggle.checked = settings.enabled;
-  const canConfigureKey =
-    settings.keySource === "session" ||
-    pendingWebSearchApiKey !== null ||
-    (settings.keySource === "missing" && settings.enabled);
-  elements.webSearchConfigureKeyButton.hidden = !canConfigureKey;
-  elements.webSearchConfigureKeyButton.textContent =
-    settings.keySource === "session" || pendingWebSearchApiKey !== null
-      ? t("webSearch.modifyKey")
-      : t("webSearch.enterKey");
-  updateWebSearchStatus();
+function renderCredentials(items: NativeCredentialDefinition[]): void {
+  credentials = items;
+  const rows = items.map((credential) => {
+    const row = document.createElement("article");
+    row.className = "credential-row";
+
+    const copy = document.createElement("div");
+    copy.className = "credential-copy";
+    const name = document.createElement("strong");
+    name.textContent = resolveToolDisplayName(credential.displayName);
+    const status = document.createElement("span");
+    status.textContent = t(
+      credential.source === "environment"
+        ? "credentials.environment"
+        : credential.source === "system"
+          ? "credentials.system"
+          : credential.storageAvailable
+            ? "credentials.missing"
+            : "credentials.unavailable",
+    );
+    copy.append(name, status);
+
+    const actions = document.createElement("div");
+    actions.className = "credential-actions";
+    if (credential.source !== "environment" && credential.storageAvailable) {
+      const configure = document.createElement("button");
+      configure.type = "button";
+      configure.className = "credential-action";
+      configure.textContent = t(
+        credential.source === "system"
+          ? "credentials.replace"
+          : "credentials.configure",
+      );
+      configure.addEventListener("click", () => {
+        openCredentialDialog(credential.id);
+      });
+      actions.append(configure);
+    }
+    if (credential.source === "system" && credential.storageAvailable) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "credential-action credential-action-danger";
+      remove.textContent = t("credentials.delete");
+      remove.addEventListener("click", () => {
+        void removeCredential(credential.id);
+      });
+      actions.append(remove);
+    }
+
+    row.append(copy, actions);
+    return row;
+  });
+  if (rows.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "credential-empty";
+    empty.textContent = t("credentials.none");
+    elements.credentialsList.replaceChildren(empty);
+  } else {
+    elements.credentialsList.replaceChildren(...rows);
+  }
+  updateCredentialStatus();
   updateToolControls();
 }
 
@@ -1789,69 +2443,43 @@ function updateToolControls(): void {
     modelConfigOperation ||
     discoveringBackend ||
     sessionOperation ||
-    sendingText;
+    sendingText ||
+    credentialOperation;
+  const hasPendingChanges =
+    developerToolChangesPending || credentialChangesPending;
   elements.installToolDirectoryButton.disabled = busy;
   elements.applyToolChangesButton.disabled =
-    busy ||
-    (!webSearchChangesPending && !developerToolChangesPending) ||
-    modelConfigPath === null;
-  elements.webSearchEnabledToggle.disabled =
-    busy ||
-    webSearchSettings === null;
-  elements.webSearchConfigureKeyButton.disabled =
-    busy || webSearchSettings === null;
+    busy || !hasPendingChanges || modelConfigPath === null;
+  elements.applyCredentialChangesButton.disabled =
+    busy || !hasPendingChanges || modelConfigPath === null;
   elements.wakeWordEnabledToggle.disabled =
     wakeWordOperation || wakeWordSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
   >("input, button")) {
+    control.disabled =
+      busy ||
+      (control instanceof HTMLInputElement && control.dataset.required === "true");
+  }
+  for (const control of elements.credentialsList.querySelectorAll<
+    HTMLButtonElement
+  >("button")) {
     control.disabled = busy;
   }
 }
 
-function updateWebSearchStatus(message?: string): void {
+function updateCredentialStatus(message?: string): void {
   if (message) {
-    elements.webSearchStatus.textContent = message;
+    elements.credentialsStatus.textContent = message;
     return;
   }
-  if (webSearchSettings === null) {
-    elements.webSearchStatus.textContent = t("webSearch.loading");
+  if (credentialChangesPending) {
+    elements.credentialsStatus.textContent = t("credentials.pending");
     return;
   }
-  if (webSearchChangesPending) {
-    if (
-      webSearchSettings.enabled &&
-      webSearchSettings.keySource === "missing" &&
-      pendingWebSearchApiKey === null
-    ) {
-      elements.webSearchStatus.textContent =
-        t("webSearch.keyRequired");
-      return;
-    }
-    if (pendingWebSearchApiKey !== null) {
-      elements.webSearchStatus.textContent = webSearchSettings.enabled
-        ? t("webSearch.keyPendingEnabled")
-        : t("webSearch.keyPendingDisabled");
-      return;
-    }
-    elements.webSearchStatus.textContent = t("webSearch.pending");
-    return;
-  }
-  if (webSearchSettings.keySource === "missing") {
-    elements.webSearchStatus.textContent =
-      webSearchSettings.enabled
-        ? t("webSearch.keyRequired")
-        : t("webSearch.missingDisabled");
-    return;
-  }
-  elements.webSearchStatus.textContent =
-    webSearchSettings.enabled
-      ? webSearchSettings.keySource === "environment"
-        ? t("webSearch.enabledEnvironment")
-        : t("webSearch.enabledSession")
-      : webSearchSettings.keySource === "environment"
-        ? t("webSearch.disabledEnvironment")
-        : t("webSearch.disabledSession");
+  elements.credentialsStatus.textContent = credentials.length
+    ? t("credentials.count", { count: credentials.length })
+    : t("credentials.none");
 }
 
 function updateDeveloperToolsStatus(message?: string): void {
@@ -1882,10 +2510,10 @@ async function refreshInstalledTools(): Promise<NativeToolDefinition[]> {
   return tools;
 }
 
-async function refreshWebSearchSettings(): Promise<NativeWebSearchSettings> {
-  const settings = await getNativeWebSearchSettings();
-  renderWebSearchSettings(settings);
-  return settings;
+async function refreshCredentials(): Promise<NativeCredentialDefinition[]> {
+  const items = await getNativeCredentials();
+  renderCredentials(items);
+  return items;
 }
 
 async function refreshWakeWordSettings(): Promise<NativeWakeWordSettings> {
@@ -1937,7 +2565,9 @@ async function detachCurrentAdapter(): Promise<void> {
   }
 }
 
-async function discoverBackend(): Promise<void> {
+async function discoverBackend(
+  sessionIdToRestore?: string | null,
+): Promise<void> {
   if (discoveringBackend) {
     return;
   }
@@ -1960,6 +2590,7 @@ async function discoverBackend(): Promise<void> {
 
   try {
     const connection = await getNativeBackendConnection();
+    backendConnection = connection;
     const nextAdapter = new XtalkClientAdapter(connection);
     const nextToolUIAdapter = new ToolUIAdapter(connection);
     toolUIAdapter = nextToolUIAdapter;
@@ -1968,10 +2599,33 @@ async function discoverBackend(): Promise<void> {
     adapter = nextAdapter;
     unsubscribe = nextAdapter.subscribe(renderSnapshot);
 
+    let restoredSessionId = sessionIdToRestore;
+    if (restoredSessionId === undefined) {
+      restoredSessionId =
+        latestSnapshot.sessionId ?? readActiveSessionId();
+      if (restoredSessionId === null) {
+        const sessions = await nextAdapter.getSessions();
+        restoredSessionId = sessions[0]?.id ?? null;
+      }
+    }
+
+    let sessionRestoreError: unknown = null;
+    if (restoredSessionId !== null) {
+      try {
+        await nextAdapter.switchSession(restoredSessionId);
+        persistActiveSessionId(restoredSessionId);
+      } catch (error) {
+        sessionRestoreError = error;
+      }
+    }
+
     elements.backendDetail.textContent = nextAdapter.diagnostics.origin;
     elements.websocketDetail.textContent = nextAdapter.diagnostics.websocketURL;
     setBackendStatus("ready", "service.ready");
     await refreshChatSessions();
+    if (sessionRestoreError !== null) {
+      showError("sidebar.switchFailed", { error: sessionRestoreError });
+    }
   } catch (error) {
     adapter = null;
     setBackendStatus("offline", "service.unavailable");
@@ -1988,6 +2642,7 @@ async function discoverBackend(): Promise<void> {
 }
 
 async function applyModelConfigPath(selectedPath: string): Promise<void> {
+  const sessionIdToRestore = latestSnapshot.sessionId;
   let stopManagedProgress: (() => void) | null = null;
   let managedProgressOpened = false;
 
@@ -2004,21 +2659,16 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     elements.modelConfigStatus.textContent = t("model.restarting");
     setBackendStatus("loading", "service.applyingConfig");
     await detachCurrentAdapter();
-    await applyNativeModelConfig(
-      selectedPath,
-      webSearchSettings?.enabled ?? false,
-      pendingWebSearchApiKey,
-    );
-    pendingWebSearchApiKey = null;
-    webSearchChangesPending = false;
+    await applyNativeModelConfig(selectedPath);
     developerToolChangesPending = false;
+    credentialChangesPending = false;
     const selection = await refreshModelConfigSelection();
-    await refreshWebSearchSettings();
+    await refreshCredentials();
     updateDeveloperToolsStatus();
     elements.modelConfigStatus.textContent = selection.configPath
       ? t("model.appliedRestarted")
       : t("model.applied");
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
     if (managedProgressOpened) {
       closeManagedProgress();
     }
@@ -2027,7 +2677,7 @@ async function applyModelConfigPath(selectedPath: string): Promise<void> {
     if (modelConfigPath === null) {
       setBackendStatus("unconfigured", "service.chooseConfig");
     } else {
-      await discoverBackend();
+      await discoverBackend(sessionIdToRestore);
     }
     elements.modelConfigStatus.textContent = t("model.applyFailed");
     showError("model.applyFailedDetail", { error });
@@ -2068,6 +2718,101 @@ async function chooseAndApplyModelConfig(required: boolean): Promise<void> {
   } finally {
     modelConfigOperation = false;
     updateControls(adapter?.snapshot ?? latestSnapshot);
+  }
+}
+
+function openFirstLaunchDialog(): void {
+  if (modelConfigPath !== null || elements.firstLaunchDialog.open) {
+    return;
+  }
+  elements.firstLaunchDialog.showModal();
+  elements.recommendedConfigButton.focus();
+}
+
+function cancelFirstLaunchChoice(): void {
+  elements.firstLaunchDialog.close();
+  setBackendStatus("unconfigured", "service.chooseConfig");
+  elements.modelConfigStatus.textContent = t("model.firstLaunch");
+}
+
+async function chooseCustomConfig(): Promise<void> {
+  elements.firstLaunchDialog.close();
+  await chooseAndApplyModelConfig(true);
+}
+
+async function chooseRecommendedConfig(): Promise<void> {
+  if (modelConfigPath !== null) {
+    return;
+  }
+  elements.firstLaunchDialog.close();
+  showError(null);
+  elements.modelConfigStatus.textContent = t("model.choosePrompt");
+  try {
+    recommendedConfigPath = await getNativeRecommendedModelConfig();
+    elements.llmKeyInput.value = "";
+    elements.llmKeyInput.setCustomValidity("");
+    elements.llmKeyDialog.showModal();
+    elements.llmKeyInput.focus();
+  } catch (error) {
+    recommendedConfigPath = null;
+    setBackendStatus("unconfigured", "service.chooseConfig");
+    elements.modelConfigStatus.textContent = t("model.firstLaunch");
+    showError("model.applyFailedDetail", { error });
+    setDiagnosticsOpen(true);
+  }
+}
+
+async function applyRecommendedConfig(): Promise<void> {
+  const configPath = recommendedConfigPath;
+  recommendedConfigPath = null;
+  if (configPath === null) {
+    setBackendStatus("unconfigured", "service.chooseConfig");
+    return;
+  }
+  await applyModelConfigPath(configPath);
+}
+
+function skipLlmKey(): void {
+  elements.llmKeyDialog.close();
+  elements.llmKeyInput.value = "";
+  void applyRecommendedConfig();
+}
+
+function cancelLlmKeyDialog(): void {
+  elements.llmKeyDialog.close();
+  recommendedConfigPath = null;
+  setBackendStatus("unconfigured", "service.chooseConfig");
+  elements.modelConfigStatus.textContent = t("model.firstLaunch");
+}
+
+async function saveLlmKeyAndContinue(): Promise<void> {
+  const value = elements.llmKeyInput.value.trim();
+  if (!value) {
+    elements.llmKeyInput.setCustomValidity(t("credentials.keyValidation"));
+    elements.llmKeyInput.reportValidity();
+    return;
+  }
+  if (credentialOperation) {
+    return;
+  }
+
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("llm.saving"));
+  updateToolControls();
+  try {
+    await saveNativeCredential("llm", value);
+    elements.llmKeyDialog.close();
+    elements.llmKeyInput.value = "";
+    credentialChangesPending = true;
+    await refreshCredentials();
+    updateCredentialStatus(t("llm.saved"));
+    await applyRecommendedConfig();
+  } catch (error) {
+    showError("llm.saveFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
   }
 }
 
@@ -2196,65 +2941,91 @@ async function removeInstalledTool(toolId: string): Promise<void> {
   }
 }
 
-function updateWebSearchEnabled(enabled: boolean): void {
-  if (webSearchSettings === null) {
-    return;
-  }
+function openCredentialDialog(credentialId: string): void {
+  const credential = credentials.find((item) => item.id === credentialId);
   if (
-    enabled &&
-    webSearchSettings.keySource === "missing" &&
-    pendingWebSearchApiKey === null
+    credential === undefined ||
+    credential.source === "environment" ||
+    !credential.storageAvailable
   ) {
-    openWebSearchApiKeyDialog(true);
     return;
   }
-  webSearchChangesPending = true;
-  renderWebSearchSettings({ ...webSearchSettings, enabled });
+  selectedCredentialId = credentialId;
+  elements.credentialDialogLabel.textContent = t("credentials.keyFor", {
+    name: resolveToolDisplayName(credential.displayName),
+  });
+  elements.credentialDialogInput.value = "";
+  elements.credentialDialogInput.setCustomValidity("");
+  elements.credentialDialog.showModal();
+  elements.credentialDialogInput.focus();
 }
 
-function openWebSearchApiKeyDialog(enableAfterSave: boolean): void {
-  enableWebSearchAfterKeyDialog = enableAfterSave;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialogInput.setCustomValidity("");
-  elements.webSearchApiKeyDialog.showModal();
-  elements.webSearchApiKeyDialogInput.focus();
+function cancelCredentialDialog(): void {
+  selectedCredentialId = null;
+  elements.credentialDialogInput.value = "";
+  elements.credentialDialog.close();
 }
 
-function cancelWebSearchApiKeyDialog(): void {
-  enableWebSearchAfterKeyDialog = false;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialog.close();
-  elements.webSearchEnabledToggle.checked =
-    webSearchSettings?.enabled ?? false;
-}
-
-function saveWebSearchApiKey(): void {
-  const apiKey = elements.webSearchApiKeyDialogInput.value.trim();
-  if (!apiKey) {
-    elements.webSearchApiKeyDialogInput.setCustomValidity(
-      t("webSearch.keyValidation"),
+async function saveCredential(): Promise<void> {
+  const credentialId = selectedCredentialId;
+  const value = elements.credentialDialogInput.value.trim();
+  if (credentialId === null) {
+    cancelCredentialDialog();
+    return;
+  }
+  if (!value) {
+    elements.credentialDialogInput.setCustomValidity(
+      t("credentials.keyValidation"),
     );
-    elements.webSearchApiKeyDialogInput.reportValidity();
+    elements.credentialDialogInput.reportValidity();
     return;
   }
 
-  pendingWebSearchApiKey = apiKey;
-  webSearchChangesPending = true;
-  const enabled = enableWebSearchAfterKeyDialog
-    ? true
-    : (webSearchSettings?.enabled ?? false);
-  enableWebSearchAfterKeyDialog = false;
-  elements.webSearchApiKeyDialogInput.value = "";
-  elements.webSearchApiKeyDialog.close();
-  if (webSearchSettings !== null) {
-    renderWebSearchSettings({ ...webSearchSettings, enabled });
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("credentials.saving"));
+  updateToolControls();
+  try {
+    await saveNativeCredential(credentialId, value);
+    credentialChangesPending = true;
+    cancelCredentialDialog();
+    await refreshCredentials();
+    updateCredentialStatus(t("credentials.saved"));
+  } catch (error) {
+    updateCredentialStatus(t("credentials.saveFailed"));
+    showError("credentials.saveFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
+  }
+}
+
+async function removeCredential(credentialId: string): Promise<void> {
+  if (credentialOperation) {
+    return;
+  }
+  credentialOperation = true;
+  showError(null);
+  updateCredentialStatus(t("credentials.deleting"));
+  updateToolControls();
+  try {
+    await deleteNativeCredential(credentialId);
+    credentialChangesPending = true;
+    await Promise.all([refreshCredentials(), refreshInstalledTools()]);
+    updateCredentialStatus(t("credentials.deleted"));
+  } catch (error) {
+    updateCredentialStatus(t("credentials.deleteFailed"));
+    showError("credentials.deleteFailedDetail", { error });
+  } finally {
+    credentialOperation = false;
+    updateToolControls();
   }
 }
 
 async function applyToolChanges(): Promise<void> {
   if (
     toolOperation ||
-    (!webSearchChangesPending && !developerToolChangesPending)
+    (!developerToolChangesPending && !credentialChangesPending)
   ) {
     return;
   }
@@ -2263,29 +3034,26 @@ async function applyToolChanges(): Promise<void> {
     return;
   }
 
+  const sessionIdToRestore = latestSnapshot.sessionId;
   toolOperation = true;
   showError(null);
-  updateWebSearchStatus(t("tools.restarting"));
+  updateCredentialStatus(t("tools.restarting"));
   updateDeveloperToolsStatus(t("tools.restarting"));
   setBackendStatus("loading", "tools.applying");
   updateControls(latestSnapshot);
 
   try {
     await detachCurrentAdapter();
-    await applyNativeToolChanges(
-      webSearchSettings?.enabled ?? false,
-      pendingWebSearchApiKey,
-    );
-    pendingWebSearchApiKey = null;
-    webSearchChangesPending = false;
+    await applyNativeToolChanges();
     developerToolChangesPending = false;
-    await refreshWebSearchSettings();
+    credentialChangesPending = false;
+    await refreshCredentials();
     updateDeveloperToolsStatus(t("tools.applied"));
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
   } catch (error) {
-    updateWebSearchStatus(t("tools.applyFailed"));
+    updateCredentialStatus(t("tools.applyFailed"));
     updateDeveloperToolsStatus(t("tools.applyFailed"));
-    await discoverBackend();
+    await discoverBackend(sessionIdToRestore);
     showError("tools.applyFailedDetail", { error });
     setDiagnosticsOpen(true);
   } finally {
@@ -2296,13 +3064,12 @@ async function applyToolChanges(): Promise<void> {
 
 async function initializeApplication(): Promise<void> {
   try {
-    await refreshWebSearchSettings();
     await refreshInstalledTools();
     const selection = await refreshModelConfigSelection();
     if (selection.configPath === null) {
       setBackendStatus("unconfigured", "service.chooseConfig");
       setDiagnosticsOpen(true);
-      await chooseAndApplyModelConfig(true);
+      openFirstLaunchDialog();
       return;
     }
     const managedPlan = await getNativeManagedModelPlan(selection.configPath);
@@ -2434,6 +3201,7 @@ async function disconnectSession(): Promise<void> {
   } catch (error) {
     showError("voice.closeFailed", { error });
   } finally {
+    backgroundingRequested = false;
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
     await resumeWakeWordAfterConversation();
@@ -2535,36 +3303,75 @@ elements.muteButton.addEventListener("click", () => {
     adapter.setMuted(!adapter.snapshot.muted);
   }
 });
+elements.whiteboardButton.addEventListener("click", () => {
+  traceWhiteboard("clicked", whiteboardVisible);
+  void setWhiteboardVisible(!whiteboardVisible);
+});
 elements.selectModelConfigButton.addEventListener("click", () => {
   void chooseAndApplyModelConfig(false);
+});
+elements.recommendedConfigButton.addEventListener("click", () => {
+  void chooseRecommendedConfig();
+});
+elements.customConfigButton.addEventListener("click", () => {
+  void chooseCustomConfig();
+});
+elements.firstLaunchCancelButton.addEventListener("click", () => {
+  cancelFirstLaunchChoice();
+});
+elements.firstLaunchDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelFirstLaunchChoice();
+});
+elements.llmKeyForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveLlmKeyAndContinue();
+});
+elements.llmKeySkipButton.addEventListener("click", () => {
+  skipLlmKey();
+});
+elements.llmKeyDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelLlmKeyDialog();
+});
+elements.llmKeyInput.addEventListener("input", () => {
+  elements.llmKeyInput.setCustomValidity("");
 });
 elements.installToolDirectoryButton.addEventListener("click", () => {
   void chooseAndInstallToolDirectory();
 });
-elements.webSearchEnabledToggle.addEventListener("change", () => {
-  updateWebSearchEnabled(elements.webSearchEnabledToggle.checked);
-});
 elements.wakeWordEnabledToggle.addEventListener("change", () => {
   void updateWakeWordEnabled(elements.wakeWordEnabledToggle.checked);
 });
-elements.webSearchConfigureKeyButton.addEventListener("click", () => {
-  openWebSearchApiKeyDialog(false);
-});
-elements.webSearchApiKeyForm.addEventListener("submit", (event) => {
+elements.credentialForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  saveWebSearchApiKey();
+  void saveCredential();
 });
-elements.webSearchApiKeyDialogInput.addEventListener("input", () => {
-  elements.webSearchApiKeyDialogInput.setCustomValidity("");
+elements.credentialDialogInput.addEventListener("input", () => {
+  elements.credentialDialogInput.setCustomValidity("");
 });
-elements.webSearchApiKeyCancelButton.addEventListener("click", () => {
-  cancelWebSearchApiKeyDialog();
+elements.credentialCancelButton.addEventListener("click", () => {
+  cancelCredentialDialog();
 });
-elements.webSearchApiKeyDialog.addEventListener("cancel", (event) => {
+elements.credentialDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
-  cancelWebSearchApiKeyDialog();
+  cancelCredentialDialog();
+});
+elements.deleteSessionForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void deletePendingSession();
+});
+elements.deleteSessionCancelButton.addEventListener("click", () => {
+  cancelDeleteSessionDialog();
+});
+elements.deleteSessionDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelDeleteSessionDialog();
 });
 elements.applyToolChangesButton.addEventListener("click", () => {
+  void applyToolChanges();
+});
+elements.applyCredentialChangesButton.addEventListener("click", () => {
   void applyToolChanges();
 });
 elements.textComposer.addEventListener("submit", (event) => {
@@ -2576,18 +3383,21 @@ elements.messageInput.addEventListener("input", () => {
   updateComposer(latestSnapshot);
 });
 elements.messageInput.addEventListener("compositionstart", () => {
-  clearMessageInputCompositionGuard();
   messageInputCompositionActive = true;
+  messageInputCompositionEnterHeld = false;
 });
 elements.messageInput.addEventListener("compositionend", () => {
   messageInputCompositionActive = false;
-  messageInputCompositionCommitPending = true;
-  messageInputCompositionGuardTimer = window.setTimeout(() => {
-    clearMessageInputCompositionGuard();
-  }, IME_COMPOSITION_COMMIT_GUARD_MS);
 });
 elements.messageInput.addEventListener("keydown", (event) => {
   if (isMessageInputCompositionEnter(event)) {
+    if (
+      !event.isComposing &&
+      !messageInputCompositionActive &&
+      event.keyCode !== 229
+    ) {
+      event.preventDefault();
+    }
     return;
   }
   if (event.key === "Enter" && !event.shiftKey) {
@@ -2599,16 +3409,16 @@ elements.messageInput.addEventListener("keydown", (event) => {
 });
 elements.messageInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
-    clearMessageInputCompositionGuard();
+    messageInputCompositionEnterHeld = false;
   }
 });
 elements.messageInput.addEventListener("blur", () => {
   messageInputCompositionActive = false;
-  clearMessageInputCompositionGuard();
+  messageInputCompositionEnterHeld = false;
 });
 elements.retryButton.addEventListener("click", () => {
   if (modelConfigPath === null) {
-    void chooseAndApplyModelConfig(true);
+    openFirstLaunchDialog();
   } else {
     void restartCurrentModelConfig();
   }
@@ -2624,7 +3434,11 @@ window.addEventListener("keydown", (event) => {
     event.stopImmediatePropagation();
     return;
   }
-  if (elements.webSearchApiKeyDialog.open) {
+  if (
+    elements.credentialDialog.open ||
+    elements.firstLaunchDialog.open ||
+    elements.llmKeyDialog.open
+  ) {
     return;
   }
   if (event.key === "Escape" && managedProgressState === "failed") {
@@ -2650,6 +3464,16 @@ updateNetworkStatus();
 setSidebarOpen(false, false);
 renderSnapshot(EMPTY_SNAPSHOT);
 resizeMessageInput();
+void listenWhiteboardWindowHidden(() => {
+  whiteboardVisible = false;
+  persistWhiteboardVisiblePreference(false);
+  updateWhiteboardButton();
+});
+// The whiteboard always starts hidden after a service restart. Only the dock
+// button or the first whiteboard tool emit opens the window, so a previously
+// visible board never resurfaces an unwanted window on launch.
+whiteboardVisible = false;
+persistWhiteboardVisiblePreference(false);
 
 async function initializeDesktopApplication(): Promise<void> {
   try {

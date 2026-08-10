@@ -1,15 +1,16 @@
-"""Tests for the desktop-only asynchronous Agent policy."""
+"""Tests that the desktop Agent preserves the default conversation flow."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
 
 from langchain_core.messages import BaseMessage, ToolCall, ToolMessage
 
 from backend.desktop_agent import DesktopDefaultAgent
-from xtalk.models.agents.tools import AsyncTool, ToolEngine
+from xtalk.models.agents.default import DefaultAgent
+from xtalk.models.agents.interfaces import AgentOutput
+from xtalk.models.agents.tools import ToolEngine
 from xtalk.models.agents.tools.utils import build_tool_call_result
 
 
@@ -25,60 +26,6 @@ class _History:
         self.messages.append(message)
 
 
-class _ToolCallChunk:
-    """One complete fake model chunk containing an async tool call."""
-
-    content = ""
-
-    def __init__(self, tool_call: ToolCall) -> None:
-        """Store the structured tool call exposed to the Agent."""
-
-        self.tool_calls = [tool_call]
-
-
-class _OneCallModel:
-    """Fake streaming model that requests one tool exactly once."""
-
-    def __init__(self, tool_call: ToolCall) -> None:
-        """Initialize the one-shot model stream."""
-
-        self.tool_call = tool_call
-        self.calls = 0
-
-    async def astream(self, messages: list[BaseMessage]):
-        """Yield one tool call and fail if the Agent asks for narration."""
-
-        del messages
-        self.calls += 1
-        if self.calls > 1:
-            raise AssertionError("async tool receipt must not trigger narration")
-        yield _ToolCallChunk(self.tool_call)
-
-
-class _AsyncToolEngine:
-    """Minimal tool engine returning an async operation receipt."""
-
-    def __init__(self) -> None:
-        """Expose one abstract AsyncTool marker under the fake name."""
-
-        self._name_to_tool = {"codex_session_create": AsyncTool}
-
-    async def ainvoke_and_append(
-        self,
-        tool_call: ToolCall,
-        messages: list[BaseMessage],
-    ) -> ToolMessage:
-        """Append and return one initial running receipt."""
-
-        result = ToolMessage(
-            content=f"Codex started. Tool call ID: {tool_call['id']}",
-            tool_call_id=tool_call["id"],
-            name=tool_call["name"],
-        )
-        ToolEngine.append_tool_message(tool_call, result, messages)
-        return result
-
-
 def _bare_agent() -> DesktopDefaultAgent:
     """Create a desktop Agent without constructing a real model provider."""
 
@@ -90,46 +37,63 @@ def _bare_agent() -> DesktopDefaultAgent:
     return agent
 
 
-def test_async_tool_receipt_stops_until_the_final_update() -> None:
-    """Avoid turning an async receipt into a separate assistant message."""
+def test_desktop_agent_inherits_default_conversation_flow() -> None:
+    """Prevent desktop code from diverging from the default Agent loop."""
 
-    async def scenario() -> tuple[list[Any], int]:
-        tool_call = ToolCall(
-            id="call-1",
-            name="codex_session_create",
-            args={"task": "list files"},
+    flow_methods = (
+        "async_accept",
+        "_loop_runner",
+        "_handle_asr_final",
+        "_stream_messages",
+        "_stream_messages_unlocked",
+        "_on_async_tool_update",
+        "_record_async_tool_update",
+    )
+    for method_name in flow_methods:
+        assert method_name not in DesktopDefaultAgent.__dict__
+        assert getattr(DesktopDefaultAgent, method_name) is getattr(
+            DefaultAgent,
+            method_name,
         )
-        model = _OneCallModel(tool_call)
-        agent = _bare_agent()
-        agent.model_with_tools = model
-        agent.model_for_async_updates = model
-        agent.tool_engine = _AsyncToolEngine()  # type: ignore[assignment]
-        output = [
-            item
-            async for item in agent._stream_messages_unlocked(allow_tools=True)
-        ]
-        return output, model.calls
-
-    output, model_calls = asyncio.run(scenario())
-
-    assert model_calls == 1
-    assert len(output) == 2
-    assert output[0]["id"] == "call-1"
 
 
-def test_running_updates_stay_in_tool_ui_and_final_update_wakes_agent() -> None:
-    """Queue one LLM report only after an async desktop tool finishes."""
+def test_desktop_tool_engine_keeps_default_async_scheduling() -> None:
+    """Add only App session metadata without overriding tool dispatch."""
 
     agent = _bare_agent()
-    running_call = ToolCall(id="running", name="async_tool_updated", args={})
-    running_message = ToolMessage(
-        content='{"running": true, "tool_output": "working"}',
-        tool_call_id="running",
+    agent.tool_engine = ToolEngine(tools=[], state={})
+    agent.bind_session("session-1")
+    assert agent.tool_engine.state == {"session_id": "session-1"}
+
+
+def _tool_update(
+    *, running: bool, label: str
+) -> tuple[ToolCall, ToolMessage, AgentOutput]:
+    """Build one representative asynchronous tool update."""
+
+    tool_call = ToolCall(id=label, name="async_tool_updated", args={})
+    tool_message = ToolMessage(
+        content=(
+            f'{{"running": {str(running).lower()}, '
+            f'"tool_output": "{label}"}}'
+        ),
+        tool_call_id=label,
         name="async_tool_updated",
     )
-    running_output = build_tool_call_result(
-        tool_call=running_call,
-        result_content=str(running_message.content),
+    output = build_tool_call_result(
+        tool_call=tool_call,
+        result_content=str(tool_message.content),
+    )
+    return tool_call, tool_message, output
+
+
+def test_running_and_final_updates_wake_agent_after_user_finishes() -> None:
+    """Let every subscribed update trigger the default Agent report loop."""
+
+    agent = _bare_agent()
+    running_call, running_message, running_output = _tool_update(
+        running=True,
+        label="working",
     )
 
     agent._record_async_tool_update(
@@ -138,18 +102,40 @@ def test_running_updates_stay_in_tool_ui_and_final_update_wakes_agent() -> None:
         running_output,
     )
 
-    assert agent._async_tool_update_queue.empty()
+    assert agent._async_tool_update_queue.get_nowait() == running_output
 
-    final_call = ToolCall(id="final", name="async_tool_updated", args={})
-    final_message = ToolMessage(
-        content='{"running": false, "tool_output": "done"}',
-        tool_call_id="final",
-        name="async_tool_updated",
-    )
-    final_output = build_tool_call_result(
-        tool_call=final_call,
-        result_content=str(final_message.content),
+    final_call, final_message, final_output = _tool_update(
+        running=False,
+        label="done",
     )
     agent._record_async_tool_update(final_call, final_message, final_output)
 
     assert agent._async_tool_update_queue.get_nowait() == final_output
+
+
+def test_updates_while_user_speaks_follow_default_queue_policy() -> None:
+    """Ignore progress while listening and defer only a final report."""
+
+    agent = _bare_agent()
+    agent._human_input_finished = False
+    running_call, running_message, running_output = _tool_update(
+        running=True,
+        label="working",
+    )
+    agent._record_async_tool_update(
+        running_call,
+        running_message,
+        running_output,
+    )
+
+    assert agent._async_tool_update_queue.empty()
+    assert agent._pending_final_reports == []
+
+    final_call, final_message, final_output = _tool_update(
+        running=False,
+        label="done",
+    )
+    agent._record_async_tool_update(final_call, final_message, final_output)
+
+    assert agent._async_tool_update_queue.empty()
+    assert agent._pending_final_reports == [final_output]

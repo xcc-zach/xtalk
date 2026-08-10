@@ -1,0 +1,7 @@
+{
+  "display_name": {
+    "zh": "当前时间",
+    "en": "Current Time"
+  },
+  "entrypoint": "current_time_tool:create_tools"
+}

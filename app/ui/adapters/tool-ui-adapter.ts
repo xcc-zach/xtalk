@@ -28,6 +28,18 @@ export interface ToolUIEmitEvent {
   message: string;
   status: string;
   running: boolean;
+  /** Explicit lifecycle outcome; absent only in legacy persisted events. */
+  outcome?: "running" | "complete" | "cancelled";
+  /**
+   * Character offset inside the anchored assistant message where the tool
+   * call happened. Absent for legacy events and events without a UI binding.
+   */
+  textOffset?: number;
+  /**
+   * Optional structured content emitted by an App-observed tool. Absent for
+   * legacy events and tools that do not declare structured payloads.
+   */
+  payload?: unknown;
   emittedAt: string;
 }
 
@@ -37,7 +49,10 @@ export type ToolUIEvent = ToolUIStatusEvent | ToolUIEmitEvent;
 /** Listener for validated Tool UI observations. */
 export type ToolUIListener = (event: ToolUIEvent) => void;
 
-const APP_TOKEN_QUERY_PARAMETER = "app_token";
+const TOOL_UI_POLL_INTERVAL_MS = 350;
+const TOOL_UI_RETRY_INTERVAL_MS = 1_000;
+const MAX_DELIVERED_TOOL_UI_EVENTS = 1_000;
+const MAX_TOOL_UI_EMIT_PAYLOAD_BYTES = 256 * 1024;
 
 /**
  * Maintains the independent read-only Tool UI WebSocket.
@@ -45,12 +60,13 @@ const APP_TOKEN_QUERY_PARAMETER = "app_token";
 export class ToolUIAdapter {
   readonly #origin: URL;
   readonly #launchToken: string;
-  readonly #url: URL;
   readonly #listeners = new Set<ToolUIListener>();
-  #websocket: WebSocket | null = null;
+  readonly #deliveredEvents = new Set<string>();
   #closed = false;
   #sessionId: string | null = null;
-  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  #pollTimer: ReturnType<typeof setTimeout> | null = null;
+  #pollAbortController: AbortController | null = null;
+  #polling = false;
 
   /**
    * Creates an adapter from trusted loopback connection data.
@@ -60,49 +76,14 @@ export class ToolUIAdapter {
   constructor(connection: NativeBackendConnection) {
     this.#origin = new URL(connection.origin);
     this.#launchToken = connection.launchToken;
-    this.#url = new URL("/app/tool-ui/ws", connection.origin);
-    this.#url.protocol = this.#url.protocol === "https:" ? "wss:" : "ws:";
-    this.#url.searchParams.set(
-      APP_TOKEN_QUERY_PARAMETER,
-      connection.launchToken,
-    );
   }
 
-  /** Opens the read-only Tool UI channel. */
+  /** Starts polling the authenticated read-only Tool UI event snapshot. */
   connect(): void {
-    if (this.#closed || this.#websocket !== null) {
+    if (this.#closed || this.#polling || this.#pollTimer !== null) {
       return;
     }
-    const websocket = new WebSocket(this.#url);
-    this.#websocket = websocket;
-    websocket.addEventListener("open", () => {
-      this.#sendSessionBinding();
-    });
-    websocket.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") {
-        return;
-      }
-      try {
-        const payload: unknown = JSON.parse(event.data);
-        const toolEvent = parseToolUIEvent(payload);
-        for (const listener of this.#listeners) {
-          listener(toolEvent);
-        }
-      } catch {
-        // Ignore malformed untrusted tool UI observations.
-      }
-    });
-    websocket.addEventListener("close", () => {
-      if (this.#websocket === websocket) {
-        this.#websocket = null;
-      }
-      if (!this.#closed) {
-        this.#reconnectTimer = setTimeout(() => {
-          this.#reconnectTimer = null;
-          this.connect();
-        }, 1000);
-      }
-    });
+    void this.#poll();
   }
 
   /**
@@ -115,7 +96,14 @@ export class ToolUIAdapter {
       return;
     }
     this.#sessionId = sessionId;
-    this.#sendSessionBinding();
+    this.#deliveredEvents.clear();
+    this.#pollAbortController?.abort();
+    this.#pollAbortController = null;
+    if (this.#pollTimer !== null) {
+      clearTimeout(this.#pollTimer);
+      this.#pollTimer = null;
+    }
+    this.connect();
   }
 
   /**
@@ -132,7 +120,7 @@ export class ToolUIAdapter {
   }
 
   /**
-   * Publishes a prepared document behind a short-lived one-time frame URL.
+   * Publishes a prepared document behind a runtime-scoped frame URL.
    *
    * @param source Complete sandbox frame HTML prepared by the trusted App.
    * @returns Loopback URL that can load the document exactly once.
@@ -169,26 +157,84 @@ export class ToolUIAdapter {
   /** Permanently closes this adapter and cancels reconnection. */
   close(): void {
     this.#closed = true;
-    if (this.#reconnectTimer !== null) {
-      clearTimeout(this.#reconnectTimer);
-      this.#reconnectTimer = null;
+    if (this.#pollTimer !== null) {
+      clearTimeout(this.#pollTimer);
+      this.#pollTimer = null;
     }
-    this.#websocket?.close();
-    this.#websocket = null;
+    this.#pollAbortController?.abort();
+    this.#pollAbortController = null;
+    this.#deliveredEvents.clear();
     this.#listeners.clear();
   }
 
-  #sendSessionBinding(): void {
-    if (this.#websocket?.readyState !== WebSocket.OPEN) {
+  async #poll(): Promise<void> {
+    if (this.#closed || this.#polling) {
       return;
     }
-    this.#websocket.send(
-      JSON.stringify({
-        type: "bind_session",
-        sessionId: this.#sessionId,
-      }),
-    );
+    const sessionId = this.#sessionId;
+    if (sessionId === null) {
+      return;
+    }
+
+    this.#polling = true;
+    const controller = new AbortController();
+    this.#pollAbortController = controller;
+    let delay = TOOL_UI_POLL_INTERVAL_MS;
+    try {
+      const url = new URL("/app/api/tool-ui/events", this.#origin);
+      url.searchParams.set("session_id", sessionId);
+      const response = await fetch(url, {
+        headers: {
+          "X-XTalk-App-Token": this.#launchToken,
+        },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Could not read tool UI events (${response.status}).`);
+      }
+      const payload: unknown = await response.json();
+      for (const toolEvent of parseToolUIEvents(payload)) {
+        const eventKey = `${toolEvent.type}:${toolEvent.callId}:${toolEvent.sequence}`;
+        if (this.#deliveredEvents.has(eventKey)) {
+          continue;
+        }
+        this.#deliveredEvents.add(eventKey);
+        if (this.#deliveredEvents.size > MAX_DELIVERED_TOOL_UI_EVENTS) {
+          const oldest = this.#deliveredEvents.values().next().value;
+          if (oldest !== undefined) {
+            this.#deliveredEvents.delete(oldest);
+          }
+        }
+        for (const listener of this.#listeners) {
+          listener(toolEvent);
+        }
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        delay = TOOL_UI_RETRY_INTERVAL_MS;
+      }
+    } finally {
+      if (this.#pollAbortController === controller) {
+        this.#pollAbortController = null;
+      }
+      this.#polling = false;
+    }
+
+    if (!this.#closed && this.#sessionId !== null) {
+      this.#pollTimer = setTimeout(() => {
+        this.#pollTimer = null;
+        void this.#poll();
+      }, delay);
+    }
   }
+}
+
+function parseToolUIEvents(payload: unknown): ToolUIEvent[] {
+  if (!isRecord(payload) || !Array.isArray(payload.events)) {
+    throw new Error("Tool UI event snapshot must contain an events array.");
+  }
+  return payload.events.map(parseToolUIEvent);
 }
 
 function parseToolUIEvent(payload: unknown): ToolUIEvent {
@@ -218,9 +264,21 @@ function parseToolUIEvent(payload: unknown): ToolUIEvent {
   if (
     payload.type === "tool_ui.emit" &&
     typeof payload.message === "string" &&
-    typeof payload.emittedAt === "string"
+    typeof payload.emittedAt === "string" &&
+    (payload.outcome === undefined ||
+      payload.outcome === "running" ||
+      payload.outcome === "complete" ||
+      payload.outcome === "cancelled") &&
+    (payload.payload === undefined || isRecord(payload.payload))
   ) {
-    return payload as unknown as ToolUIEmitEvent;
+    const event = payload as unknown as ToolUIEmitEvent;
+    if (
+      event.payload !== undefined &&
+      serializedUtf8Bytes(event.payload) > MAX_TOOL_UI_EMIT_PAYLOAD_BYTES
+    ) {
+      delete (event as { payload?: unknown }).payload;
+    }
+    return event;
   }
   throw new Error("Tool UI event type is not supported.");
 }
@@ -231,4 +289,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function serializedUtf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
 }
