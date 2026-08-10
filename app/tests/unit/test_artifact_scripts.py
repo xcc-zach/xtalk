@@ -454,6 +454,7 @@ def test_mtd_runtime_locks_both_native_source_revisions() -> None:
     verifier = load_script("verify_resources")
     verifier.verify_mtd_source_manifest()
     verifier.verify_mtd_packaging()
+    verifier.verify_campplus_packaging()
 
 
 def test_native_runtime_download_context_keeps_tls_verification() -> None:
@@ -1072,3 +1073,20 @@ def test_mtd_local_models_example_uses_managed_diarization() -> None:
             "max_tokens": 2048,
         },
     }
+
+
+def test_campplus_example_uses_only_base_url_with_sherpa_speech() -> None:
+    """Keep CAM++ client parameters minimal and speech on sherpa-onnx."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_campplus.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert example["asr"]["type"] == "SherpaOnnxASR"
+    assert example["speaker_diarization"] == {
+        "type": "CampPlusDiarization",
+        "params": {"base_url": "managed://campplus"},
+    }
+    assert example["tts"]["type"] == "SherpaOnnxTTS"

@@ -20,6 +20,18 @@
       ]
     },
     {
+      "id": "campplus",
+      "version": "7911b205b8db40efa7f329014dfd26c7005377c2",
+      "files": [
+        {
+          "path": "campplus.onnx",
+          "size": 28303423,
+          "sha256": "a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73",
+          "url": "https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512/resolve/7911b205b8db40efa7f329014dfd26c7005377c2/campplus.onnx"
+        }
+      ]
+    },
+    {
       "id": "moss-transcribe-diarize",
       "version": "54e4bbd17da3f84adf1c1bcf7791b9b9266f741e",
       "files": [
