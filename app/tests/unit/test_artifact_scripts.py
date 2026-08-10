@@ -443,6 +443,19 @@ def test_native_runtime_lock_supports_common_desktop_targets() -> None:
     verifier.verify_native_runtime_manifest()
 
 
+def test_mtd_runtime_locks_both_native_source_revisions() -> None:
+    """Pin moss-transcribe.cpp and its ggml submodule independently."""
+
+    module = load_script("download_managed_runtime")
+    records = module.load_mtd_source_records()
+
+    assert set(records) == {"moss-transcribe.cpp", "ggml"}
+    assert all(len(record["revision"]) == 40 for record in records.values())
+    verifier = load_script("verify_resources")
+    verifier.verify_mtd_source_manifest()
+    verifier.verify_mtd_packaging()
+
+
 def test_native_runtime_download_context_keeps_tls_verification() -> None:
     """Use a trusted CA bundle without disabling certificate verification."""
 
@@ -483,6 +496,62 @@ def test_native_runtime_archive_materializes_only_internal_links(
         destination / "runtime" / "lib" / "libonnxruntime.so.1"
     ).read_bytes() == b"runtime"
     assert not (destination / "runtime" / "lib" / "external").exists()
+
+
+def test_mtd_source_assembly_patches_portable_cpu_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Assemble the ggml submodule and disable build-machine CPU tuning."""
+
+    module = load_script("download_managed_runtime")
+    moss_root = tmp_path / "moss-source"
+    ggml_root = tmp_path / "ggml-source"
+    moss_root.mkdir()
+    ggml_root.mkdir()
+    (moss_root / "CMakeLists.txt").write_text(
+        'set(GGML_NATIVE ON CACHE BOOL "" FORCE)\n'
+        'set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)\n',
+        encoding="utf-8",
+    )
+    (ggml_root / "CMakeLists.txt").write_text("project(ggml)\n", encoding="utf-8")
+    archives: dict[str, Path] = {}
+    for name, source in (
+        ("moss.tar.gz", moss_root),
+        ("ggml.tar.gz", ggml_root),
+    ):
+        archive_path = tmp_path / name
+        with tarfile.open(archive_path, "w:gz") as archive:
+            archive.add(source, arcname=source.name)
+        archives[name] = archive_path
+    records = {
+        "moss-transcribe.cpp": {
+            "archive": "moss.tar.gz",
+            "revision": "1" * 40,
+            "sha256": "a" * 64,
+            "url": "https://example.invalid/moss.tar.gz",
+        },
+        "ggml": {
+            "archive": "ggml.tar.gz",
+            "revision": "2" * 40,
+            "sha256": "b" * 64,
+            "url": "https://example.invalid/ggml.tar.gz",
+        },
+    }
+    monkeypatch.setattr(module, "load_mtd_source_records", lambda: records)
+    monkeypatch.setattr(
+        module,
+        "download_verified",
+        lambda record, _cache: archives[record["archive"]],
+    )
+
+    source = module.assemble_mtd_source(tmp_path / "cache")
+
+    cmake = (source / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "if(NOT DEFINED GGML_NATIVE)" in cmake
+    assert "if(NOT DEFINED GGML_LLAMAFILE)" in cmake
+    assert "FORCE" not in cmake
+    assert (source / "third_party" / "ggml" / "CMakeLists.txt").is_file()
 
 
 def test_native_runtime_locates_colocated_macos_sherpa_and_ort(
@@ -754,6 +823,42 @@ def test_macos_packager_smoke_tests_matcha_without_external_environment(
     ]
 
 
+def test_macos_packager_smoke_tests_mtd_without_external_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Launch the MTD sidecar exactly as a signed App will launch it."""
+
+    module = load_script("package_macos_dmg")
+    app = tmp_path / "XTalk.app"
+    runtime = app / "Contents" / "MacOS" / "mtd-model-runtime"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"runtime")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run_runtime(
+        command: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="help", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run_runtime)
+
+    module.smoke_test_mtd_runtime(app)
+
+    assert calls == [
+        (
+            [str(runtime), "--help"],
+            {
+                "capture_output": True,
+                "text": True,
+                "check": False,
+            },
+        )
+    ]
+
+
 def test_managed_runtime_uses_target_specific_binary_names() -> None:
     """Name managed sidecars according to Tauri external-bin conventions."""
 
@@ -766,6 +871,8 @@ def test_managed_runtime_uses_target_specific_binary_names() -> None:
     )
     assert module.target_supports_mlx("aarch64-apple-darwin")
     assert not module.target_supports_mlx("x86_64-unknown-linux-gnu")
+    assert module.target_supports_mtd_metal("aarch64-apple-darwin")
+    assert not module.target_supports_mtd_metal("x86_64-apple-darwin")
 
 
 def test_managed_runtime_stages_only_onnx_cuda_provider_files(
@@ -845,6 +952,35 @@ def test_matcha_macos_build_embeds_packaged_runtime_rpath(
     )
 
 
+def test_mtd_macos_build_uses_pinned_source_and_metal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compile the Apple Silicon MTD sidecar from the assembled source."""
+
+    module = load_script("prepare_managed_runtime")
+    commands: list[tuple[list[str], dict[str, str]]] = []
+
+    def record_command(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str],
+    ) -> None:
+        del cwd, check
+        commands.append((command, env))
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+
+    module.build_mtd_runtime("aarch64-apple-darwin", False, tmp_path)
+
+    assert len(commands) == 1
+    assert "--release" in commands[0][0]
+    assert commands[0][1]["MOSS_TRANSCRIBE_CPP_DIR"] == str(tmp_path)
+    assert commands[0][1]["MOSS_TRANSCRIBE_METAL"] == "1"
+
+
 def test_managed_runtime_reset_preserves_readme(tmp_path: Path) -> None:
     """Remove stale generated runtimes without deleting tracked guidance."""
 
@@ -915,4 +1051,24 @@ def test_matcha_local_models_example_uses_sherpa_tts_client() -> None:
     assert example["tts"] == {
         "type": "SherpaOnnxTTS",
         "params": {"base_url": "managed://matcha-icefall-zh-en"},
+    }
+
+
+def test_mtd_local_models_example_uses_managed_diarization() -> None:
+    """Keep the managed MTD example aligned with the official client protocol."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_mtd.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert example["speaker_diarization"] == {
+        "type": "MossTranscribeDiarize",
+        "params": {
+            "base_url": "managed://moss-transcribe-diarize",
+            "request_timeout_s": 30.0,
+            "temperature": 0.0,
+            "max_tokens": 2048,
+        },
     }

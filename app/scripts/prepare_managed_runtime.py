@@ -12,6 +12,7 @@ import subprocess
 APP_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RUNTIME_MANIFEST = APP_ROOT / "local-model-runtime" / "Cargo.toml"
 MATCHA_RUNTIME_MANIFEST = APP_ROOT / "matcha-model-runtime" / "Cargo.toml"
+MTD_RUNTIME_MANIFEST = APP_ROOT / "mtd-model-runtime" / "Cargo.toml"
 MLX_RUNTIME_PACKAGE = APP_ROOT / "local-model-runtime-mlx"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 MANAGED_RESOURCES = APP_ROOT / "resources" / "managed-runtime"
@@ -34,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sherpa-server", required=True, type=Path)
     parser.add_argument("--sherpa-library-dir", required=True, type=Path)
     parser.add_argument("--ort-library", required=True, type=Path)
+    parser.add_argument("--mtd-source-dir", required=True, type=Path)
     parser.add_argument("--cuda-runtime-dir", type=Path)
     parser.add_argument(
         "--debug",
@@ -224,6 +226,23 @@ def target_supports_mlx(target: str) -> bool:
     return target == "aarch64-apple-darwin"
 
 
+def target_supports_mtd_metal(target: str) -> bool:
+    """Return whether moss-transcribe.cpp should include its Metal backend.
+
+    Parameters
+    ----------
+    target : str
+        Rust target triple.
+
+    Returns
+    -------
+    bool
+        ``True`` only for Apple Silicon macOS.
+    """
+
+    return target == "aarch64-apple-darwin"
+
+
 def build_local_runtime(target: str, debug: bool) -> Path:
     """Build the Rust MOSS runtime for one target.
 
@@ -316,6 +335,52 @@ def build_matcha_runtime(
         / target
         / profile
         / executable_name("xtalk-matcha-model-runtime", target)
+    )
+
+
+def build_mtd_runtime(target: str, debug: bool, source: Path) -> Path:
+    """Build the pinned moss-transcribe.cpp runtime for one target.
+
+    Parameters
+    ----------
+    target : str
+        Rust target triple.
+    debug : bool
+        Whether to use Cargo's debug profile.
+    source : pathlib.Path
+        Assembled moss-transcribe.cpp tree containing the pinned ggml source.
+
+    Returns
+    -------
+    pathlib.Path
+        Built MTD sidecar executable.
+    """
+
+    command = [
+        "cargo",
+        "build",
+        "--manifest-path",
+        str(MTD_RUNTIME_MANIFEST),
+        "--target",
+        target,
+    ]
+    profile = "debug"
+    if not debug:
+        command.append("--release")
+        profile = "release"
+    environment = dict(os.environ)
+    environment["MOSS_TRANSCRIBE_CPP_DIR"] = str(source)
+    environment["MOSS_TRANSCRIBE_METAL"] = (
+        "1" if target_supports_mtd_metal(target) else "0"
+    )
+    subprocess.run(command, cwd=APP_ROOT, check=True, env=environment)
+    return (
+        APP_ROOT
+        / "mtd-model-runtime"
+        / "target"
+        / target
+        / profile
+        / executable_name("xtalk-mtd-model-runtime", target)
     )
 
 
@@ -447,6 +512,14 @@ def main() -> int:
     )
     sherpa_libraries = sherpa_shared_libraries(sherpa_library_dir, target)
     ort_library = require_file(args.ort_library, "ONNX Runtime 1.27")
+    mtd_source = require_directory(
+        args.mtd_source_dir,
+        "assembled moss-transcribe.cpp source",
+    )
+    if not (mtd_source / "third_party" / "ggml" / "CMakeLists.txt").is_file():
+        raise FileNotFoundError(
+            f"assembled moss-transcribe.cpp source is incomplete: {mtd_source}"
+        )
     if "1.27" not in ort_library.name and ort_library.name != "onnxruntime.dll":
         raise ValueError(
             "--ort-library must point to the ONNX Runtime 1.27 library"
@@ -458,6 +531,10 @@ def main() -> int:
     matcha_runtime = require_file(
         build_matcha_runtime(target, args.debug, sherpa_library_dir),
         "Matcha model runtime",
+    )
+    mtd_runtime = require_file(
+        build_mtd_runtime(target, args.debug, mtd_source),
+        "moss-transcribe.cpp runtime",
     )
     if target_supports_mlx(target):
         mlx_runtime, mlx_bundle = build_mlx_runtime(args.debug)
@@ -482,6 +559,12 @@ def main() -> int:
         matcha_runtime,
         TAURI_BINARIES
         / f"matcha-model-runtime-{target}"
+        f"{'.exe' if 'windows' in target else ''}",
+    )
+    copy_file(
+        mtd_runtime,
+        TAURI_BINARIES
+        / f"mtd-model-runtime-{target}"
         f"{'.exe' if 'windows' in target else ''}",
     )
     copy_file(

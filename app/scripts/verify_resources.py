@@ -19,6 +19,16 @@ MANAGED_MODEL_MANIFEST_PATH = (
 NATIVE_RUNTIME_MANIFEST_PATH = (
     APP_ROOT / "resources" / "manifests" / "native-runtimes.lock.json"
 )
+MTD_SOURCE_MANIFEST_PATH = (
+    APP_ROOT
+    / "resources"
+    / "manifests"
+    / "moss-transcribe-runtime.lock.json"
+)
+MTD_LICENSE_PATH = (
+    APP_ROOT / "resources" / "licenses" / "moss-transcribe-cpp-LICENSE.txt"
+)
+MTD_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_mtd.json"
 REQUIRED_MANAGED_MODEL_IDS = {
     "agentic-asr-refiner",
     "agentic-asr-refiner-mlx",
@@ -27,6 +37,7 @@ REQUIRED_MANAGED_MODEL_IDS = {
     "sensevoice-small-mlx",
     "moss-tts-nano",
     "moss-tts-nano-mlx",
+    "moss-transcribe-diarize",
 }
 REQUIRED_NATIVE_RUNTIME_TARGETS = {
     "aarch64-apple-darwin",
@@ -364,6 +375,101 @@ def verify_native_runtime_manifest(
             raise ValueError(f"native-runtime record for {target} is invalid")
 
 
+def verify_mtd_source_manifest(
+    path: Path = MTD_SOURCE_MANIFEST_PATH,
+) -> None:
+    """Validate immutable moss-transcribe.cpp and ggml source revisions.
+
+    Parameters
+    ----------
+    path : pathlib.Path, optional
+        MTD native source lock path.
+
+    Raises
+    ------
+    ValueError
+        Raised when either source record is missing, mutable, or malformed.
+    """
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    sources = payload.get("sources") if isinstance(payload, dict) else None
+    repositories = {
+        "moss-transcribe.cpp": "localai-org/moss-transcribe.cpp",
+        "ggml": "ggml-org/ggml",
+    }
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or not isinstance(sources, dict)
+    ):
+        raise ValueError("unsupported MTD source manifest schema")
+    if set(sources) != set(repositories):
+        raise ValueError("MTD source manifest is incomplete")
+    for name, repository in repositories.items():
+        record = sources[name]
+        if not isinstance(record, dict) or set(record) != {
+            "archive",
+            "revision",
+            "sha256",
+            "url",
+        }:
+            raise ValueError(f"MTD source record for {name} is invalid")
+
+
+def verify_mtd_packaging() -> None:
+    """Require the MTD sidecar, license, and example in Tauri bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the tracked license or example is absent.
+    ValueError
+        Raised when Tauri does not declare the MTD external binary and
+        resource destinations.
+    """
+
+    for path in (MTD_LICENSE_PATH, MTD_EXAMPLE_PATH):
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bundle = tauri_config.get("bundle", {})
+    external_binaries = bundle.get("externalBin", [])
+    resources = bundle.get("resources", {})
+    if "binaries/mtd-model-runtime" not in external_binaries:
+        raise ValueError("Tauri bundle must package the MTD sidecar")
+    if (
+        resources.get("../resources/licenses/moss-transcribe-cpp-LICENSE.txt")
+        != "licenses/moss-transcribe-cpp-LICENSE.txt"
+        or resources.get("../examples/local_models_mtd.json")
+        != "examples/local_models_mtd.json"
+    ):
+        raise ValueError("Tauri bundle must package MTD resources")
+        revision = record["revision"]
+        archive = record["archive"]
+        source = record["url"]
+        expected_hash = record["sha256"]
+        if (
+            not isinstance(revision, str)
+            or len(revision) != 40
+            or any(character not in "0123456789abcdef" for character in revision)
+            or not isinstance(archive, str)
+            or Path(archive).name != archive
+            or source
+            != f"https://github.com/{repository}/archive/{revision}.tar.gz"
+            or not isinstance(expected_hash, str)
+            or len(expected_hash) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_hash
+            )
+        ):
+            raise ValueError(f"MTD source record for {name} is invalid")
+
+
 def verify_no_bundled_default_config() -> None:
     """Reject a release bundle that contains a default model configuration."""
 
@@ -543,6 +649,8 @@ def main() -> int:
     verify_audio_model_manifest()
     verify_managed_model_manifest()
     verify_native_runtime_manifest()
+    verify_mtd_source_manifest()
+    verify_mtd_packaging()
     verify_builtin_tools_and_credentials()
     print("resource verification passed")
     return 0

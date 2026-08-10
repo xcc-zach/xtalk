@@ -468,6 +468,32 @@ def smoke_test_matcha_runtime(app: Path) -> None:
         )
 
 
+def smoke_test_mtd_runtime(app: Path) -> None:
+    """Confirm the signed moss-transcribe.cpp sidecar can be loaded.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Signed application bundle.
+    """
+
+    runtime = app / "Contents" / "MacOS" / "mtd-model-runtime"
+    if not runtime.is_file():
+        raise ValueError(f"app bundle is missing MTD runtime: {runtime}")
+    result = subprocess.run(
+        [str(runtime), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        raise RuntimeError(
+            "signed MTD runtime smoke test failed "
+            f"({result.returncode}): {detail}"
+        )
+
+
 def default_output_path(app: Path) -> Path:
     """Derive the conventional Tauri DMG output path.
 
@@ -555,6 +581,7 @@ def main() -> int:
     sign_app(app, args.identity)
     smoke_test_backend(app)
     smoke_test_matcha_runtime(app)
+    smoke_test_mtd_runtime(app)
     create_dmg(app, output)
     if args.notarize:
         sign_and_notarize_dmg(

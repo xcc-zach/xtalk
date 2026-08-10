@@ -546,6 +546,8 @@ function managedServiceName(serviceId: string): string {
       return "MOSS-TTS-Nano (MLX)";
     case "matcha-icefall-zh-en":
       return "Matcha Icefall (ZH/EN)";
+    case "moss-transcribe-diarize":
+      return "MOSS Transcribe Diarize";
     default:
       return serviceId;
   }

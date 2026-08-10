@@ -32,6 +32,8 @@ const MANIFEST_RESOURCE: &str = "manifests/managed-models.lock.json";
 const ONNX_RUNTIME_RESOURCE: &str = "managed-runtime/ort";
 const TTS_SIDECAR_NAME: &str = "local-model-runtime";
 const MATCHA_TTS_SIDECAR_NAME: &str = "matcha-model-runtime";
+const MTD_SIDECAR_NAME: &str = "mtd-model-runtime";
+const MTD_EVENT_LOG_FILENAME: &str = "mtd-diarization.jsonl";
 const MLX_SIDECAR_NAME: &str = "mlx-model-runtime";
 const SHERPA_SIDECAR_NAME: &str = "sherpa-onnx-offline-websocket-server";
 const SENSEVOICE_ID: &str = "sensevoice-small";
@@ -41,14 +43,17 @@ const REFINER_MLX_ID: &str = "agentic-asr-refiner-mlx";
 const MOSS_TTS_ID: &str = "moss-tts-nano";
 const MOSS_TTS_MLX_ID: &str = "moss-tts-nano-mlx";
 const MATCHA_TTS_ID: &str = "matcha-icefall-zh-en";
+const MTD_ID: &str = "moss-transcribe-diarize";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
 const REFINER_URL: &str = "managed://agentic-asr-refiner";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
 const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
+const MTD_URL: &str = "managed://moss-transcribe-diarize";
 const DEFAULT_MOSS_VOICE_URL: &str = "managed://moss-tts-nano/voices/zh_1.wav";
 const INSTALL_MARKER: &str = ".complete.json";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+const MTD_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_READY_LINE_BYTES: usize = 4 * 1024;
@@ -96,6 +101,7 @@ struct ManagedRequest {
     agentic_asr: bool,
     moss_tts: Option<ManagedBackend>,
     matcha_tts: Option<ManagedBackend>,
+    mtd: Option<ManagedMtdBackend>,
     moss_voices: Vec<ManagedVoice>,
 }
 
@@ -105,6 +111,13 @@ enum ManagedBackend {
     Cpu,
     Cuda,
     Mlx,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedMtdBackend {
+    Auto,
+    Cpu,
+    Metal,
 }
 
 #[derive(Clone, Copy)]
@@ -216,6 +229,8 @@ pub(crate) enum ManagedError {
     UnsupportedMlxPlatform,
     #[error("the CUDA managed runtime is not available on this device")]
     UnsupportedCudaPlatform,
+    #[error("the Metal MTD runtime is supported only on Apple Silicon macOS")]
+    UnsupportedMetalPlatform,
 }
 
 impl ManagedServices {
@@ -228,6 +243,7 @@ impl ManagedServices {
         let request = parse_managed_request(config_path)?;
         let active = request.sensevoice.is_some()
             || request.refiner.is_some()
+            || request.mtd.is_some()
             || request.moss_tts.is_some()
             || request.matcha_tts.is_some();
         let (failure_sender, _) = watch::channel(false);
@@ -292,6 +308,7 @@ impl ManagedServices {
         let mut overlay = json!({});
         let service_count = usize::from(request.sensevoice.is_some())
             + usize::from(request.refiner.is_some())
+            + usize::from(request.mtd.is_some())
             + usize::from(request.moss_tts.is_some())
             + usize::from(request.matcha_tts.is_some());
         let mut service_index = 0;
@@ -431,6 +448,59 @@ impl ManagedServices {
             );
             overlay["asr"]["params"]["refiner_base_url"] =
                 json!(format!("http://127.0.0.1:{port}/v1"));
+        }
+
+        if let Some(requested_backend) = request.mtd {
+            service_index += 1;
+            let backend = select_mtd_backend(requested_backend, metal_is_available())?;
+            let service_manifest = find_service(manifest, MTD_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = start_mtd(app, &model_root, backend).await?;
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["speaker_diarization"] = json!({
+                "params": {
+                    "base_url": format!("http://127.0.0.1:{port}")
+                }
+            });
         }
 
         if let Some(requested_backend) = request.moss_tts {
@@ -606,6 +676,9 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     if request.refiner.is_some() {
         services.push(REFINER_ID.to_owned());
     }
+    if request.mtd.is_some() {
+        services.push(MTD_ID.to_owned());
+    }
     if request.moss_tts.is_some() {
         services.push(MOSS_TTS_ID.to_owned());
     }
@@ -642,6 +715,13 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
         request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
         if request.sensevoice.is_some() {
             require_model_type(&config, "asr", "SherpaOnnxASR")?;
+        }
+    }
+
+    if let Some(base_url) = model_param(&config, "speaker_diarization", "base_url")? {
+        request.mtd = parse_managed_mtd_backend(base_url)?;
+        if request.mtd.is_some() {
+            require_model_type(&config, "speaker_diarization", "MossTranscribeDiarize")?;
         }
     }
 
@@ -684,6 +764,18 @@ fn parse_managed_backend(
     }
 }
 
+fn parse_managed_mtd_backend(base_url: &str) -> Result<Option<ManagedMtdBackend>, ManagedError> {
+    match base_url {
+        value if value == MTD_URL => Ok(Some(ManagedMtdBackend::Auto)),
+        value if value == format!("{MTD_URL}?backend=cpu") => Ok(Some(ManagedMtdBackend::Cpu)),
+        value if value == format!("{MTD_URL}?backend=metal") => Ok(Some(ManagedMtdBackend::Metal)),
+        value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
+            format!("unsupported managed speaker diarization URL `{base_url}`"),
+        )),
+        _ => Ok(None),
+    }
+}
+
 fn resolve_backend(
     app: &AppHandle,
     requested: ManagedBackend,
@@ -719,7 +811,24 @@ fn select_backend(
     }
 }
 
+fn select_mtd_backend(
+    requested: ManagedMtdBackend,
+    metal_available: bool,
+) -> Result<ManagedMtdBackend, ManagedError> {
+    match requested {
+        ManagedMtdBackend::Cpu => Ok(ManagedMtdBackend::Cpu),
+        ManagedMtdBackend::Metal if metal_available => Ok(ManagedMtdBackend::Metal),
+        ManagedMtdBackend::Metal => Err(ManagedError::UnsupportedMetalPlatform),
+        ManagedMtdBackend::Auto if metal_available => Ok(ManagedMtdBackend::Metal),
+        ManagedMtdBackend::Auto => Ok(ManagedMtdBackend::Cpu),
+    }
+}
+
 fn mlx_is_available() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+}
+
+fn metal_is_available() -> bool {
     cfg!(all(target_os = "macos", target_arch = "aarch64"))
 }
 
@@ -1267,6 +1376,45 @@ async fn start_mlx(
     })
 }
 
+async fn start_mtd(
+    app: &AppHandle,
+    model_root: &Path,
+    backend: ManagedMtdBackend,
+) -> Result<StartedService, ManagedError> {
+    let event_log = app.path().app_data_dir()?.join(MTD_EVENT_LOG_FILENAME);
+    let command = app
+        .shell()
+        .sidecar(MTD_SIDECAR_NAME)?
+        .env("GGML_METAL_NO_RESIDENCY", "1")
+        .args([
+            "--model-root".to_owned(),
+            model_root.to_string_lossy().into_owned(),
+            "--backend".to_owned(),
+            mtd_backend_name(backend).to_owned(),
+            "--host".to_owned(),
+            "127.0.0.1".to_owned(),
+            "--port".to_owned(),
+            "0".to_owned(),
+            "--threads".to_owned(),
+            "8".to_owned(),
+            "--event-log".to_owned(),
+            event_log.to_string_lossy().into_owned(),
+        ]);
+    let (mut events, child) = command.spawn()?;
+    let port = match receive_model_ready_with_timeout(&mut events, MTD_STARTUP_TIMEOUT).await {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
 async fn start_moss_tts(
     app: &AppHandle,
     model_root: &Path,
@@ -1427,13 +1575,28 @@ fn onnx_backend_name(backend: ManagedBackend) -> &'static str {
     }
 }
 
+fn mtd_backend_name(backend: ManagedMtdBackend) -> &'static str {
+    match backend {
+        ManagedMtdBackend::Cpu => "cpu",
+        ManagedMtdBackend::Metal => "metal",
+        ManagedMtdBackend::Auto => unreachable!("auto MTD backend must be resolved"),
+    }
+}
+
 fn reserve_loopback_port() -> Result<u16, ManagedError> {
     let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?;
     Ok(listener.local_addr()?.port())
 }
 
 async fn receive_model_ready(events: &mut Receiver<CommandEvent>) -> Result<u16, ManagedError> {
-    timeout(STARTUP_TIMEOUT, async {
+    receive_model_ready_with_timeout(events, STARTUP_TIMEOUT).await
+}
+
+async fn receive_model_ready_with_timeout(
+    events: &mut Receiver<CommandEvent>,
+    startup_timeout: Duration,
+) -> Result<u16, ManagedError> {
+    timeout(startup_timeout, async {
         let mut stderr = String::new();
         loop {
             match events.recv().await {
@@ -1562,10 +1725,11 @@ fn configure_library_path(
 mod tests {
     use super::{
         extract_service_archives, hugging_face_mirror_url, inspect_model_config,
-        parse_managed_request, resolve_moss_voices, safe_join, select_backend,
+        parse_managed_request, resolve_moss_voices, safe_join, select_backend, select_mtd_backend,
         verify_installed_service, write_install_marker, ManagedArchiveFormat,
-        ManagedArchiveManifest, ManagedBackend, ManagedServiceManifest, ManagedVoice,
-        DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, REFINER_ID, SENSEVOICE_ID,
+        ManagedArchiveManifest, ManagedBackend, ManagedMtdBackend, ManagedServiceManifest,
+        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID, REFINER_ID,
+        SENSEVOICE_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
@@ -1638,6 +1802,51 @@ mod tests {
         );
         assert!(select_backend(ManagedBackend::Cuda, false, true).is_err());
         assert!(select_backend(ManagedBackend::Mlx, true, false).is_err());
+    }
+
+    #[test]
+    fn automatic_mtd_backend_prefers_metal_then_cpu() {
+        assert_eq!(
+            select_mtd_backend(ManagedMtdBackend::Auto, true).expect("select Metal"),
+            ManagedMtdBackend::Metal
+        );
+        assert_eq!(
+            select_mtd_backend(ManagedMtdBackend::Auto, false).expect("select CPU"),
+            ManagedMtdBackend::Cpu
+        );
+        assert!(select_mtd_backend(ManagedMtdBackend::Metal, false).is_err());
+    }
+
+    #[test]
+    fn parses_managed_mtd_in_service_order() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {"base_url": "managed://sensevoice-small"}
+                },
+                "speaker_diarization": {
+                    "type": "MossTranscribeDiarize",
+                    "params": {
+                        "base_url": "managed://moss-transcribe-diarize?backend=cpu"
+                    }
+                },
+                "tts": {
+                    "type": "SherpaOnnxTTS",
+                    "params": {"base_url": "managed://matcha-icefall-zh-en"}
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert_eq!(request.mtd, Some(ManagedMtdBackend::Cpu));
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [SENSEVOICE_ID, MTD_ID, MATCHA_TTS_ID]);
     }
 
     #[test]
