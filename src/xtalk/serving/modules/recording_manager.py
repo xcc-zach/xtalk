@@ -28,7 +28,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     FullAudioFrameReady,
@@ -511,7 +511,7 @@ class RecordingManager(Manager):
                 channels=2,
                 format="pcm_s16le",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     def _reset_buffers_locked(self) -> None:

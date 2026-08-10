@@ -1,6 +1,6 @@
 import asyncio
 from typing import Any
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..interfaces import Manager
 from ..events import (
     VADSpeechStart,
@@ -48,7 +48,7 @@ class TurnTakingManager(Manager):
             TurnLLMAgentStopRequested(
                 session_id=self.session_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     @Manager.event_handler(VADSpeechStart)
@@ -61,7 +61,7 @@ class TurnTakingManager(Manager):
                         session_id=self.session_id,
                         reason="text_input",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
                 return
 
@@ -77,14 +77,14 @@ class TurnTakingManager(Manager):
                     turn_id=self._current_turn_id,
                     segment_id=self._current_segment_id,
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
             if self._turn_detector_model is None:
                 await self.event_bus.publish(
                     TurnLLMAgentStopRequested(
                         session_id=self.session_id,
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
 
     @Manager.event_handler(VADSpeechEnd)
@@ -95,7 +95,9 @@ class TurnTakingManager(Manager):
                 return
 
             if self._turn_detector_model is None:
-                await self._publish_asr_end(wait_for_completion=True)
+                await self._publish_asr_end(
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE
+                )
             else:
                 await self.event_bus.publish(
                     TurnASRPauseRequested(
@@ -103,13 +105,13 @@ class TurnTakingManager(Manager):
                         turn_id=self._current_turn_id,
                         segment_id=self._current_segment_id,
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
 
     async def _publish_asr_end(
         self,
         *,
-        wait_for_completion: bool = False,
+        mode: EventDispatchMode = EventDispatchMode.RETURN_AFTER_DISPATCH,
     ) -> None:
         """Publish the current hard-turn boundary and close its ID scope."""
 
@@ -121,7 +123,7 @@ class TurnTakingManager(Manager):
                 turn_id=self._current_turn_id,
                 segment_id=self._current_segment_id,
             ),
-            wait_for_completion=wait_for_completion,
+            mode=mode,
         )
         self._turn_open = False
 

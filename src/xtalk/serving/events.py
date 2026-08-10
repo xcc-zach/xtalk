@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import time
 from dataclasses import dataclass, field, make_dataclass
+from enum import Enum
 from typing import AsyncIterator, ClassVar, Dict, Any, Type
 from ..models.agents.interfaces import AgentOutput
 
@@ -107,6 +108,13 @@ class VADSpeechEnd(Event):
     origin: str = "client"
 
 
+class ASRGateState(str, Enum):
+    """Mark whether a speaker-aware gate accepted an ASR event."""
+
+    UNCHECKED = "unchecked"
+    ACCEPTED = "accepted"
+
+
 @dataclass
 class ASRResultPartial(Event):
     """Incremental user transcript produced by audio ASR or text input."""
@@ -118,6 +126,7 @@ class ASRResultPartial(Event):
     origin: str = "asr"
     turn_id: int = 0
     segment_id: int = 0
+    gate_state: ASRGateState = ASRGateState.UNCHECKED
 
 
 @dataclass
@@ -130,6 +139,7 @@ class ASRResultFinal(Event):
     origin: str = "asr"
     turn_id: int = 0
     segment_id: int = 0
+    gate_state: ASRGateState = ASRGateState.UNCHECKED
 
 
 @dataclass

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from ...models import Models, SpeakerEncoder
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     EnhancedAudioFrameReceived,
     SpeakerRecognized,
@@ -148,7 +148,7 @@ class SpeakerManager(Manager):
                             speaker_id=None,
                             reason="no_audio",
                         ),
-                        wait_for_completion=True,
+                        mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                     )
                     return
 
@@ -169,7 +169,7 @@ class SpeakerManager(Manager):
                         speaker_id=None,
                         reason="too_short",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
                 return
 
@@ -188,7 +188,7 @@ class SpeakerManager(Manager):
                     speaker_id=speaker_id,
                     reason="recognized",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         except Exception as e:
@@ -205,7 +205,7 @@ class SpeakerManager(Manager):
                         speaker_id=None,
                         reason="error",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
             except Exception:
                 pass

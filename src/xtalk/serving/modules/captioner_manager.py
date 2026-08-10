@@ -35,7 +35,7 @@ from collections import deque
 from typing import Any, Deque, Optional, Tuple
 
 from ...models import Captioner, Models, Rewriter
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     CaptionUpdated,
@@ -144,7 +144,7 @@ class CaptionerManager(Manager):
                     is_final=False,
                     reason="refresh",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
     async def _rewrite_caption(self, caption: Optional[str]) -> Optional[str]:

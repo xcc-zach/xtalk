@@ -31,7 +31,7 @@ from typing import Any, Optional
 import numpy as np
 
 from ...models import Models, SpeechEnhancer
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     EnhancedAudioFrameReceived,
@@ -358,7 +358,7 @@ class EnhancerManager(Manager):
                 audio_data=audio_data,
                 sample_rate=sample_rate,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     # ----------------------------
