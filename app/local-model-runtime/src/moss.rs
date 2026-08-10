@@ -462,6 +462,14 @@ pub(crate) fn create_session(
         OnnxBackend::Cuda => builder
             .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
             .map_err(|error| anyhow::anyhow!("{error}"))?,
+        // CAM++'s dynamic pooling graph is correct through CoreML's GPU path;
+        // enabling ANE or MLProgram currently yields load errors or zero output.
+        OnnxBackend::Coreml => builder
+            .with_execution_providers([ort::ep::CoreML::default()
+                .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndGPU)
+                .build()
+                .error_on_failure()])
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
     };
     let builder = builder
         .with_optimization_level(GraphOptimizationLevel::Level3)

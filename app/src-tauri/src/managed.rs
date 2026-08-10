@@ -44,12 +44,14 @@ const MOSS_TTS_ID: &str = "moss-tts-nano";
 const MOSS_TTS_MLX_ID: &str = "moss-tts-nano-mlx";
 const MATCHA_TTS_ID: &str = "matcha-icefall-zh-en";
 const MTD_ID: &str = "moss-transcribe-diarize";
+const CAMPPLUS_ID: &str = "campplus";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
 const REFINER_URL: &str = "managed://agentic-asr-refiner";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
 const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
 const MTD_URL: &str = "managed://moss-transcribe-diarize";
+const CAMPPLUS_URL: &str = "managed://campplus";
 const DEFAULT_MOSS_VOICE_URL: &str = "managed://moss-tts-nano/voices/zh_1.wav";
 const INSTALL_MARKER: &str = ".complete.json";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -102,6 +104,7 @@ struct ManagedRequest {
     moss_tts: Option<ManagedBackend>,
     matcha_tts: Option<ManagedBackend>,
     mtd: Option<ManagedMtdBackend>,
+    campplus: Option<ManagedCampPlusBackend>,
     moss_voices: Vec<ManagedVoice>,
 }
 
@@ -120,12 +123,21 @@ enum ManagedMtdBackend {
     Metal,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedCampPlusBackend {
+    Auto,
+    Cpu,
+    Cuda,
+    Coreml,
+}
+
 #[derive(Clone, Copy)]
 enum ManagedServiceKind {
     SenseVoice,
     Refiner,
     MossTts,
     MatchaTts,
+    CampPlus,
 }
 
 struct ManagedVoice {
@@ -229,6 +241,8 @@ pub(crate) enum ManagedError {
     UnsupportedMlxPlatform,
     #[error("the CUDA managed runtime is not available on this device")]
     UnsupportedCudaPlatform,
+    #[error("the CoreML managed runtime is supported only on macOS")]
+    UnsupportedCoremlPlatform,
     #[error("the Metal MTD runtime is supported only on Apple Silicon macOS")]
     UnsupportedMetalPlatform,
 }
@@ -244,6 +258,7 @@ impl ManagedServices {
         let active = request.sensevoice.is_some()
             || request.refiner.is_some()
             || request.mtd.is_some()
+            || request.campplus.is_some()
             || request.moss_tts.is_some()
             || request.matcha_tts.is_some();
         let (failure_sender, _) = watch::channel(false);
@@ -309,6 +324,7 @@ impl ManagedServices {
         let service_count = usize::from(request.sensevoice.is_some())
             + usize::from(request.refiner.is_some())
             + usize::from(request.mtd.is_some())
+            + usize::from(request.campplus.is_some())
             + usize::from(request.moss_tts.is_some())
             + usize::from(request.matcha_tts.is_some());
         let mut service_index = 0;
@@ -484,6 +500,59 @@ impl ManagedServices {
                 None,
             );
             let started = start_mtd(app, &model_root, backend).await?;
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["speaker_diarization"] = json!({
+                "params": {
+                    "base_url": format!("http://127.0.0.1:{port}")
+                }
+            });
+        }
+
+        if let Some(requested_backend) = request.campplus {
+            service_index += 1;
+            let backend = resolve_campplus_backend(app, requested_backend)?;
+            let service_manifest = find_service(manifest, CAMPPLUS_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = start_campplus(app, &model_root, backend).await?;
             let port = started.port;
             self.accept(started).await;
             emit_managed_progress(
@@ -679,6 +748,9 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     if request.mtd.is_some() {
         services.push(MTD_ID.to_owned());
     }
+    if request.campplus.is_some() {
+        services.push(CAMPPLUS_ID.to_owned());
+    }
     if request.moss_tts.is_some() {
         services.push(MOSS_TTS_ID.to_owned());
     }
@@ -719,9 +791,16 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
     }
 
     if let Some(base_url) = model_param(&config, "speaker_diarization", "base_url")? {
-        request.mtd = parse_managed_mtd_backend(base_url)?;
-        if request.mtd.is_some() {
+        if is_service_url(base_url, MTD_URL) {
+            request.mtd = parse_managed_mtd_backend(base_url)?;
             require_model_type(&config, "speaker_diarization", "MossTranscribeDiarize")?;
+        } else if is_service_url(base_url, CAMPPLUS_URL) {
+            request.campplus = parse_managed_campplus_backend(base_url)?;
+            require_model_type(&config, "speaker_diarization", "CampPlusDiarization")?;
+        } else if base_url.starts_with(MANAGED_ROOT) {
+            return Err(ManagedError::InvalidConfiguration(format!(
+                "unsupported managed speaker diarization URL `{base_url}`"
+            )));
         }
     }
 
@@ -776,6 +855,27 @@ fn parse_managed_mtd_backend(base_url: &str) -> Result<Option<ManagedMtdBackend>
     }
 }
 
+fn parse_managed_campplus_backend(
+    base_url: &str,
+) -> Result<Option<ManagedCampPlusBackend>, ManagedError> {
+    match base_url {
+        value if value == CAMPPLUS_URL => Ok(Some(ManagedCampPlusBackend::Auto)),
+        value if value == format!("{CAMPPLUS_URL}?backend=cpu") => {
+            Ok(Some(ManagedCampPlusBackend::Cpu))
+        }
+        value if value == format!("{CAMPPLUS_URL}?backend=cuda") => {
+            Ok(Some(ManagedCampPlusBackend::Cuda))
+        }
+        value if value == format!("{CAMPPLUS_URL}?backend=coreml") => {
+            Ok(Some(ManagedCampPlusBackend::Coreml))
+        }
+        value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
+            format!("unsupported managed CAM++ URL `{base_url}`"),
+        )),
+        _ => Ok(None),
+    }
+}
+
 fn resolve_backend(
     app: &AppHandle,
     requested: ManagedBackend,
@@ -821,6 +921,34 @@ fn select_mtd_backend(
         ManagedMtdBackend::Metal => Err(ManagedError::UnsupportedMetalPlatform),
         ManagedMtdBackend::Auto if metal_available => Ok(ManagedMtdBackend::Metal),
         ManagedMtdBackend::Auto => Ok(ManagedMtdBackend::Cpu),
+    }
+}
+
+fn resolve_campplus_backend(
+    app: &AppHandle,
+    requested: ManagedCampPlusBackend,
+) -> Result<ManagedCampPlusBackend, ManagedError> {
+    select_campplus_backend(
+        requested,
+        cuda_is_available(app, ManagedServiceKind::CampPlus)?,
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn select_campplus_backend(
+    requested: ManagedCampPlusBackend,
+    cuda_available: bool,
+    coreml_available: bool,
+) -> Result<ManagedCampPlusBackend, ManagedError> {
+    match requested {
+        ManagedCampPlusBackend::Cpu => Ok(ManagedCampPlusBackend::Cpu),
+        ManagedCampPlusBackend::Cuda if cuda_available => Ok(ManagedCampPlusBackend::Cuda),
+        ManagedCampPlusBackend::Cuda => Err(ManagedError::UnsupportedCudaPlatform),
+        ManagedCampPlusBackend::Coreml if coreml_available => Ok(ManagedCampPlusBackend::Coreml),
+        ManagedCampPlusBackend::Coreml => Err(ManagedError::UnsupportedCoremlPlatform),
+        ManagedCampPlusBackend::Auto if cuda_available => Ok(ManagedCampPlusBackend::Cuda),
+        ManagedCampPlusBackend::Auto if coreml_available => Ok(ManagedCampPlusBackend::Coreml),
+        ManagedCampPlusBackend::Auto => Ok(ManagedCampPlusBackend::Cpu),
     }
 }
 
@@ -1493,6 +1621,45 @@ async fn start_refiner(
     })
 }
 
+async fn start_campplus(
+    app: &AppHandle,
+    model_root: &Path,
+    backend: ManagedCampPlusBackend,
+) -> Result<StartedService, ManagedError> {
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    let ort_library = find_ort_library(&runtime_dir)?;
+    let command = app.shell().sidecar(TTS_SIDECAR_NAME)?.args([
+        "--service".to_owned(),
+        CAMPPLUS_ID.to_owned(),
+        "--model-root".to_owned(),
+        model_root.to_string_lossy().into_owned(),
+        "--ort-dylib".to_owned(),
+        ort_library.to_string_lossy().into_owned(),
+        "--backend".to_owned(),
+        campplus_backend_name(backend).to_owned(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "--port".to_owned(),
+        "0".to_owned(),
+    ]);
+    let command = configure_library_path(command, &runtime_dir);
+    let (mut events, child) = command.spawn()?;
+    let port = match receive_model_ready(&mut events).await {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
 async fn start_matcha_tts(
     app: &AppHandle,
     model_root: &Path,
@@ -1580,6 +1747,15 @@ fn mtd_backend_name(backend: ManagedMtdBackend) -> &'static str {
         ManagedMtdBackend::Cpu => "cpu",
         ManagedMtdBackend::Metal => "metal",
         ManagedMtdBackend::Auto => unreachable!("auto MTD backend must be resolved"),
+    }
+}
+
+fn campplus_backend_name(backend: ManagedCampPlusBackend) -> &'static str {
+    match backend {
+        ManagedCampPlusBackend::Cpu => "cpu",
+        ManagedCampPlusBackend::Cuda => "cuda",
+        ManagedCampPlusBackend::Coreml => "coreml",
+        ManagedCampPlusBackend::Auto => unreachable!("auto CAM++ backend must be resolved"),
     }
 }
 
@@ -1725,10 +1901,11 @@ fn configure_library_path(
 mod tests {
     use super::{
         extract_service_archives, hugging_face_mirror_url, inspect_model_config,
-        parse_managed_request, resolve_moss_voices, safe_join, select_backend, select_mtd_backend,
-        verify_installed_service, write_install_marker, ManagedArchiveFormat,
-        ManagedArchiveManifest, ManagedBackend, ManagedMtdBackend, ManagedServiceManifest,
-        ManagedVoice, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID, REFINER_ID,
+        parse_managed_request, resolve_moss_voices, safe_join, select_backend,
+        select_campplus_backend, select_mtd_backend, verify_installed_service,
+        write_install_marker, ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend,
+        ManagedCampPlusBackend, ManagedMtdBackend, ManagedServiceManifest, ManagedVoice,
+        CAMPPLUS_ID, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID, REFINER_ID,
         SENSEVOICE_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
@@ -1815,6 +1992,56 @@ mod tests {
             ManagedMtdBackend::Cpu
         );
         assert!(select_mtd_backend(ManagedMtdBackend::Metal, false).is_err());
+    }
+
+    #[test]
+    fn automatic_campplus_backend_prefers_cuda_then_coreml_then_cpu() {
+        assert_eq!(
+            select_campplus_backend(ManagedCampPlusBackend::Auto, true, true).expect("select CUDA"),
+            ManagedCampPlusBackend::Cuda
+        );
+        assert_eq!(
+            select_campplus_backend(ManagedCampPlusBackend::Auto, false, true)
+                .expect("select CoreML"),
+            ManagedCampPlusBackend::Coreml
+        );
+        assert_eq!(
+            select_campplus_backend(ManagedCampPlusBackend::Auto, false, false)
+                .expect("select CPU"),
+            ManagedCampPlusBackend::Cpu
+        );
+        assert!(select_campplus_backend(ManagedCampPlusBackend::Coreml, false, false).is_err());
+    }
+
+    #[test]
+    fn parses_managed_campplus_in_service_order() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {"base_url": "managed://sensevoice-small"}
+                },
+                "speaker_diarization": {
+                    "type": "CampPlusDiarization",
+                    "params": {"base_url": "managed://campplus"}
+                },
+                "tts": {
+                    "type": "SherpaOnnxTTS",
+                    "params": {"base_url": "managed://matcha-icefall-zh-en"}
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert_eq!(request.campplus, Some(ManagedCampPlusBackend::Auto));
+        assert_eq!(request.mtd, None);
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [SENSEVOICE_ID, CAMPPLUS_ID, MATCHA_TTS_ID]);
     }
 
     #[test]

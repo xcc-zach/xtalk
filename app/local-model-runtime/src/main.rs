@@ -1,6 +1,7 @@
 //! HTTP entrypoint for XTalk's native local-model runtime.
 
 mod audio;
+mod campplus;
 mod manifest;
 mod moss;
 mod refiner;
@@ -75,6 +76,9 @@ pub(crate) enum RuntimeService {
     MossTtsNano,
     /// Host the AgenticASR transcript Refiner.
     AgenticAsrRefiner,
+    /// Host CAM++ speaker-embedding extraction.
+    #[value(name = "campplus")]
+    CampPlus,
 }
 
 /// Execution provider selected for all MOSS ONNX sessions.
@@ -84,6 +88,8 @@ pub(crate) enum OnnxBackend {
     Cpu,
     /// Require the ONNX Runtime CUDA execution provider.
     Cuda,
+    /// Require the ONNX Runtime CoreML execution provider.
+    Coreml,
 }
 
 #[derive(Clone)]
@@ -210,6 +216,7 @@ async fn main() -> Result<()> {
     match args.service {
         RuntimeService::MossTtsNano => run_moss(args).await,
         RuntimeService::AgenticAsrRefiner => refiner::run(args).await,
+        RuntimeService::CampPlus => campplus::run(args).await,
     }
 }
 

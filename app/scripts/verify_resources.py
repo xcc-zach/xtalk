@@ -29,9 +29,11 @@ MTD_LICENSE_PATH = (
     APP_ROOT / "resources" / "licenses" / "moss-transcribe-cpp-LICENSE.txt"
 )
 MTD_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_mtd.json"
+CAMPPLUS_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_campplus.json"
 REQUIRED_MANAGED_MODEL_IDS = {
     "agentic-asr-refiner",
     "agentic-asr-refiner-mlx",
+    "campplus",
     "matcha-icefall-zh-en",
     "sensevoice-small",
     "sensevoice-small-mlx",
@@ -470,6 +472,32 @@ def verify_mtd_packaging() -> None:
             raise ValueError(f"MTD source record for {name} is invalid")
 
 
+def verify_campplus_packaging() -> None:
+    """Require the CAM++ example in Tauri bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the CAM++ example is absent.
+    ValueError
+        Raised when Tauri does not package the example at its runtime path.
+    """
+
+    if not CAMPPLUS_EXAMPLE_PATH.is_file():
+        raise FileNotFoundError(CAMPPLUS_EXAMPLE_PATH)
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resources = tauri_config.get("bundle", {}).get("resources", {})
+    if (
+        resources.get("../examples/local_models_campplus.json")
+        != "examples/local_models_campplus.json"
+    ):
+        raise ValueError("Tauri bundle must package the CAM++ example")
+
+
 def verify_no_bundled_default_config() -> None:
     """Reject a release bundle that contains a default model configuration."""
 
@@ -651,6 +679,7 @@ def main() -> int:
     verify_native_runtime_manifest()
     verify_mtd_source_manifest()
     verify_mtd_packaging()
+    verify_campplus_packaging()
     verify_builtin_tools_and_credentials()
     print("resource verification passed")
     return 0
