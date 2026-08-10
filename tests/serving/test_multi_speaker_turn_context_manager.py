@@ -74,6 +74,29 @@ class _FakeDiarization:
 class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
     """Verify generic scheduling and ASR/diarization joining."""
 
+    async def test_model_presence_controls_enablement(self) -> None:
+        """Enable diarization only when its model is registered."""
+
+        event_bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(event_bus.shutdown)
+        without_model = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="without-model",
+            models=Models(),
+            config={"multi_speaker": {}},
+        )
+        self.addAsyncCleanup(without_model.shutdown)
+        with_model = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="with-model",
+            models=Models({SpeakerDiarization: _FakeDiarization()}),
+            config={"multi_speaker": {}},
+        )
+        self.addAsyncCleanup(with_model.shutdown)
+
+        self.assertFalse(without_model.enabled)
+        self.assertTrue(with_model.enabled)
+
     async def test_final_snapshot_uses_generic_model_contract(self) -> None:
         """Buffer one segment and publish its turn-level diarization result."""
 
@@ -86,9 +109,7 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             models=Models({SpeakerDiarization: model}),
             config={
                 "multi_speaker": {
-                    "enabled": True,
                     "diarization": {
-                        "sample_rate": 16000,
                         "pre_buffer_s": 0.1,
                     },
                 }
@@ -152,7 +173,7 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             event_bus=event_bus,
             session_id="session",
             models=Models({SpeakerDiarization: _FakeDiarization()}),
-            config={"multi_speaker": {"enabled": True}},
+            config={"multi_speaker": {}},
         )
         self.addAsyncCleanup(manager.shutdown)
 
@@ -176,6 +197,24 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(ready), 1)
         self.assertEqual(ready[0].asr_text, "你好")
         self.assertEqual(ready[0].active_speaker_id, "S02")
+        self.assertFalse(ready[0].should_respond)
+
+    async def test_default_focuses_s01(self) -> None:
+        """Respond to S01 and suppress other identified speakers by default."""
+
+        event_bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(event_bus.shutdown)
+        manager = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({SpeakerDiarization: _FakeDiarization()}),
+        )
+        self.addAsyncCleanup(manager.shutdown)
+
+        self.assertEqual(manager.response_policy, "focus_only")
+        self.assertEqual(manager.focus_speaker_ids, {"S01"})
+        self.assertTrue(manager._should_respond("S01"))
+        self.assertFalse(manager._should_respond("S02"))
 
 
 if __name__ == "__main__":
