@@ -1,0 +1,53 @@
+{
+  "asr": {
+    "type": "SherpaOnnxASR",
+    "params": {
+      "base_url": "managed://sensevoice-small",
+      "mode": "offline"
+    }
+  },
+  "llm_agent": {
+    "type": "DefaultAgent",
+    "params": {
+      "model": {
+        "api_key": "",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "extra_body": {
+          "thinking": {"type": "disabled"}
+        }
+      }
+    }
+  },
+  "speaker_diarization": {
+    "type": "MossTranscribeDiarize",
+    "params": {
+      "base_url": "managed://moss-transcribe-diarize",
+      "request_timeout_s": 30.0,
+      "temperature": 0.0,
+      "max_tokens": 2048
+    }
+  },
+  "service_config": {
+    "multi_speaker": {
+      "response_policy": "focus_only",
+      "focus_speaker_ids": ["S01"],
+      "suppress_when_speaker_missing": false,
+      "join_timeout_s": 30.0,
+      "fallback_on_timeout": true,
+      "diarization": {
+        "pre_buffer_s": 1.0,
+        "partial": {
+          "interval_s": 1.0,
+          "first_partial_min_s": 0.8
+        }
+      }
+    }
+  },
+  "tts": {
+    "type": "SherpaOnnxTTS",
+    "params": {
+      "base_url": "managed://matcha-icefall-zh-en"
+    }
+  }
+}

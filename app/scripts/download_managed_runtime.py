@@ -20,9 +20,18 @@ from typing import Any
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = APP_ROOT / "resources" / "manifests" / "native-runtimes.lock.json"
+MTD_SOURCE_LOCK_PATH = (
+    APP_ROOT
+    / "resources"
+    / "manifests"
+    / "moss-transcribe-runtime.lock.json"
+)
 DEFAULT_CACHE = APP_ROOT / ".build" / "native-runtime-cache"
 DOWNLOAD_ATTEMPTS = 3
 DOWNLOAD_READ_TIMEOUT_SECONDS = 300
+MTD_SOURCE_NAMES = {"moss-transcribe.cpp", "ggml"}
+MTD_NATIVE_CMAKE_SETTING = 'set(GGML_NATIVE ON CACHE BOOL "" FORCE)'
+MTD_LLAMAFILE_CMAKE_SETTING = 'set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)'
 
 
 def verified_tls_context() -> ssl.SSLContext:
@@ -158,6 +167,55 @@ def load_target_record(target: str) -> dict[str, str]:
     return {key: record[key] for key in required}
 
 
+def load_mtd_source_records() -> dict[str, dict[str, str]]:
+    """Load immutable moss-transcribe.cpp and ggml source archives.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Strictly validated source records keyed by project name.
+
+    Raises
+    ------
+    ValueError
+        If the source lock is incomplete or does not use immutable GitHub
+        archive URLs.
+    """
+
+    payload: Any = json.loads(MTD_SOURCE_LOCK_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("MTD source lock has an unsupported schema")
+    sources = payload.get("sources")
+    if not isinstance(sources, dict) or set(sources) != MTD_SOURCE_NAMES:
+        raise ValueError("MTD source lock must contain moss-transcribe.cpp and ggml")
+    repositories = {
+        "moss-transcribe.cpp": "localai-org/moss-transcribe.cpp",
+        "ggml": "ggml-org/ggml",
+    }
+    result: dict[str, dict[str, str]] = {}
+    for name, repository in repositories.items():
+        record = sources[name]
+        required = {"archive", "revision", "sha256", "url"}
+        if not isinstance(record, dict) or set(record) != required:
+            raise ValueError(f"MTD source record for {name} is invalid")
+        if not all(isinstance(record[key], str) and record[key] for key in required):
+            raise ValueError(f"MTD source record for {name} is incomplete")
+        revision = record["revision"]
+        expected_url = f"https://github.com/{repository}/archive/{revision}.tar.gz"
+        digest = record["sha256"]
+        if (
+            len(revision) != 40
+            or any(character not in "0123456789abcdef" for character in revision)
+            or record["url"] != expected_url
+            or Path(record["archive"]).name != record["archive"]
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(f"MTD source record for {name} is not immutable")
+        result[name] = {key: record[key] for key in required}
+    return result
+
+
 def download_verified(record: dict[str, str], cache: Path) -> Path:
     """Download one archive and require its locked SHA-256.
 
@@ -248,7 +306,7 @@ def extract_regular_files(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True)
     root = destination.resolve()
     link_members: list[tarfile.TarInfo] = []
-    with tarfile.open(archive_path, mode="r:bz2") as archive:
+    with tarfile.open(archive_path, mode="r:*") as archive:
         for member in archive.getmembers():
             target = (destination / member.name).resolve()
             if not target.is_relative_to(root):
@@ -291,6 +349,110 @@ def extract_regular_files(archive_path: Path, destination: Path) -> None:
         if len(unresolved) == len(pending):
             break
         pending = unresolved
+
+
+def single_extracted_directory(root: Path, label: str) -> Path:
+    """Return the only top-level directory from a source archive.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Extracted archive directory.
+    label : str
+        Human-readable source name.
+
+    Returns
+    -------
+    pathlib.Path
+        Unique top-level source directory.
+    """
+
+    directories = sorted(path for path in root.iterdir() if path.is_dir())
+    files = [path for path in root.iterdir() if path.is_file()]
+    if len(directories) != 1 or files:
+        raise ValueError(f"{label} archive must contain one source directory")
+    return directories[0]
+
+
+def assemble_mtd_source(cache: Path) -> Path:
+    """Download, verify, and assemble the pinned MTD source tree.
+
+    The upstream project keeps ggml as a Git submodule. Release builds fetch
+    both immutable archives, place the locked ggml revision in the submodule
+    directory, and make the upstream native-tuning default overridable so
+    Cargo can produce binaries compatible with older CPUs.
+
+    Parameters
+    ----------
+    cache : pathlib.Path
+        Persistent native-runtime build cache.
+
+    Returns
+    -------
+    pathlib.Path
+        Assembled moss-transcribe.cpp source directory.
+    """
+
+    records = load_mtd_source_records()
+    archives = {
+        name: download_verified(record, cache)
+        for name, record in records.items()
+    }
+    cache_key = "-".join(
+        records[name]["sha256"][:12] for name in sorted(records)
+    )
+    destination = cache / f"mtd-source-{cache_key}"
+    expected_marker: dict[str, Any] = {
+        "schema_version": 1,
+        "sources": {
+            name: records[name]["revision"] for name in sorted(records)
+        },
+    }
+
+    extracted_roots: dict[str, Path] = {}
+    for name, archive in archives.items():
+        extracted = cache / f"mtd-extracted-{name.replace('.', '-')}-{cache_key}"
+        extract_regular_files(archive, extracted)
+        extracted_roots[name] = single_extracted_directory(extracted, name)
+
+    staging = cache / f"mtd-source-staging-{cache_key}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(extracted_roots["moss-transcribe.cpp"], staging)
+    ggml_destination = staging / "third_party" / "ggml"
+    if ggml_destination.exists():
+        shutil.rmtree(ggml_destination)
+    ggml_destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(extracted_roots["ggml"], ggml_destination)
+
+    cmake_path = staging / "CMakeLists.txt"
+    cmake = cmake_path.read_text(encoding="utf-8")
+    if cmake.count(MTD_NATIVE_CMAKE_SETTING) != 1:
+        raise ValueError("locked moss-transcribe.cpp native setting changed")
+    cmake = cmake.replace(
+        MTD_NATIVE_CMAKE_SETTING,
+        "if(NOT DEFINED GGML_NATIVE)\n"
+        "  set(GGML_NATIVE ON CACHE BOOL \"\")\n"
+        "endif()",
+    )
+    if cmake.count(MTD_LLAMAFILE_CMAKE_SETTING) != 1:
+        raise ValueError("locked moss-transcribe.cpp llamafile setting changed")
+    cmake = cmake.replace(
+        MTD_LLAMAFILE_CMAKE_SETTING,
+        "if(NOT DEFINED GGML_LLAMAFILE)\n"
+        "  set(GGML_LLAMAFILE ON CACHE BOOL \"\")\n"
+        "endif()",
+    )
+    cmake_path.write_text(cmake, encoding="utf-8")
+    marker = staging / ".xtalk-source-lock.json"
+    marker.write_text(
+        json.dumps(expected_marker, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if destination.exists():
+        shutil.rmtree(destination)
+    staging.rename(destination)
+    return destination
 
 
 def unique_match(
@@ -400,6 +562,7 @@ def prepare_runtime(target: str, cache: Path, debug: bool) -> None:
     extracted = cache / f"extracted-{target}-{record['sha256'][:12]}"
     extract_regular_files(archive, extracted)
     server, sherpa_directory, ort = locate_runtime_inputs(extracted, target)
+    mtd_source = assemble_mtd_source(cache)
     command = [
         sys.executable,
         str(APP_ROOT / "scripts" / "prepare_managed_runtime.py"),
@@ -411,6 +574,8 @@ def prepare_runtime(target: str, cache: Path, debug: bool) -> None:
         str(sherpa_directory),
         "--ort-library",
         str(ort),
+        "--mtd-source-dir",
+        str(mtd_source),
     ]
     if debug:
         command.append("--debug")

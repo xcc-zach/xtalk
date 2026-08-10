@@ -20,6 +20,21 @@
       ]
     },
     {
+      "id": "moss-transcribe-diarize",
+      "version": "54e4bbd17da3f84adf1c1bcf7791b9b9266f741e",
+      "files": [
+        {
+          "path": "moss-transcribe-q4_k.gguf",
+          "size": 535272448,
+          "sha256": "ac22065a8f9ad10416262a950e9e87e4e6b51ef90e07a42a1a62cb718a12623b",
+          "url": "https://huggingface.co/mudler/moss-transcribe.cpp-gguf/resolve/54e4bbd17da3f84adf1c1bcf7791b9b9266f741e/moss-transcribe-q4_k.gguf"
+        }
+      ],
+      "required_paths": [
+        "moss-transcribe-q4_k.gguf"
+      ]
+    },
+    {
       "id": "moss-tts-nano",
       "version": "f52645cb467506d8e18e746ddd59482685b74e58+ceff0d0749bfb3fa2d61149794ec6feef0d1e1ae",
       "files": [
