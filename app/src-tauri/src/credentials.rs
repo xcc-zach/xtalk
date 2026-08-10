@@ -352,6 +352,7 @@ pub(crate) async fn ensure_tool_can_enable(
 /// Resolves secrets needed by enabled tools for one sidecar child process.
 pub(crate) async fn sidecar_environment(
     app: &AppHandle,
+    skipped_always_injected: BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>, CredentialError> {
     let registry = load_registry(app)?;
     let always_injected = registry
@@ -377,25 +378,44 @@ pub(crate) async fn sidecar_environment(
         .flatten()
         .collect::<Vec<_>>();
     spawn_blocking(move || {
-        let mut resolved = BTreeMap::new();
-        for binding in enabled_bindings {
-            let definition = registered_credential(&registry, &binding.credential_id)?;
-            let secret = resolve_secret(definition, &SystemCredentialStore, &environment_value)?
-                .ok_or(CredentialError::RequiredCredentialMissing)?;
-            resolved.insert(binding.inject_environment, secret);
-        }
-        for (credential_id, name) in always_injected {
-            let definition = registered_credential(&registry, &credential_id)?;
-            if let Some(secret) =
-                resolve_secret(definition, &SystemCredentialStore, &environment_value)?
-            {
-                resolved.insert(name, secret);
-            }
-        }
-        Ok(resolved)
+        sidecar_environment_with(
+            &registry,
+            enabled_bindings,
+            always_injected,
+            &skipped_always_injected,
+            &SystemCredentialStore,
+            &environment_value,
+        )
     })
     .await
     .map_err(|_| CredentialError::OperationUnavailable)?
+}
+
+fn sidecar_environment_with(
+    registry: &CredentialRegistry,
+    enabled_bindings: Vec<CredentialBinding>,
+    always_injected: Vec<(String, String)>,
+    skipped_always_injected: &BTreeSet<String>,
+    store: &dyn CredentialStore,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<BTreeMap<String, String>, CredentialError> {
+    let mut resolved = BTreeMap::new();
+    for binding in enabled_bindings {
+        let definition = registered_credential(registry, &binding.credential_id)?;
+        let secret = resolve_secret(definition, store, environment)?
+            .ok_or(CredentialError::RequiredCredentialMissing)?;
+        resolved.insert(binding.inject_environment, secret);
+    }
+    for (credential_id, name) in always_injected {
+        if skipped_always_injected.contains(&name) {
+            continue;
+        }
+        let definition = registered_credential(registry, &credential_id)?;
+        if let Some(secret) = resolve_secret(definition, store, environment)? {
+            resolved.insert(name, secret);
+        }
+    }
+    Ok(resolved)
 }
 
 fn load_registry(app: &AppHandle) -> Result<CredentialRegistry, CredentialError> {
@@ -569,12 +589,15 @@ fn is_environment_name(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Mutex};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Mutex,
+    };
 
     use super::{
-        list_credentials_with, normalize_secret, validate_registry, CredentialBinding,
-        CredentialDefinition, CredentialDisplayName, CredentialError, CredentialRegistry,
-        CredentialSource, CredentialStore, CredentialValueCache,
+        list_credentials_with, normalize_secret, sidecar_environment_with, validate_registry,
+        CredentialBinding, CredentialDefinition, CredentialDisplayName, CredentialError,
+        CredentialRegistry, CredentialSource, CredentialStore, CredentialValueCache,
     };
 
     #[derive(Default)]
@@ -722,6 +745,47 @@ mod tests {
             validate_registry(&registry),
             Err(CredentialError::InvalidRegistry)
         ));
+    }
+
+    #[test]
+    fn configured_model_key_skips_the_redundant_system_store_read() {
+        let environment = sidecar_environment_with(
+            &registry_with_llm(),
+            Vec::new(),
+            vec![("llm".to_owned(), "OPENAI_API_KEY".to_owned())],
+            &BTreeSet::from(["OPENAI_API_KEY".to_owned()]),
+            &FakeStore {
+                unavailable: true,
+                ..FakeStore::default()
+            },
+            &|_| None,
+        )
+        .expect("a config-supplied key must bypass unavailable system storage");
+
+        assert!(environment.is_empty());
+    }
+
+    #[test]
+    fn missing_model_key_still_resolves_the_always_injected_credential() {
+        let store = FakeStore::default();
+        store
+            .save("llm", "stored-key")
+            .expect("fake secret must save");
+
+        let environment = sidecar_environment_with(
+            &registry_with_llm(),
+            Vec::new(),
+            vec![("llm".to_owned(), "OPENAI_API_KEY".to_owned())],
+            &BTreeSet::new(),
+            &store,
+            &|_| None,
+        )
+        .expect("the stored credential must resolve");
+
+        assert_eq!(
+            environment.get("OPENAI_API_KEY").map(String::as_str),
+            Some("stored-key")
+        );
     }
 
     #[test]

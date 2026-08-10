@@ -1,6 +1,7 @@
 //! Lifecycle management for the packaged Python sidecar.
 
 use std::{
+    collections::BTreeSet,
     fs,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
@@ -277,7 +278,9 @@ impl BackendManager {
         validate_sidecar_runtime(&sidecar_directory)?;
         let data_dir = app.path().app_data_dir()?;
         std::fs::create_dir_all(&data_dir)?;
-        let credential_environment = credentials::sidecar_environment(app).await?;
+        let skipped_credential_environment = configured_credential_environment(&config_path)?;
+        let credential_environment =
+            credentials::sidecar_environment(app, skipped_credential_environment).await?;
         let (managed_services, config_overlay) =
             ManagedServices::start(app, &config_path, &data_dir).await?;
 
@@ -687,6 +690,24 @@ fn build_config_fallbacks(vad_model_path: &Path) -> Value {
     })
 }
 
+fn configured_credential_environment(config_path: &Path) -> Result<BTreeSet<String>, BackendError> {
+    let config: Value = serde_json::from_slice(&fs::read(config_path)?)?;
+    let has_llm_api_key = ["llm_agent", "agents"].iter().any(|slot| {
+        config
+            .get(slot)
+            .and_then(|model| model.get("params"))
+            .and_then(|params| params.get("model"))
+            .and_then(|model| model.get("api_key"))
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    Ok(if has_llm_api_key {
+        BTreeSet::from(["OPENAI_API_KEY".to_owned()])
+    } else {
+        BTreeSet::new()
+    })
+}
+
 fn resolve_initial_model_config(app: &AppHandle) -> Result<Option<PathBuf>, BackendError> {
     #[cfg(debug_assertions)]
     if let Some(config_path) = std::env::var_os("XTALK_APP_CONFIG_PATH") {
@@ -946,9 +967,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_config_fallbacks, parse_http_response, validate_health_response,
-        validate_model_config_path, validate_ready_line, BackendError, StartupMessage,
-        DESKTOP_ANONYMOUS_USER_ID, DESKTOP_VAD_THRESHOLD, PROTOCOL_VERSION,
+        build_config_fallbacks, configured_credential_environment, parse_http_response,
+        validate_health_response, validate_model_config_path, validate_ready_line, BackendError,
+        StartupMessage, DESKTOP_ANONYMOUS_USER_ID, DESKTOP_VAD_THRESHOLD, PROTOCOL_VERSION,
     };
 
     fn temporary_model_config(name: &str, contents: &[u8]) -> PathBuf {
@@ -1076,6 +1097,34 @@ mod tests {
         let error = validate_model_config_path(&path).expect_err("array config must be rejected");
 
         assert!(matches!(error, BackendError::InvalidModelConfigRoot));
+        fs::remove_file(path).expect("test config must be removable");
+    }
+
+    #[test]
+    fn configured_llm_key_replaces_sidecar_credential_injection() {
+        let path = temporary_model_config(
+            "configured-llm-key",
+            br#"{"llm_agent":{"params":{"model":{"api_key":"configured-key"}}}}"#,
+        );
+
+        let skipped = configured_credential_environment(&path)
+            .expect("configured credential environments must resolve");
+
+        assert!(skipped.contains("OPENAI_API_KEY"));
+        fs::remove_file(path).expect("test config must be removable");
+    }
+
+    #[test]
+    fn blank_llm_key_keeps_sidecar_credential_injection() {
+        let path = temporary_model_config(
+            "blank-llm-key",
+            br#"{"llm_agent":{"params":{"model":{"api_key":"  "}}}}"#,
+        );
+
+        let skipped = configured_credential_environment(&path)
+            .expect("configured credential environments must resolve");
+
+        assert!(!skipped.contains("OPENAI_API_KEY"));
         fs::remove_file(path).expect("test config must be removable");
     }
 }
