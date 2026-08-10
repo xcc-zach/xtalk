@@ -7,7 +7,7 @@ flowchart LR
     Audio[语音帧] --> VAD[VAD]
     VAD --> ASR[SenseVoice ASR]
     VAD --> Multi[MultiSpeakerTurnContextManager]
-    Multi --> Model[OfficialMtdClient]
+    Multi --> Model[MossTranscribeDiarize]
     Model --> Backend{推理后端}
     Backend --> VLLM[MTD server.py<br/>官方 vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
@@ -17,7 +17,7 @@ flowchart LR
     Multi --> Agent[DefaultAgent]
 ```
 
-现有 VAD、MTD snapshot 调度、speaker exemplar pool、事件发布和 ASR/MTD 合并链路对两个后端完全相同。两个后端统一使用 `OfficialMtdClient`，切换时只需修改 `base_url`。客户端通过 `GET /v1/models` 识别 SGLang-Omni 并获取模型名；该接口返回 404 时使用官方 runtime 协议。
+现有 VAD、MTD snapshot 调度、speaker exemplar pool、事件发布和 ASR/MTD 合并链路对两个后端完全相同。两个后端统一使用 `MossTranscribeDiarize`，切换时只需修改 `base_url`。客户端通过 `GET /v1/models` 识别 SGLang-Omni 并获取模型名；该接口返回 404 时使用官方 runtime 协议。
 
 ## 1. 选择推理后端
 
@@ -84,7 +84,7 @@ exemplar 区间裁剪。使用该入口时不需要再单独执行 `vllm
 serve`。
 
 runtime 不再用全局 decode lock 包住 `LLM.generate()`。不同 X-Talk session
-使用各自的 `OfficialMtdClient` HTTP session，但请求共享同一个
+使用各自的 `MossTranscribeDiarize` HTTP session，但请求共享同一个
 `AsyncLLM` engine，由 vLLM 进行跨 session 调度和动态 batching。单个
 X-Talk session 内的 manager 仍按顺序处理 snapshot，因此 partial/final revision
 顺序不变。
@@ -115,16 +115,16 @@ curl http://127.0.0.1:18604/health
 
 将 [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) 中的以下配置合并进现有 X-Talk 配置：
 
-- `speaker_diarization`：配置统一的 `OfficialMtdClient` 和 runtime 地址。
+- `speaker_diarization`：配置统一的 `MossTranscribeDiarize` 和 runtime 地址。
 - `service_config.multi_speaker`：启用多说话人链路和响应策略。
-- `service_config.multi_speaker.diarization`：配置通用 snapshot 缓冲与 partial 调度。MTD 专属注册音频布局和 exemplar 策略由 `OfficialMtdClient` 内部维护。
+- `service_config.multi_speaker.diarization`：配置通用 snapshot 缓冲与 partial 调度。MTD 专属注册音频布局和 exemplar 策略由 `MossTranscribeDiarize` 内部维护。
 
 核心配置示例：
 
 ```json
 {
   "speaker_diarization": {
-    "type": "OfficialMtdClient",
+    "type": "MossTranscribeDiarize",
     "params": {
       "base_url": "http://127.0.0.1:18604",
       "request_timeout_s": 15.0,
@@ -162,7 +162,7 @@ curl http://127.0.0.1:18604/health
 ```json
 {
   "speaker_diarization": {
-    "type": "OfficialMtdClient",
+    "type": "MossTranscribeDiarize",
     "params": {
       "base_url": "http://127.0.0.1:18714",
       "request_timeout_s": 15.0,
@@ -173,9 +173,9 @@ curl http://127.0.0.1:18604/health
 }
 ```
 
-`OfficialMtdClient` 通过 `GET /v1/models` 自动识别 SGLang-Omni，取返回的第一个模型 ID 发起转录请求，并与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
+`MossTranscribeDiarize` 通过 `GET /v1/models` 自动识别 SGLang-Omni，取返回的第一个模型 ID 发起转录请求，并与 vLLM runtime 一样使用固定 decoder prefix。SGLang-Omni 的 prompt 处理器本来就会原样保留包含 `<|audio_pad|>` 的完整 prompt；因此 X-Talk 自行构造完整 MTD chat template，并将 `decoder_prefix` 直接接在 assistant header 后。无需改动 SGLang-Omni 服务端、模型或源码。
 
-1. `OfficialMtdClient` 将已注册 exemplar 音频、内部固定静音布局和当前 VAD snapshot 拼成同一个请求。
+1. `MossTranscribeDiarize` 将已注册 exemplar 音频、内部固定静音布局和当前 VAD snapshot 拼成同一个请求。
 2. 时间戳形式的 `decoder_prefix` 被接在 `<|im_start|>assistant` 后，注册的 `S01` / `S02` 标签成为固定的 decoder 上下文。
 3. SGLang 只返回新生成的后缀；客户端将后缀和本地已知的 prefix 拼回完整文本，解析完整时间线，裁掉 exemplar 区间后将当前音频时间戳归零。
 4. 客户端直接保留 fixed-prefix continuation 输出的 speaker label，不再做 exemplar 时间槽重叠映射，也不再重新分配标签。
@@ -217,7 +217,7 @@ curl http://127.0.0.1:18604/health
 | 8 路 | 12.280 s | 1.885 s | 1.507–1.843 s | `max_active_requests=8` |
 
 8 路时吞吐约为 4.24 requests/s。两个真实
-`OfficialMtdClient.clone()` 客户端同时提交请求的 wall time 为 1.606 s，
+`MossTranscribeDiarize.clone()` 客户端同时提交请求的 wall time 为 1.606 s，
 说明 X-Talk 的 session clone 链路也能进入同一 engine 并发执行。取消一个
 120 秒请求时，`DELETE` 在 1.5 ms 内返回 `202`，被取消的 decode
 在 0.478 s 时返回 `409`，同时运行的 20 秒请求仍在 1.684 s 正常完成。
