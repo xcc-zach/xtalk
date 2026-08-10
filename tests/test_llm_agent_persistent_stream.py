@@ -12,6 +12,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from xtalk.models import Agent, Models
 from xtalk.models.agents import AgentContext, AgentOutput
 from xtalk.models.agents.default import DefaultAgent
+from xtalk.serving.event_bus import EventDispatchMode
 from xtalk.serving.events import (
     ConsumeLLMAgentGenerationRequested,
     Event,
@@ -57,7 +58,7 @@ class _RecordingEventBus:
         self,
         event: Event,
         *,
-        wait_for_completion: bool = False,
+        mode: EventDispatchMode | str = EventDispatchMode.RETURN_AFTER_DISPATCH,
     ) -> None:
         """Record one event.
 
@@ -65,11 +66,11 @@ class _RecordingEventBus:
         ----------
         event : Event
             Event being published.
-        wait_for_completion : bool, optional
-            Ignored completion-waiting preference.
+        mode : EventDispatchMode | str, optional
+            Ignored event dispatch mode.
         """
 
-        del wait_for_completion
+        del mode
         self.events.append(event)
 
 

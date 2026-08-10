@@ -8,6 +8,7 @@ import unittest
 from xtalk.models import ASR, Models
 from xtalk.serving.event_bus import EventBus
 from xtalk.serving.events import (
+    ASRGateState,
     ASRResultFinal,
     ASRResultPartial,
     AudioFrameReceived,
@@ -29,6 +30,15 @@ class ASRManagerAudioSourceTests(unittest.TestCase):
         }
 
         self.assertEqual(event_types, {AudioFrameReceived})
+
+    def test_asr_events_default_to_unchecked_gate_state(self) -> None:
+        """Leave existing ASR events unaccepted until a future gate runs."""
+
+        partial = ASRResultPartial(session_id="session")
+        final = ASRResultFinal(session_id="session")
+
+        self.assertIs(partial.gate_state, ASRGateState.UNCHECKED)
+        self.assertIs(final.gate_state, ASRGateState.UNCHECKED)
 
 
 class _BlankFinalASR(ASR):

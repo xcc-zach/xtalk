@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from xtalk.models import Models
 from xtalk.models.agents.interfaces import ChatHistory
-from xtalk.serving.event_bus import EventBus
+from xtalk.serving.event_bus import EventBus, EventDispatchMode
 from xtalk.serving.events import (
     TTSResponseClosed,
     TTSChunkReady,
@@ -75,14 +75,14 @@ class ResponseIdentityTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 response_id="response-a",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await event_bus.publish(
             TurnTTSStartRequested(
                 session_id="session",
                 response_id="response-b",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         delivery_ids = [
@@ -105,7 +105,7 @@ class ResponseIdentityTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 response_id="response-a",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         delivery_ids = [
             event.response_id
@@ -126,7 +126,7 @@ class ResponseIdentityTests(unittest.IsolatedAsyncioTestCase):
                     session_id="session",
                     response_id=response_id,
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         await event_bus.publish(
@@ -134,7 +134,7 @@ class ResponseIdentityTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session",
                 response_id="response-a",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         delivery_ids = [
             event.response_id
@@ -163,7 +163,7 @@ class ResponseIdentityTests(unittest.IsolatedAsyncioTestCase):
                     "sample_rate": 48_000,
                 },
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         for _ in range(100):
             if event_bus.get_history(event_type=TTSFinished.TYPE):

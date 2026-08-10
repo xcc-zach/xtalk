@@ -6,7 +6,7 @@ import unittest
 from collections.abc import Callable
 
 from xtalk.models import Models
-from xtalk.serving.event_bus import EventBus
+from xtalk.serving.event_bus import EventBus, EventDispatchMode
 from xtalk.serving.events import (
     ResponseUpdate,
     TTSStarted,
@@ -63,7 +63,7 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
         manager = TTSPlaybackManager(event_bus, "session")
         await event_bus.publish(
             TTSStarted(session_id="session", response_id="response-1"),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await event_bus.publish(
             TTSStreamingTextAccepted(
@@ -72,7 +72,7 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
                 text="你",
                 prepared_audio_ms=0.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         segment = manager._streaming_segment
         self.assertIsNotNone(segment)
@@ -92,7 +92,7 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
                 text="好",
                 prepared_audio_ms=1200.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         self.assertEqual(manager._reported_text, "你")
@@ -117,7 +117,7 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
         manager = TTSPlaybackManager(event_bus, "session")
         await event_bus.publish(
             TTSStarted(session_id="session", response_id="response-1"),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await event_bus.publish(
             TTSStreamingTextAccepted(
@@ -126,7 +126,7 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
                 text="你，hello",
                 prepared_audio_ms=0.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         segment = manager._streaming_segment
         self.assertIsNotNone(segment)
