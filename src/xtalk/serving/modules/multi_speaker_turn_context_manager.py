@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from ...models import Models, SpeakerDiarization
 from ...models.speaker_diarization.interfaces import DiarizationResult
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode, EventPropagation
 from ..events import (
+    ASRGateState,
     ASRResultFinal,
+    ASRResultPartial,
     EnhancedAudioFrameReceived,
     MultiSpeakerTurnReady,
     SpeakerDiarizationPartial,
@@ -24,6 +26,7 @@ from ..events import (
     VADSpeechEnd,
 )
 from ..interfaces import Manager
+from ..multi_speaker_config import speaker_history_gate_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,7 @@ class MultiSpeakerTurnContextManager(Manager):
         multi_config = dict(self.config.get("multi_speaker") or {})
         self.model = models.get(SpeakerDiarization)
         self.enabled = self.model is not None
+        self.history_gate_enabled = speaker_history_gate_enabled(models, self.config)
         self.response_policy = str(
             multi_config.get("response_policy", "focus_only")
         )
@@ -160,6 +164,7 @@ class MultiSpeakerTurnContextManager(Manager):
         self._diarization_finals: dict[int, SpeakerDiarizationTurnFinal] = {}
         self._published: set[int] = set()
         self._timeout_tasks: dict[int, asyncio.Task[None]] = {}
+        self._turns_with_non_focus_speech: set[int] = set()
 
     @Manager.event_handler(
         EnhancedAudioFrameReceived,
@@ -402,6 +407,7 @@ class MultiSpeakerTurnContextManager(Manager):
         if request.revision <= state.published_partial_revision:
             return
         segments = [dict(item) for item in result.segments]
+        self._observe_diarization_segments(request.turn_id, segments)
         diarization_text = _render_timeline(segments)
         if diarization_text == state.last_partial_text:
             return
@@ -475,6 +481,7 @@ class MultiSpeakerTurnContextManager(Manager):
     ) -> None:
         """Record and publish a segment terminal before testing the turn barrier."""
 
+        self._observe_diarization_segments(event.turn_id, event.segments)
         turn = self._diarization_turns.setdefault(
             event.turn_id,
             _DiarizationTurnState(),
@@ -515,35 +522,112 @@ class MultiSpeakerTurnContextManager(Manager):
             None,
         )
         turn.turn_final_published = True
-        await self.event_bus.publish(
-            SpeakerDiarizationTurnFinal(
-                session_id=self.session_id,
-                turn_id=turn_id,
-                segment_ids=list(turn.segment_ids),
-                segments=timeline,
-                diarization_text=_render_timeline(timeline),
-                active_speaker_id=active_speaker_id,
-                degraded=bool(degraded_reasons),
-                degraded_reason=",".join(dict.fromkeys(degraded_reasons)),
-            )
+        event = SpeakerDiarizationTurnFinal(
+            session_id=self.session_id,
+            turn_id=turn_id,
+            segment_ids=list(turn.segment_ids),
+            segments=timeline,
+            diarization_text=_render_timeline(timeline),
+            active_speaker_id=active_speaker_id,
+            degraded=bool(degraded_reasons),
+            degraded_reason=",".join(dict.fromkeys(degraded_reasons)),
         )
+        self._observe_diarization_segments(turn_id, timeline)
+        await self.event_bus.publish(event)
+
+    def _observe_diarization_segments(
+        self,
+        turn_id: int,
+        segments: list[Mapping[str, Any]],
+    ) -> None:
+        """Close the live ASR preview after any identified non-focus speaker."""
+
+        if not self.history_gate_enabled:
+            return
+        for segment in segments:
+            speaker = segment.get("speaker_id")
+            if speaker is None:
+                continue
+            speaker_id = str(speaker).strip()
+            if speaker_id and speaker_id not in self.focus_speaker_ids:
+                self._turns_with_non_focus_speech.add(turn_id)
+                return
+
+    @Manager.event_handler(
+        ASRResultPartial,
+        priority=60,
+        enabled_if=lambda manager: manager.history_gate_enabled,
+    )
+    async def _gate_asr_partial_preview(
+        self,
+        event: ASRResultPartial,
+    ) -> EventPropagation:
+        """Stop new frontend previews after non-focus speech is observed."""
+
+        if event.origin == "text" or event.gate_state is ASRGateState.ACCEPTED:
+            return EventPropagation.CONTINUE
+        try:
+            if event.turn_id in self._turns_with_non_focus_speech:
+                return EventPropagation.STOP
+            return EventPropagation.CONTINUE
+        except Exception:
+            logger.exception(
+                "Failed to evaluate ASR partial speaker gate - session: %s, turn: %s",
+                self.session_id,
+                event.turn_id,
+            )
+            return EventPropagation.STOP
+
+    @Manager.event_handler(
+        ASRResultPartial,
+        priority=30,
+        enabled_if=lambda manager: manager.history_gate_enabled,
+    )
+    async def _block_asr_partial_from_history(
+        self,
+        event: ASRResultPartial,
+    ) -> EventPropagation:
+        """Keep audio ASR partials out of Agent and event history consumers."""
+
+        if event.origin == "text" or event.gate_state is ASRGateState.ACCEPTED:
+            return EventPropagation.CONTINUE
+        return EventPropagation.STOP
 
     @Manager.event_handler(
         ASRResultFinal,
         priority=30,
         enabled_if=lambda manager: manager.enabled,
     )
-    async def _on_asr_final(self, event: ASRResultFinal) -> None:
+    async def _on_asr_final(
+        self,
+        event: ASRResultFinal,
+    ) -> EventPropagation:
         """Cache ASR text and start a bounded diarization join wait."""
 
-        if not self.enabled:
-            return
-        self._asr_finals[event.turn_id] = event
-        if event.turn_id not in self._timeout_tasks:
-            self._timeout_tasks[event.turn_id] = asyncio.create_task(
-                self._wait_for_timeout(event.turn_id)
+        if (
+            not self.enabled
+            or event.origin == "text"
+            or event.gate_state is ASRGateState.ACCEPTED
+        ):
+            return EventPropagation.CONTINUE
+        try:
+            self._asr_finals[event.turn_id] = event
+            if event.turn_id not in self._timeout_tasks:
+                self._timeout_tasks[event.turn_id] = asyncio.create_task(
+                    self._wait_for_timeout(event.turn_id)
+                )
+            await self._try_publish(event.turn_id)
+        except Exception:
+            logger.exception(
+                "Failed to evaluate ASR final speaker gate - session: %s, turn: %s",
+                self.session_id,
+                event.turn_id,
             )
-        await self._try_publish(event.turn_id)
+            if self.history_gate_enabled:
+                return EventPropagation.STOP
+        if self.history_gate_enabled:
+            return EventPropagation.STOP
+        return EventPropagation.CONTINUE
 
     @Manager.event_handler(
         SpeakerDiarizationTurnFinal,
@@ -558,8 +642,16 @@ class MultiSpeakerTurnContextManager(Manager):
 
         if not self.enabled:
             return
+        self._observe_diarization_segments(event.turn_id, event.segments)
         self._diarization_finals[event.turn_id] = event
-        await self._try_publish(event.turn_id)
+        try:
+            await self._try_publish(event.turn_id)
+        except Exception:
+            logger.exception(
+                "Failed to join diarization with ASR - session: %s, turn: %s",
+                self.session_id,
+                event.turn_id,
+            )
 
     async def _try_publish(self, turn_id: int) -> None:
         """Publish a combined event when both independent results exist."""
@@ -580,7 +672,11 @@ class MultiSpeakerTurnContextManager(Manager):
             if turn_id in self._published:
                 return
             asr_event = self._asr_finals.get(turn_id)
-            if asr_event is None or not self.fallback_on_timeout:
+            if asr_event is None:
+                return
+            if not self.fallback_on_timeout:
+                if self.history_gate_enabled:
+                    self._finish_turn(turn_id)
                 return
             await self._publish_ready(asr_event, None, timeout=True)
         except asyncio.CancelledError:
@@ -604,27 +700,61 @@ class MultiSpeakerTurnContextManager(Manager):
             else None
         )
         should_respond = self._should_respond(active_speaker_id)
+        asr_text = asr_event.text
+        diarization_segments = (
+            [dict(item) for item in diarization_event.segments]
+            if diarization_event is not None
+            else []
+        )
+        diarization_text = (
+            diarization_event.diarization_text if diarization_event is not None else ""
+        )
+        history_active_speaker_id = active_speaker_id
         degraded_reasons: list[str] = []
         if timeout:
             degraded_reasons.append("join_timeout")
         if diarization_event is not None and diarization_event.degraded:
             degraded_reasons.append(diarization_event.degraded_reason)
-        self._published.add(turn_id)
-        timeout_task = self._timeout_tasks.pop(turn_id, None)
-        if timeout_task is not None and timeout_task is not asyncio.current_task():
-            timeout_task.cancel()
+
+        if self.history_gate_enabled:
+            filtered = self._filter_focus_history(asr_event, diarization_event)
+            if filtered is None:
+                self._finish_turn(turn_id)
+                return
+            (
+                asr_text,
+                diarization_segments,
+                diarization_text,
+                history_active_speaker_id,
+            ) = filtered
+
+        self._finish_turn(turn_id)
+        if self.history_gate_enabled:
+            accepted = replace(
+                asr_event,
+                text=asr_text,
+                display_text=asr_text,
+                gate_state=ASRGateState.ACCEPTED,
+            )
+            published = await self.event_bus.publish(
+                accepted,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED,
+            )
+            if not published:
+                logger.error(
+                    "Failed to publish accepted ASR final - session: %s, turn: %s",
+                    self.session_id,
+                    turn_id,
+                )
+                return
         await self.event_bus.publish(
             MultiSpeakerTurnReady(
                 session_id=self.session_id,
                 turn_id=turn_id,
-                asr_text=asr_event.text,
-                diarization_text=(
-                    diarization_event.diarization_text if diarization_event else ""
-                ),
-                diarization_segments=(
-                    diarization_event.segments if diarization_event else []
-                ),
-                active_speaker_id=active_speaker_id,
+                asr_text=asr_text,
+                diarization_text=diarization_text,
+                diarization_segments=diarization_segments,
+                active_speaker_id=history_active_speaker_id,
                 should_respond=should_respond,
                 degraded=bool(degraded_reasons),
                 degraded_reason=",".join(
@@ -632,8 +762,107 @@ class MultiSpeakerTurnContextManager(Manager):
                 ),
             )
         )
+
+    def _filter_focus_history(
+        self,
+        asr_event: ASRResultFinal,
+        diarization_event: SpeakerDiarizationTurnFinal | None,
+    ) -> tuple[str, list[dict[str, Any]], str, str | None] | None:
+        """Select only history-safe focus content for one completed turn."""
+
+        if (
+            diarization_event is None
+            and asr_event.turn_id in self._turns_with_non_focus_speech
+        ):
+            return None
+
+        segments = (
+            [dict(item) for item in diarization_event.segments]
+            if diarization_event is not None
+            else []
+        )
+        active_speaker_id = (
+            diarization_event.active_speaker_id
+            if diarization_event is not None
+            else None
+        )
+        focus_segments: list[dict[str, Any]] = []
+        unknown_segments: list[dict[str, Any]] = []
+        non_focus_seen = False
+        identified_speakers: set[str] = set()
+        for segment in segments:
+            speaker = segment.get("speaker_id")
+            speaker_id = str(speaker).strip() if speaker is not None else ""
+            if not speaker_id:
+                unknown_segments.append(segment)
+                continue
+            identified_speakers.add(speaker_id)
+            if speaker_id in self.focus_speaker_ids:
+                focus_segments.append(segment)
+            else:
+                non_focus_seen = True
+
+        if not identified_speakers:
+            if active_speaker_id is not None:
+                normalized_active = str(active_speaker_id).strip()
+                if normalized_active:
+                    if normalized_active not in self.focus_speaker_ids:
+                        return None
+                    return (
+                        asr_event.text,
+                        segments,
+                        _render_timeline(segments),
+                        normalized_active,
+                    )
+            if self.suppress_when_speaker_missing:
+                return None
+            return asr_event.text, segments, _render_timeline(segments), None
+
+        must_filter_segments = non_focus_seen or (
+            bool(unknown_segments) and self.suppress_when_speaker_missing
+        )
+        if not must_filter_segments:
+            return (
+                asr_event.text,
+                segments,
+                _render_timeline(segments),
+                active_speaker_id,
+            )
+        if not focus_segments:
+            return None
+
+        focus_text = " ".join(
+            str(segment.get("text") or "").strip()
+            for segment in focus_segments
+            if str(segment.get("text") or "").strip()
+        )
+        if not focus_text:
+            return None
+        filtered_active_speaker_id = next(
+            (
+                str(segment["speaker_id"]).strip()
+                for segment in reversed(focus_segments)
+                if str(segment.get("speaker_id") or "").strip()
+            ),
+            None,
+        )
+        return (
+            focus_text,
+            focus_segments,
+            _render_timeline(focus_segments),
+            filtered_active_speaker_id,
+        )
+
+    def _finish_turn(self, turn_id: int) -> None:
+        """Mark one joined turn complete and release its temporary gate state."""
+
+        self._published.add(turn_id)
+        timeout_task = self._timeout_tasks.pop(turn_id, None)
+        if timeout_task is not None and timeout_task is not asyncio.current_task():
+            timeout_task.cancel()
         self._asr_finals.pop(turn_id, None)
         self._diarization_finals.pop(turn_id, None)
+        self._turns_with_non_focus_speech.discard(turn_id)
 
     def _should_respond(self, active_speaker_id: str | None) -> bool:
         """Return whether response generation is allowed for the active speaker."""

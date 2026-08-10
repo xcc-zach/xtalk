@@ -3,7 +3,7 @@ import logging
 from typing import Any, Optional
 
 from ...models import ASR, Agent, Models
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRResultFinal,  # emit when turn about to move to next stage like text generation
     ASRResultPartial,
@@ -16,6 +16,7 @@ from ..events import (
     VADSpeechEnd,
 )
 from ..interfaces import Manager
+from ..multi_speaker_config import speaker_history_gate_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,10 @@ class AudioConsumer:
         self._asr_model.reset()
         self._agent = models.get(Agent)
         self._session_id = session_id
+        self._speaker_history_gate_enabled = speaker_history_gate_enabled(
+            models,
+            config,
+        )
         # Flag to avoid repeat pause or end
         self._ended = True
         self._paused = False
@@ -274,7 +279,12 @@ class AudioConsumer:
         return not text.strip()
 
     async def _publish_event(self, event: Event):
-        await self._event_bus.publish(event)
+        mode = (
+            EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED
+            if self._speaker_history_gate_enabled
+            else EventDispatchMode.RETURN_AFTER_DISPATCH
+        )
+        await self._event_bus.publish(event, mode=mode)
 
     async def _publish_final_text(self, text: str) -> None:
         """Publish one final ASR result."""

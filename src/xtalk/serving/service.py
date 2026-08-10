@@ -100,6 +100,7 @@ class Service:
             self.session_id,
             _websocket,
             config=self.service_config,
+            models=self.models,
             _event_overrides=self._event_overrides.get(OutputGateway),
         )
 

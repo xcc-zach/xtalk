@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from xtalk.models import ASR, Models
+from xtalk.models import ASR, Models, SpeakerDiarization
 from xtalk.serving.event_bus import EventBus
 from xtalk.serving.events import (
     ASRGateState,
@@ -118,6 +118,30 @@ class _BlockingASR(ASR):
 
 class ASRFinalizationTests(unittest.IsolatedAsyncioTestCase):
     """Verify that finalization cannot discard a useful partial transcript."""
+
+    async def test_history_gate_requires_a_diarization_model(self) -> None:
+        """Keep the original background ASR dispatch when MTD is absent."""
+
+        without_diarization = AudioConsumer(
+            event_bus=EventBus(),
+            session_id="without-diarization",
+            models=Models({ASR: _BlankFinalASR()}),
+        )
+        self.addAsyncCleanup(without_diarization.shutdown)
+        with_diarization = AudioConsumer(
+            event_bus=EventBus(),
+            session_id="with-diarization",
+            models=Models(
+                {
+                    ASR: _BlankFinalASR(),
+                    SpeakerDiarization: object(),
+                }
+            ),
+        )
+        self.addAsyncCleanup(with_diarization.shutdown)
+
+        self.assertFalse(without_diarization._speaker_history_gate_enabled)
+        self.assertTrue(with_diarization._speaker_history_gate_enabled)
 
     async def test_blank_final_uses_cached_partial_for_final_event(self) -> None:
         """Publish the cached partial when the final ASR flush is blank."""

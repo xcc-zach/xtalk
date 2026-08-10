@@ -9,11 +9,12 @@ from typing import Any
 
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from xtalk.models import Agent, Models
+from xtalk.models import Agent, Models, SpeakerDiarization
 from xtalk.models.agents import AgentContext, AgentOutput
 from xtalk.models.agents.default import DefaultAgent
 from xtalk.serving.event_bus import EventDispatchMode
 from xtalk.serving.events import (
+    ASRResultFinal,
     ConsumeLLMAgentGenerationRequested,
     Event,
     LLMAgentLoop,
@@ -146,6 +147,30 @@ class PersistentAgentStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(request, ConsumeLLMAgentGenerationRequested)
         assert isinstance(request, ConsumeLLMAgentGenerationRequested)
         self.assertTrue(request.persistent)
+
+    async def test_text_final_bypasses_multi_speaker_join(self) -> None:
+        """Forward explicit text input even when diarization is configured."""
+
+        event_bus = _RecordingEventBus()
+        agent = _StubAgent()
+        models = Models(
+            {
+                Agent: agent,
+                SpeakerDiarization: object(),
+            }
+        )
+        manager = LLMAgentContextManager(event_bus, "session", models)
+
+        await manager._handle_asr_result_final(
+            ASRResultFinal(
+                session_id="session",
+                text="typed",
+                origin="text",
+            )
+        )
+
+        self.assertEqual(agent.contexts[0]["type"], "asr_final")
+        self.assertEqual(agent.contexts[0]["data"]["text"], "typed")
 
     async def test_turn_stop_preserves_loop_and_forwards_later_update(self) -> None:
         """Forward async-tool output after interrupting a turn stream."""

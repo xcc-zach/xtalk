@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from ..event_bus import EventBus
 from ..events import (
+    ASRGateState,
     VADSpeechStart,
     VADSpeechEnd,
     ASRResultFinal,
@@ -158,6 +159,8 @@ class LatencyManager(EventListenerMixin):
     @Manager.event_handler(ASRResultFinal, priority=50)
     async def _on_asr_final(self, event: ASRResultFinal) -> None:
         """Record ASR completion timestamp (t2)."""
+        if event.gate_state is ASRGateState.ACCEPTED:
+            return
         self._asr_final_ts = event.timestamp
 
     @Manager.event_handler(LLMFirstChunk, priority=50)
