@@ -68,7 +68,7 @@ class LLMAgentContextManager(Manager):
     async def _handle_asr_result_final(self, event: ASRResultFinal) -> None:
         """Forward ``ASRResultFinal`` into the agent."""
 
-        if self.multi_speaker_enabled:
+        if self.multi_speaker_enabled and event.origin != "text":
             return
         await self._accept_event_context(event, context_type="asr_final")
 
