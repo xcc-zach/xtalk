@@ -7,7 +7,7 @@ flowchart LR
     Audio[Audio frames] --> VAD[VAD]
     VAD --> ASR[SenseVoice ASR]
     VAD --> Multi[MultiSpeakerTurnContextManager]
-    Multi --> Model[OfficialMtdClient]
+    Multi --> Model[MossTranscribeDiarize]
     Model --> Backend{Inference backend}
     Backend --> VLLM[MTD server.py<br/>official vLLM]
     Backend --> SGLang[SGLang-Omni<br/>audio/transcriptions]
@@ -17,7 +17,7 @@ flowchart LR
     Multi --> Agent[DefaultAgent]
 ```
 
-The existing VAD path, MTD snapshot scheduler, speaker exemplar pool, event publication, and ASR/MTD join are identical for both backends. Both use the unified `OfficialMtdClient`; switching backends only changes `base_url`. The client queries `GET /v1/models` to detect SGLang-Omni and obtain its model name, while a 404 selects the official runtime protocol.
+The existing VAD path, MTD snapshot scheduler, speaker exemplar pool, event publication, and ASR/MTD join are identical for both backends. Both use the unified `MossTranscribeDiarize`; switching backends only changes `base_url`. The client queries `GET /v1/models` to detect SGLang-Omni and obtain its model name, while a 404 selects the official runtime protocol.
 
 ## 1. Choose an inference backend
 
@@ -85,7 +85,7 @@ the returned current-segment result. Do not start a separate `vllm serve`
 process when using this entry point.
 
 The runtime no longer wraps `LLM.generate()` with a global decode lock. Each
-X-Talk session uses its own `OfficialMtdClient` HTTP session, while all requests
+X-Talk session uses its own `MossTranscribeDiarize` HTTP session, while all requests
 share one `AsyncLLM` engine for cross-session scheduling and dynamic batching.
 The manager still processes snapshots sequentially inside one X-Talk session,
 so its partial/final revision ordering is unchanged.
@@ -118,16 +118,16 @@ has completed.
 
 Merge the following sections from [`configs/mtd_multi_speaker.example.json`](../../configs/mtd_multi_speaker.example.json) into an existing X-Talk configuration:
 
-- `speaker_diarization` configures the unified `OfficialMtdClient` and runtime URL.
+- `speaker_diarization` configures the unified `MossTranscribeDiarize` and runtime URL.
 - `service_config.multi_speaker` enables the multi-speaker path and response policy.
-- `service_config.multi_speaker.diarization` configures generic snapshot buffering and partial scheduling. MTD-specific registration layout and exemplar policy are internal to `OfficialMtdClient`.
+- `service_config.multi_speaker.diarization` configures generic snapshot buffering and partial scheduling. MTD-specific registration layout and exemplar policy are internal to `MossTranscribeDiarize`.
 
 Minimal configuration example:
 
 ```json
 {
   "speaker_diarization": {
-    "type": "OfficialMtdClient",
+    "type": "MossTranscribeDiarize",
     "params": {
       "base_url": "http://127.0.0.1:18604",
       "request_timeout_s": 15.0,
@@ -165,7 +165,7 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 ```json
 {
   "speaker_diarization": {
-    "type": "OfficialMtdClient",
+    "type": "MossTranscribeDiarize",
     "params": {
       "base_url": "http://127.0.0.1:18714",
       "request_timeout_s": 15.0,
@@ -176,9 +176,9 @@ Merge [`configs/mtd_multi_speaker_sglang_omni.example.json`](../../configs/mtd_m
 }
 ```
 
-`OfficialMtdClient` discovers SGLang-Omni through `GET /v1/models`, uses the first returned model ID for transcription requests, and applies a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
+`MossTranscribeDiarize` discovers SGLang-Omni through `GET /v1/models`, uses the first returned model ID for transcription requests, and applies a fixed decoder prefix just like the vLLM runtime. The SGLang-Omni prompt processor already preserves any prompt containing `<|audio_pad|>` unchanged. X-Talk therefore builds the complete MTD chat template itself and places `decoder_prefix` immediately after the assistant header; no SGLang-Omni server, model, or source-code change is required.
 
-1. `OfficialMtdClient` concatenates registered exemplar audio, its internal silence layout, and the current VAD snapshot into one request.
+1. `MossTranscribeDiarize` concatenates registered exemplar audio, its internal silence layout, and the current VAD snapshot into one request.
 2. Its timestamped `decoder_prefix` is appended after `<|im_start|>assistant`; registered `S01` / `S02` labels are fixed decoder context.
 3. SGLang returns only the newly generated suffix. The client joins that suffix with the locally known prefix, parses the complete timestamped timeline, removes the exemplar range, and rebases the current-audio timestamps to zero.
 4. The client preserves the speaker labels emitted in that fixed-prefix continuation; it does not apply exemplar-slot overlap mapping or allocate replacement labels.
@@ -220,7 +220,7 @@ AISHELL-4 meeting-audio snapshots, and `--max-num-seqs 8`:
 | 8 requests | 12.280 s | 1.885 s | 1.507–1.843 s | `max_active_requests=8` |
 
 The eight-request run reached about 4.24 requests/s. Two real
-`OfficialMtdClient.clone()` clients submitted concurrently in 1.606 seconds,
+`MossTranscribeDiarize.clone()` clients submitted concurrently in 1.606 seconds,
 which verifies that the X-Talk session-clone path reaches the shared engine
 concurrently. During a cancellation test, `DELETE` returned `202` in 1.5 ms,
 the cancelled 120-second decode returned `409` at 0.478 seconds, and a
