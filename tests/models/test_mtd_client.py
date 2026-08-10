@@ -10,8 +10,8 @@ import numpy as np
 from aiohttp import web
 
 from xtalk.model_loader import init_registered_model
-from xtalk.models.speaker_diarization import OfficialMtdClient
-from xtalk.models.speaker_diarization.mtd import (
+from xtalk.models.speaker_diarization import MossTranscribeDiarize
+from xtalk.models.speaker_diarization.moss_transcribe_diarize import (
     MtdRequestCancelled,
     _SpeakerExemplar,
     _join_decoder_prefix_and_suffix,
@@ -22,7 +22,7 @@ from xtalk.models.speaker_diarization.mtd import (
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
-def _seed_exemplars(client: OfficialMtdClient) -> None:
+def _seed_exemplars(client: MossTranscribeDiarize) -> None:
     """Register two deterministic one-second exemplars in one model clone."""
 
     audio = np.zeros(16000, dtype=np.float32)
@@ -111,7 +111,7 @@ def test_http_request_uses_forced_decoder_prefix_and_crops_current_audio() -> No
             )
 
         runner, base_url = await _start_server(handler)
-        client = OfficialMtdClient(base_url=base_url)
+        client = MossTranscribeDiarize(base_url=base_url)
         _seed_exemplars(client)
         try:
             result = await client.decode_snapshot(
@@ -177,7 +177,7 @@ def test_official_runtime_is_selected_when_model_listing_is_unavailable() -> Non
             route="/v1/mtd/decode",
             model_name=None,
         )
-        client = OfficialMtdClient(base_url=base_url)
+        client = MossTranscribeDiarize(base_url=base_url)
         try:
             result = await client.decode_snapshot(
                 request_id="official-final",
@@ -213,7 +213,7 @@ def test_fixed_prefix_does_not_apply_exemplar_slot_label_mapping() -> None:
             )
 
         runner, base_url = await _start_server(handler)
-        client = OfficialMtdClient(base_url=base_url)
+        client = MossTranscribeDiarize(base_url=base_url)
         _seed_exemplars(client)
         try:
             result = await client.decode_snapshot(
@@ -250,7 +250,7 @@ def test_empty_pool_preserves_compact_local_speaker_order() -> None:
             )
 
         runner, base_url = await _start_server(handler)
-        client = OfficialMtdClient(base_url=base_url)
+        client = MossTranscribeDiarize(base_url=base_url)
         try:
             result = await client.decode_snapshot(
                 request_id="cold-start",
@@ -314,7 +314,7 @@ def test_cancel_releases_waiting_decode_quickly() -> None:
             return web.json_response({"text": "", "segments": []})
 
         runner, base_url = await _start_server(handler)
-        client = OfficialMtdClient(base_url=base_url, request_timeout_s=60.0)
+        client = MossTranscribeDiarize(base_url=base_url, request_timeout_s=60.0)
         decode_task = asyncio.create_task(
             client.decode_snapshot(
                 request_id="cancel-me",
@@ -347,8 +347,8 @@ def test_model_loader_discovers_unified_client() -> None:
     client = init_registered_model(
         slot="speaker_diarization",
         model_config={
-            "type": "OfficialMtdClient",
+            "type": "MossTranscribeDiarize",
             "params": {"base_url": "http://127.0.0.1:18714"},
         },
     )
-    assert isinstance(client, OfficialMtdClient)
+    assert isinstance(client, MossTranscribeDiarize)

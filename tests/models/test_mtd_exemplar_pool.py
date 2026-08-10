@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from xtalk.models.speaker_diarization.mtd import (
+from xtalk.models.speaker_diarization.moss_transcribe_diarize import (
     _SpeakerExemplarPool,
     _float32_to_pcm16_bytes,
 )

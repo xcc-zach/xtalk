@@ -594,7 +594,7 @@ class MtdRequestCancelled(RuntimeError):
 
 
 @model
-class OfficialMtdClient(SpeakerDiarization):
+class MossTranscribeDiarize(SpeakerDiarization):
     """Call an official-vLLM or SGLang-Omni MTD HTTP runtime.
 
     The client discovers the backend once per session-local clone. A successful
@@ -647,10 +647,10 @@ class OfficialMtdClient(SpeakerDiarization):
         self._requests: dict[str, asyncio.Task[tuple[dict[str, Any], str]]] = {}
         self._exemplar_pool = _SpeakerExemplarPool()
 
-    def clone(self) -> OfficialMtdClient:
+    def clone(self) -> MossTranscribeDiarize:
         """Create a session-local client with the same public configuration."""
 
-        return OfficialMtdClient(
+        return MossTranscribeDiarize(
             base_url=self.base_url,
             request_timeout_s=self.request_timeout_s,
             temperature=self.temperature,
