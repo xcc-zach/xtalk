@@ -10,6 +10,9 @@ root `src/` tree through the configured `beforeBuildCommand`:
 app/src-tauri/binaries/
 ├── app-backend-<target-triple>[.exe]
 ├── local-model-runtime-<target-triple>[.exe]
+├── matcha-model-runtime-<target-triple>[.exe]
+├── mtd-model-runtime-<target-triple>[.exe]
+├── mlx-model-runtime-<target-triple>[.exe]
 ├── sherpa-onnx-offline-websocket-server-<target-triple>[.exe]
 └── app-backend-runtime/
     └── PyInstaller onedir runtime files
@@ -45,6 +48,19 @@ The script selects the Rust host target, downloads its official sherpa shared
 distribution, validates the SHA-256 from
 `resources/manifests/native-runtimes.lock.json`, and stages the included
 Sherpa server and ONNX Runtime 1.27 together. It also builds the Rust runtimes;
+the managed MTD runtime is statically linked from the immutable
+moss-transcribe.cpp and ggml revisions in
+`resources/manifests/moss-transcribe-runtime.lock.json` with native CPU tuning
+disabled for release portability. Its Q4_K weights remain an optional managed
+download and are not embedded in the application bundle. Use
+`examples/local_models_mtd.json` to request `managed://moss-transcribe-diarize`;
+Apple Silicon selects Metal and other supported hosts select CPU. Explicit
+`?backend=cpu` and `?backend=metal` selectors are also accepted where valid.
+Each successful final MTD decode appends a privacy-safe JSONL record to
+`$APP_DATA/mtd-diarization.jsonl`. Records include the request ID, backend,
+latency, active speaker ID, and timestamped speaker segments, but omit audio,
+decoder prefixes, and recognized speech text. Partial snapshot decodes are not
+logged.
 Apple Silicon builds compile the pinned Swift MLX service and stage its Metal
 resource bundle. The Apple Silicon host must have Xcode's Metal Toolchain
 component installed (`xcodebuild -downloadComponent MetalToolchain`).
