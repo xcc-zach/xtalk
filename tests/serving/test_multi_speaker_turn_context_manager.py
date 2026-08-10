@@ -258,12 +258,10 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(manager._should_respond("S01"))
         self.assertFalse(manager._should_respond("S02"))
         unknown = manager._filter_focus_history(
-            ASRResultFinal(session_id="session", text="unknown accepted"),
+            ASRResultFinal(session_id="session", text="unknown rejected"),
             SpeakerDiarizationTurnFinal(session_id="session"),
         )
-        self.assertIsNotNone(unknown)
-        assert unknown is not None
-        self.assertEqual(unknown[0], "unknown accepted")
+        self.assertIsNone(unknown)
 
     async def test_default_gate_keeps_partial_out_of_history_and_agent(self) -> None:
         """Show previews until non-focus speech, while always shielding history."""
@@ -526,8 +524,10 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ready[0].asr_text, "准确的 ASR 文本！")
         self.assertTrue(ready[0].should_respond)
 
-    async def test_missing_speaker_can_be_suppressed(self) -> None:
-        """Drop an unknown-speaker turn when the missing-speaker policy asks."""
+    async def test_history_gate_drops_missing_speaker_even_with_fallback_enabled(
+        self,
+    ) -> None:
+        """Fail closed when MTD cannot identify a speaker for an audio final."""
 
         event_bus = EventBus(enable_history=True)
         self.addAsyncCleanup(event_bus.shutdown)
@@ -537,11 +537,23 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             models=Models({SpeakerDiarization: _FakeDiarization()}),
             config={
                 "multi_speaker": {
-                    "suppress_when_speaker_missing": True,
+                    "exclude_non_focus_from_history": True,
+                    "suppress_when_speaker_missing": False,
+                    "fallback_on_timeout": True,
                 }
             },
         )
         self.addAsyncCleanup(manager.shutdown)
+        persisted_finals: list[ASRResultFinal] = []
+
+        async def capture_persistence_input(event: ASRResultFinal) -> None:
+            persisted_finals.append(event)
+
+        event_bus.subscribe(
+            ASRResultFinal,
+            capture_persistence_input,
+            priority=-100,
+        )
 
         await event_bus.publish(
             ASRResultFinal(
@@ -555,9 +567,12 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             SpeakerDiarizationTurnFinal(
                 session_id="session",
                 turn_id=7,
+                degraded=True,
+                degraded_reason="RuntimeError",
             )
         )
 
+        self.assertEqual(persisted_finals, [])
         self.assertEqual(event_bus.get_history(event_type=ASRResultFinal.TYPE), [])
         self.assertEqual(
             event_bus.get_history(event_type=MultiSpeakerTurnReady.TYPE),
