@@ -108,7 +108,15 @@ The `Agent` in the previous section requires a new [`src/xtalk/serving/modules/d
 
 To invoke models inside a `Manager`, refer to [`src/xtalk/serving/modules/asr_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py). You can use methods such as `pipeline.get_asr_model`.
 
-Note that `wait_for_completion` in the event publishing method `publish` controls whether `await` waits until listeners directly triggered by that event have completed. Enabling `wait_for_completion` along an event chain ensures that every handler in that chain finishes before control returns to the original event source.
+The `mode` argument of the event-bus `publish` method controls when the call
+returns. `RETURN_AFTER_DISPATCH` schedules listeners in the background,
+`WAIT_UNTIL_COMPLETE` waits for every directly triggered listener in priority
+order, and `WAIT_UNTIL_COMPLETE_OR_STOPPED` additionally lets a listener stop
+lower-priority propagation by returning `EventPropagation.STOP`. The short
+strings `dispatch`, `wait`, and `wait_stoppable` are accepted as aliases, while
+application code should prefer the enum members. Waiting along an event chain
+ensures that every handler in that chain finishes before control returns to the
+original event source.
 
 ## Introduce a New Model Type
 
