@@ -142,7 +142,7 @@ Minimal configuration example:
       "response_policy": "focus_only",
       "focus_speaker_ids": ["S01"],
       "exclude_non_focus_from_history": true,
-      "suppress_when_speaker_missing": false,
+      "suppress_when_speaker_missing": true,
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
@@ -195,7 +195,7 @@ At VAD end, the client always cancels a locally waiting obsolete partial so the 
 5. At VAD end, MTD submits a terminal segment final and uses high-quality audio from that result to update the speaker exemplar pool.
 6. At the hard turn boundary, `MultiSpeakerTurnContextManager` joins the ASR final and MTD timeline by `turn_id`.
 7. With `exclude_non_focus_from_history` enabled (the default for `focus_only`), ASR partials remain visible to the frontend until diarization first identifies a non-focus speaker, while audio partials never reach Agent history.
-8. At the final join, a focus-only turn keeps the accurate ASR transcript, a mixed turn keeps only focus-speaker MTD segments, and a pure non-focus turn is dropped before Agent and persistence consumers. Unknown-speaker turns follow `suppress_when_speaker_missing`.
+8. At the final join, a focus-only turn keeps the accurate ASR transcript, a mixed turn keeps only focus-speaker MTD segments, and a pure non-focus turn is dropped before Agent and persistence consumers. When the history gate is enabled, missing, degraded, or timed-out speaker results fail closed and do not enter history. Outside the history gate, unknown-speaker response behavior continues to follow `suppress_when_speaker_missing`.
 9. `DefaultAgent` receives only the accepted ASR transcript, filtered speaker timeline, and active focus speaker together.
 
 The history gate requires all three conditions: a configured `speaker_diarization` model, `response_policy: "focus_only"`, and `exclude_non_focus_from_history: true`. Setting the option to `false` preserves the previous unfiltered multi-speaker event flow. Without a diarization model, ASR partials and finals continue through the original single-speaker path regardless of this option.
