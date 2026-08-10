@@ -10,20 +10,16 @@
   },
   "service_config": {
     "multi_speaker": {
-      "enabled": true,
-      "response_policy": "all",
-      "focus_speaker_ids": [],
+      "response_policy": "focus_only",
+      "focus_speaker_ids": ["S01"],
       "suppress_when_speaker_missing": false,
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
-        "sample_rate": 16000,
         "pre_buffer_s": 1.0,
         "partial": {
           "interval_s": 1.0,
-          "first_partial_min_s": 0.8,
-          "publish_unchanged": false,
-          "abort_on_vad_end": true
+          "first_partial_min_s": 0.8
         }
       }
     }

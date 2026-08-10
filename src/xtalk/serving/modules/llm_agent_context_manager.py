@@ -7,7 +7,7 @@ import logging
 from dataclasses import fields
 from typing import Any
 
-from ...models import Agent, Models
+from ...models import Agent, Models, SpeakerDiarization
 from ...models.agents import AgentContext
 from ..event_bus import EventBus
 from ..events import (
@@ -56,8 +56,7 @@ class LLMAgentContextManager(Manager):
         self.session_id = session_id
         self.config: dict[str, Any] = config or {}
         self.llm_agent = models.get(Agent)
-        multi_config = dict(self.config.get("multi_speaker") or {})
-        self.multi_speaker_enabled = bool(multi_config.get("enabled", False))
+        self.multi_speaker_enabled = models.get(SpeakerDiarization) is not None
 
     @Manager.event_handler(ASRResultPartial, priority=20)
     async def _handle_asr_result_partial(self, event: ASRResultPartial) -> None:

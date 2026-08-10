@@ -107,6 +107,7 @@ class MultiSpeakerTurnContextManager(Manager):
     """Schedule generic diarization and join its turn results with ASR."""
 
     BYTES_PER_SAMPLE = 2
+    SAMPLE_RATE = 16000
 
     def __init__(
         self,
@@ -119,10 +120,13 @@ class MultiSpeakerTurnContextManager(Manager):
         self.session_id = session_id
         self.config = config or {}
         multi_config = dict(self.config.get("multi_speaker") or {})
-        self.enabled = bool(multi_config.get("enabled", False))
-        self.response_policy = str(multi_config.get("response_policy", "all"))
+        self.model = models.get(SpeakerDiarization)
+        self.enabled = self.model is not None
+        self.response_policy = str(
+            multi_config.get("response_policy", "focus_only")
+        )
         self.focus_speaker_ids = {
-            str(item) for item in multi_config.get("focus_speaker_ids", [])
+            str(item) for item in multi_config.get("focus_speaker_ids", ["S01"])
         }
         self.suppress_when_speaker_missing = bool(
             multi_config.get("suppress_when_speaker_missing", False)
@@ -131,19 +135,15 @@ class MultiSpeakerTurnContextManager(Manager):
         self.fallback_on_timeout = bool(multi_config.get("fallback_on_timeout", True))
 
         diarization_config = dict(multi_config.get("diarization") or {})
-        self.sample_rate = int(diarization_config.get("sample_rate", 16000))
         self.pre_buffer_s = float(diarization_config.get("pre_buffer_s", 1.0))
         partial_config = dict(diarization_config.get("partial") or {})
         self.partial_interval_s = float(partial_config.get("interval_s", 1.0))
         self.first_partial_min_s = float(partial_config.get("first_partial_min_s", 0.8))
-        self.publish_unchanged = bool(partial_config.get("publish_unchanged", False))
-        self.abort_on_vad_end = bool(partial_config.get("abort_on_vad_end", True))
 
-        self.model = models.get(SpeakerDiarization) if self.enabled else None
         self._sample_cursor = 0
         self._pre_buffer = bytearray()
         self._pre_buffer_max_bytes = round(
-            self.pre_buffer_s * self.sample_rate * self.BYTES_PER_SAMPLE
+            self.pre_buffer_s * self.SAMPLE_RATE * self.BYTES_PER_SAMPLE
         )
         self._active_segment: _DiarizationSegmentState | None = None
         self._segments: dict[int, _DiarizationSegmentState] = {}
@@ -160,11 +160,6 @@ class MultiSpeakerTurnContextManager(Manager):
         self._diarization_finals: dict[int, SpeakerDiarizationTurnFinal] = {}
         self._published: set[int] = set()
         self._timeout_tasks: dict[int, asyncio.Task[None]] = {}
-        if self.enabled and self.model is None:
-            logger.warning(
-                "Multi-speaker mode enabled without a SpeakerDiarization model - session: %s",
-                session_id,
-            )
 
     @Manager.event_handler(
         EnhancedAudioFrameReceived,
@@ -176,11 +171,11 @@ class MultiSpeakerTurnContextManager(Manager):
 
         if not self.enabled or not event.audio_data:
             return
-        if event.sample_rate != self.sample_rate:
+        if event.sample_rate != self.SAMPLE_RATE:
             logger.warning(
                 "Diarization ignored PCM with sample rate %s; expected %s - session: %s",
                 event.sample_rate,
-                self.sample_rate,
+                self.SAMPLE_RATE,
                 self.session_id,
             )
             return
@@ -302,8 +297,7 @@ class MultiSpeakerTurnContextManager(Manager):
         self._final_queue.append(request)
         self._pending_event.set()
         if (
-            self.abort_on_vad_end
-            and self._in_flight is not None
+            self._in_flight is not None
             and not self._in_flight.is_final
             and self.model is not None
         ):
@@ -314,7 +308,7 @@ class MultiSpeakerTurnContextManager(Manager):
 
         if state.final_requested:
             return
-        duration_s = len(state.pcm) / (self.sample_rate * self.BYTES_PER_SAMPLE)
+        duration_s = len(state.pcm) / (self.SAMPLE_RATE * self.BYTES_PER_SAMPLE)
         if duration_s + 1e-9 < state.next_partial_s:
             return
         state.revision += 1
@@ -386,7 +380,7 @@ class MultiSpeakerTurnContextManager(Manager):
             result = await self.model.decode_snapshot(
                 request_id=request.request_id,
                 pcm16=request.current_pcm16,
-                sample_rate=self.sample_rate,
+                sample_rate=self.SAMPLE_RATE,
                 is_final=request.is_final,
             )
         except Exception as exc:
@@ -409,7 +403,7 @@ class MultiSpeakerTurnContextManager(Manager):
             return
         segments = [dict(item) for item in result.segments]
         diarization_text = _render_timeline(segments)
-        if not self.publish_unchanged and diarization_text == state.last_partial_text:
+        if diarization_text == state.last_partial_text:
             return
         state.last_partial_text = diarization_text
         state.published_partial_revision = request.revision
@@ -422,7 +416,7 @@ class MultiSpeakerTurnContextManager(Manager):
                 source_start_sample=request.source_start_sample,
                 source_end_sample=request.source_start_sample
                 + len(request.current_pcm16) // self.BYTES_PER_SAMPLE,
-                sample_rate=self.sample_rate,
+                sample_rate=self.SAMPLE_RATE,
                 raw_text=result.raw_text,
                 diarization_text=diarization_text,
                 segments=segments,
@@ -445,7 +439,7 @@ class MultiSpeakerTurnContextManager(Manager):
             source_start_sample=request.source_start_sample,
             source_end_sample=request.source_start_sample
             + len(request.current_pcm16) // self.BYTES_PER_SAMPLE,
-            sample_rate=self.sample_rate,
+            sample_rate=self.SAMPLE_RATE,
             raw_text=result.raw_text,
             diarization_text=_render_timeline(segments),
             segments=segments,
@@ -469,7 +463,7 @@ class MultiSpeakerTurnContextManager(Manager):
                 source_start_sample=request.source_start_sample,
                 source_end_sample=request.source_start_sample
                 + len(request.current_pcm16) // self.BYTES_PER_SAMPLE,
-                sample_rate=self.sample_rate,
+                sample_rate=self.SAMPLE_RATE,
                 degraded=True,
                 degraded_reason=reason,
             )
