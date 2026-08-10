@@ -86,7 +86,7 @@ class CampPlusDiarization(SpeakerDiarization):
         self,
         base_url: str,
         request_timeout_s: float = 5.0,
-        similarity_threshold: float = 0.65,
+        similarity_threshold: float = 0.55,
         min_audio_duration_s: float = 0.5,
         new_speaker_confirmations: int = 2,
         centroid_update_alpha: float = 0.1,
