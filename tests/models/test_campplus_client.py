@@ -366,3 +366,4 @@ def test_model_loader_discovers_campplus_client() -> None:
     )
 
     assert isinstance(client, CampPlusDiarization)
+    assert client.similarity_threshold == 0.55
