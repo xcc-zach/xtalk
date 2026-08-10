@@ -17,11 +17,21 @@ from pathlib import Path
 APP_ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = APP_ROOT / ".build" / "backend"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
+SIDECAR_LOCK = APP_ROOT / "requirements" / "sidecar.lock"
+MINIMUM_PYTHON_VERSION = (3, 10)
+LOCKED_PYTHON_VERSION = (3, 12)
 EXTRA_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+LOCKED_REQUIREMENT_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*==[^=<>!~;\s]+$"
+)
+UNLOCKED_CODEX_PACKAGES = frozenset(
+    {"openai-codex", "openai-codex-cli-bin"}
+)
 REQUIRED_XTALK_EXTRAS = frozenset({"silero-vad"})
 REQUIRED_XTALK_MODULES = (
     "xtalk/models/asr/sherpa_onnx_asr.py",
     "xtalk/models/tts/moss_tts_nano.py",
+    "xtalk/models/tts/sherpa_onnx_tts.py",
 )
 
 
@@ -94,6 +104,29 @@ def selected_python_version(python: Path) -> tuple[int, int]:
     )
     major, minor = json.loads(result.stdout)
     return int(major), int(minor)
+
+
+def selected_python_base_prefix(python: Path) -> Path:
+    """Return the base installation directory for a Python interpreter.
+
+    Parameters
+    ----------
+    python : pathlib.Path
+        Python executable to inspect.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved ``sys.base_prefix`` reported by the interpreter.
+    """
+
+    result = subprocess.run(
+        [str(python), "-c", "import sys; print(sys.base_prefix)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip()).resolve()
 
 
 def resolve_target_triple(explicit: str | None) -> str:
@@ -223,6 +256,50 @@ def validate_required_wheel_modules(wheel: Path) -> None:
         )
 
 
+def validate_sidecar_lock(path: Path = SIDECAR_LOCK) -> list[str]:
+    """Validate exact sidecar constraints while keeping Codex floating.
+
+    Parameters
+    ----------
+    path : pathlib.Path, optional
+        Checked-in pip constraints file.
+
+    Returns
+    -------
+    list[str]
+        Validated requirement lines.
+
+    Raises
+    ------
+    ValueError
+        Raised for non-exact constraints, duplicates, or a pinned Codex SDK.
+    """
+
+    requirements: list[str] = []
+    names: set[str] = set()
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not LOCKED_REQUIREMENT_PATTERN.fullmatch(line):
+            raise ValueError(
+                f"sidecar lock line {line_number} is not exact: {line!r}"
+            )
+        name = line.split("==", maxsplit=1)[0].lower().replace("_", "-")
+        if name in UNLOCKED_CODEX_PACKAGES:
+            raise ValueError(f"{name} must remain unlocked in the sidecar lock")
+        if name in names:
+            raise ValueError(f"duplicate sidecar lock package: {name}")
+        names.add(name)
+        requirements.append(line)
+    if "pyinstaller" not in names or "wheel" not in names:
+        raise ValueError("sidecar lock must constrain PyInstaller and wheel")
+    return requirements
+
+
 def prepare_environment(
     python: Path,
     wheel: Path,
@@ -245,6 +322,7 @@ def prepare_environment(
         Virtual-environment interpreter.
     """
 
+    validate_sidecar_lock()
     environment = BUILD_ROOT / "venv"
     if environment.exists():
         shutil.rmtree(environment)
@@ -254,20 +332,24 @@ def prepare_environment(
     pip_cache.mkdir(parents=True, exist_ok=True)
     build_environment = os.environ.copy()
     build_environment["PIP_CACHE_DIR"] = str(pip_cache)
-    run(
-        [str(interpreter), "-m", "pip", "install", "--upgrade", "pip"],
-        env=build_environment,
-    )
+    build_environment["PIP_CONSTRAINT"] = str(SIDECAR_LOCK)
     run(
         [
             str(interpreter),
             "-m",
             "pip",
             "install",
+            "--constraint",
+            str(SIDECAR_LOCK),
             "pyinstaller",
+            "wheel",
             wheel_requirement(wheel, extras),
             str(APP_ROOT),
         ],
+        env=build_environment,
+    )
+    run(
+        [str(interpreter), "-m", "pip", "check"],
         env=build_environment,
     )
     return interpreter
@@ -301,6 +383,12 @@ def build_onedir(interpreter: Path, target: str) -> tuple[Path, Path]:
     config_path.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     environment["PYINSTALLER_CONFIG_DIR"] = str(config_path)
+    if "windows" in target:
+        conda_runtime = selected_python_base_prefix(interpreter) / "Library" / "bin"
+        if conda_runtime.is_dir():
+            environment["PATH"] = os.pathsep.join(
+                (str(conda_runtime), environment.get("PATH", ""))
+            )
 
     runtime_dir_name = "app-backend-runtime"
     command = [
@@ -322,7 +410,7 @@ def build_onedir(interpreter: Path, target: str) -> tuple[Path, Path]:
         "xtalk",
         "--collect-all",
         "openai_codex",
-        "--collect-all",
+        "--exclude-module",
         "codex_cli_bin",
         "--exclude-module",
         "torch",
@@ -397,8 +485,19 @@ def main() -> int:
         raise ValueError("--xtalk-wheel must point to an existing wheel")
     python = args.python.expanduser().resolve()
     version = selected_python_version(python)
-    if version < (3, 10) or version >= (3, 14):
-        raise RuntimeError("sidecar builds require Python 3.10 through 3.13")
+    if version < MINIMUM_PYTHON_VERSION:
+        raise RuntimeError(
+            "locked sidecar builds require Python "
+            f"{MINIMUM_PYTHON_VERSION[0]}.{MINIMUM_PYTHON_VERSION[1]} or newer"
+        )
+    if version != LOCKED_PYTHON_VERSION:
+        print(
+            "warning: requirements/sidecar.lock is resolved for Python "
+            f"{LOCKED_PYTHON_VERSION[0]}.{LOCKED_PYTHON_VERSION[1]}; "
+            f"building with Python {version[0]}.{version[1]} may fail to "
+            "resolve locked dependencies",
+            file=sys.stderr,
+        )
     target = resolve_target_triple(args.target_triple)
     validate_required_extras(args.xtalk_extra)
     validate_required_wheel_modules(wheel)

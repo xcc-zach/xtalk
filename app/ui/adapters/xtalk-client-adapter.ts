@@ -33,6 +33,8 @@ export interface DesktopMessage {
   role: "user" | "assistant" | "info";
   /** Plain-text message body. */
   content: string;
+  /** Stable server response identifier for assistant messages. */
+  responseId?: string;
   /** Whether the backend marked the message as complete. */
   final: boolean;
 }
@@ -83,122 +85,41 @@ export interface XtalkEndpointDiagnostics {
 export type DesktopSessionListener = (snapshot: DesktopSessionSnapshot) => void;
 
 const APP_TOKEN_QUERY_PARAMETER = "app_token";
-let desktopNoiseSuppressionInstalled = false;
+let desktopAudioConstraintsInstalled = false;
 
 /**
- * Finalize assistant messages that can no longer be the active response.
+ * Maps SDK messages into desktop-owned display entries.
  *
- * An interrupted response may miss its normal finish event while the next
- * turn has already started. The desktop timeline must still expose at most
- * one streaming assistant message: the latest assistant after the latest user
- * message. This keeps stale responses from retaining a blinking cursor.
+ * The public SDK ``messages`` array is the authoritative conversation state:
+ * each entry corresponds to one visible turn and streaming assistant updates
+ * mutate that same entry in place. Desktop renders the entries verbatim, one
+ * row per SDK message, matching the sample application's rendering semantics.
  *
- * @param messages Desktop messages in conversation order.
- * @returns A normalized copy suitable for rendering in the desktop timeline.
+ * @param sessionId Active SDK session identifier.
+ * @param messages Public SDK messages in conversation order.
+ * @returns Desktop messages with one entry per SDK message.
  */
-function finalizeSupersededAssistantMessages(
-  messages: DesktopMessage[],
+function mapDesktopMessages(
+  sessionId: string | null,
+  messages: ReadonlyArray<{
+    role: DesktopMessage["role"];
+    content: string;
+    final?: boolean;
+    responseId?: string;
+  }>,
 ): DesktopMessage[] {
-  let activeAssistantIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      break;
-    }
-    if (message?.role === "assistant") {
-      if (!message.final) {
-        activeAssistantIndex = index;
-      }
-      break;
-    }
-  }
-
-  return messages.map((message, index) => {
-    if (
-      message.role === "assistant" &&
-      !message.final &&
-      index !== activeAssistantIndex
-    ) {
-      return { ...message, final: true };
-    }
-    return message;
-  });
+  return messages.map((message, index) => ({
+    id: message.responseId ?? `${sessionId ?? "pending"}:${index}`,
+    role: message.role,
+    content: message.content,
+    final: message.final === true,
+    ...(message.responseId ? { responseId: message.responseId } : {}),
+  }));
 }
 
-/**
- * Collapse desktop-only replay artifacts into one assistant item per turn.
- *
- * The realtime SDK can briefly retain a cancelled assistant stream and replay
- * it after the interrupting user message. Async tool updates can also arrive
- * as adjacent assistant fragments. Neither transport detail should become a
- * second chat bubble in the desktop timeline.
- *
- * @param messages Raw desktop messages in server order.
- * @returns Messages with interrupted replays removed and adjacent assistant
- * fragments coalesced.
- */
-function coalesceDesktopAssistantTurns(
-  messages: DesktopMessage[],
-): DesktopMessage[] {
-  const result: DesktopMessage[] = [];
-  let interruptedAssistantContent: string | null = null;
-
-  for (const sourceMessage of messages) {
-    let message = sourceMessage;
-    if (message.role === "user") {
-      const previous = result[result.length - 1];
-      interruptedAssistantContent = previous?.role === "assistant" && !previous.final
-        ? previous.content
-        : null;
-      result.push(message);
-      continue;
-    }
-
-    if (message.role !== "assistant") {
-      result.push(message);
-      continue;
-    }
-
-    if (interruptedAssistantContent) {
-      if (interruptedAssistantContent.startsWith(message.content)) {
-        if (!message.final || message.content === interruptedAssistantContent) {
-          continue;
-        }
-      } else if (message.content.startsWith(interruptedAssistantContent)) {
-        const remainder = message.content
-          .slice(interruptedAssistantContent.length)
-          .trimStart();
-        if (!remainder) {
-          continue;
-        }
-        message = { ...message, content: remainder };
-      }
-      interruptedAssistantContent = null;
-    }
-
-    const previous = result[result.length - 1];
-    if (previous?.role !== "assistant") {
-      result.push(message);
-      continue;
-    }
-
-    if (message.content.startsWith(previous.content)) {
-      previous.content = message.content;
-    } else if (!previous.content.startsWith(message.content)) {
-      const separator = /[\s，。！？、；：,.!?;:]$/u.test(previous.content)
-        ? ""
-        : " ";
-      previous.content += `${separator}${message.content}`;
-    }
-    previous.final = message.final;
-  }
-
-  return result;
-}
-
-/** Force browser-native microphone noise suppression inside the desktop WebView. */
-function installDesktopNoiseSuppression(): void {
-  if (desktopNoiseSuppressionInstalled) {
+/** Force browser-native microphone echo and noise suppression in the WebView. */
+function installDesktopAudioConstraints(): void {
+  if (desktopAudioConstraintsInstalled) {
     return;
   }
   const mediaDevices = navigator.mediaDevices;
@@ -218,11 +139,12 @@ function installDesktopNoiseSuppression(): void {
       ...constraints,
       audio: {
         ...audioConstraints,
+        echoCancellation: true,
         noiseSuppression: true,
       },
     });
   };
-  desktopNoiseSuppressionInstalled = true;
+  desktopAudioConstraintsInstalled = true;
 }
 
 /**
@@ -237,10 +159,10 @@ export class XtalkClientAdapter {
   /**
    * Creates a desktop session around one validated Tauri bootstrap payload.
    *
-   * @param connection Sidecar origin and per-launch credential from Tauri.
-   */
+  * @param connection Sidecar origin and per-launch credential from Tauri.
+  */
   constructor(connection: NativeBackendConnection) {
-    installDesktopNoiseSuppression();
+    installDesktopAudioConstraints();
     const endpoints = createEndpoints(connection);
     const sessionConfig: SessionConfig = {
       inputConfig: {
@@ -271,20 +193,15 @@ export class XtalkClientAdapter {
     };
 
     this.#session.onStateChange((state) => {
-      const messages = state.messages.map((message, index) => ({
-        id: `${state.sessionId ?? "pending"}:${index}`,
-        role: message.role,
-        content: message.content,
-        final: message.final ?? false,
-      }));
       this.#snapshot = {
         connectionState: state.connectionState,
         streamState: state.streamState,
         sessionId: state.sessionId,
         userId: state.user?.id ?? null,
         muted: this.#session.muted,
-        messages: finalizeSupersededAssistantMessages(
-          coalesceDesktopAssistantTurns(messages),
+        messages: mapDesktopMessages(
+          state.sessionId,
+          state.messages,
         ),
       };
       this.#notify();
@@ -372,13 +289,16 @@ export class XtalkClientAdapter {
   /**
    * Selects a persisted conversation or resets the client for a new one.
    *
-   * Switching closes the active realtime connection. The caller can reconnect
-   * through {@link connect} when the user is ready to continue the conversation.
+   * Switching replaces the in-memory conversation and leaves the realtime
+   * connection closed. The desktop application starts a conversation only
+   * when the user presses the chat-bar start button, so the session is
+   * explicitly closed after the switch to reflect that state.
    *
    * @param sessionId Persisted session identifier, or `null` for a new chat.
    */
   async switchSession(sessionId: string | null): Promise<void> {
     await this.#session.switchSession(sessionId);
+    await this.#session.close();
   }
 
   #notify(): void {

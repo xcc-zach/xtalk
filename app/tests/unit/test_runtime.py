@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,11 @@ import httpx
 from backend.config import StartupConfig
 from backend.runtime import create_application
 from backend.security import STARTUP_TOKEN_HEADER
-from backend.tool_ui import ToolUIBroker
+from backend.tool_ui import ToolUIBinding, ToolUIBroker
+from backend.whiteboard_store import (
+    get_whiteboard_store,
+    reset_whiteboard_stores,
+)
 
 
 TOKEN = "t" * 32
@@ -150,6 +155,60 @@ def test_shutdown_requires_token_and_invokes_callback(tmp_path: Path) -> None:
     assert authorized.json() == {"status": "shutting_down"}
 
 
+def test_delete_session_removes_persisted_desktop_session(
+    tmp_path: Path,
+) -> None:
+    """Delete one desktop-owned session and require the launch token."""
+
+    from xtalk.persistence import PersistenceStore
+
+    store = PersistenceStore(tmp_path / "data" / "chat_history.sqlite3")
+    user_id = "desktop-user"
+    session_id = store.create_session(user_id)["session_id"]
+
+    class _Runtime:
+        """Fake runtime exposing the desktop-owned persistence fields."""
+
+        _anonymous_user_id = user_id
+        _persistence = store
+        _service_manager = None
+
+        def mount_routes(self, app: Any) -> None:
+            """No-op: the delete route is mounted by the sidecar itself."""
+
+    app = create_application(
+        startup=_startup(tmp_path),
+        xtalk_runtime=_Runtime(),
+        shutdown_callback=lambda: None,
+    )
+
+    unauthorized = asyncio.run(
+        _request(app, "DELETE", f"/app/api/sessions/{session_id}")
+    )
+    deleted = asyncio.run(
+        _request(
+            app,
+            "DELETE",
+            f"/app/api/sessions/{session_id}",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+    )
+    missing = asyncio.run(
+        _request(
+            app,
+            "DELETE",
+            f"/app/api/sessions/{session_id}",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+    )
+
+    assert unauthorized.status_code == 401
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "ok"}
+    assert store.get_session(user_id, session_id) is None
+    assert missing.status_code == 404
+
+
 def test_application_rejects_non_loopback_and_unlisted_origin(
     tmp_path: Path,
 ) -> None:
@@ -235,10 +294,10 @@ def test_cors_preflight_requires_an_exact_origin_but_not_a_token(
     assert blocked.status_code == 403
 
 
-def test_tool_ui_frame_uses_authenticated_one_time_ticket(
+def test_tool_ui_frame_uses_authenticated_runtime_scoped_reload_ticket(
     tmp_path: Path,
 ) -> None:
-    """Serve sandbox HTML once without exposing the launch token to it."""
+    """Serve runtime-scoped reloads without exposing the launch token."""
 
     app = create_application(
         startup=_startup(tmp_path),
@@ -263,6 +322,11 @@ def test_tool_ui_frame_uses_authenticated_one_time_ticket(
     second = asyncio.run(
         _request(app, "GET", f"/tool-ui-frame/{ticket}")
     )
+    third = asyncio.run(_request(app, "GET", f"/tool-ui-frame/{ticket}"))
+    repeated = [
+        asyncio.run(_request(app, "GET", f"/tool-ui-frame/{ticket}"))
+        for _ in range(10)
+    ]
 
     assert created.status_code == 200
     assert first.status_code == 200
@@ -271,4 +335,165 @@ def test_tool_ui_frame_uses_authenticated_one_time_ticket(
     assert "script-src 'unsafe-inline'" in first.headers[
         "content-security-policy"
     ]
-    assert second.status_code == 404
+    assert second.text == source
+    assert third.text == source
+    assert all(response.status_code == 200 for response in repeated)
+    assert all(response.text == source for response in repeated)
+
+
+def test_tool_ui_event_snapshot_requires_token_and_replays_session_events(
+    tmp_path: Path,
+) -> None:
+    """Deliver Tool UI events over the WebKit-compatible HTTP channel."""
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response]:
+        broker = ToolUIBroker()
+        await broker.publish_status(
+            binding=ToolUIBinding(
+                tool_id="builtin:timer",
+                update_every_s=0.5,
+            ),
+            tool_name="timer",
+            call_id="timer-call",
+            status="5 of 10 seconds",
+            running=True,
+            session_id="session-1",
+        )
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:timer",
+                update_every_s=0.5,
+            ),
+            tool_name="timer",
+            call_id="timer-call",
+            message="Timer started",
+            status="5 of 10 seconds",
+            running=True,
+            session_id="session-1",
+        )
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+            tool_ui_broker=broker,
+        )
+        unauthorized = await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+        )
+        authorized = await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+        return unauthorized, authorized
+
+    unauthorized, authorized = asyncio.run(scenario())
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    events = authorized.json()["events"]
+    assert [event["type"] for event in events] == [
+        "tool_ui.emit",
+        "tool_ui.status",
+    ]
+    assert all(event["sessionId"] == "session-1" for event in events)
+
+
+def test_tool_ui_event_snapshot_retains_structured_payload(
+    tmp_path: Path,
+) -> None:
+    """Deliver structured whiteboard content over the event channel."""
+
+    snapshot = {
+        "version": 1,
+        "call_id": "board-call",
+        "title": "计划",
+        "revision": 1,
+        "notes": [{"id": "n1", "text": "便签", "color": "yellow"}],
+        "updated_at": "now",
+    }
+
+    async def scenario() -> httpx.Response:
+        broker = ToolUIBroker()
+        await broker.publish_emit(
+            binding=ToolUIBinding(
+                tool_id="builtin:whiteboard",
+                update_every_s=-1,
+            ),
+            tool_name="fetch_text",
+            call_id="board-call",
+            message=json.dumps(snapshot, ensure_ascii=False),
+            status="complete",
+            running=False,
+            session_id="session-1",
+            payload=snapshot,
+        )
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+            tool_ui_broker=broker,
+        )
+        return await _request(
+            app,
+            "GET",
+            "/app/api/tool-ui/events?session_id=session-1",
+            headers={STARTUP_TOKEN_HEADER: TOKEN},
+        )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert len(events) == 1
+    assert events[0]["payload"] == snapshot
+    assert events[0]["payload"]["notes"][0]["text"] == "便签"
+
+
+def test_whiteboard_endpoint_returns_session_scoped_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Expose one conversation's whiteboard behind the launch token."""
+
+    reset_whiteboard_stores()
+    try:
+        get_whiteboard_store("session-1").add_text("# 端点演示")
+
+        app = create_application(
+            startup=_startup(tmp_path),
+            xtalk_runtime=_FakeRuntime(),
+            shutdown_callback=lambda: None,
+        )
+        unauthorized = asyncio.run(_request(app, "GET", "/app/api/whiteboard"))
+        authorized = asyncio.run(
+            _request(
+                app,
+                "GET",
+                "/app/api/whiteboard?session_id=session-1",
+                headers={STARTUP_TOKEN_HEADER: TOKEN},
+            )
+        )
+        other_session = asyncio.run(
+            _request(
+                app,
+                "GET",
+                "/app/api/whiteboard?session_id=session-2",
+                headers={STARTUP_TOKEN_HEADER: TOKEN},
+            )
+        )
+    finally:
+        reset_whiteboard_stores()
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    snapshot = authorized.json()
+    assert snapshot["version"] == 1
+    assert snapshot["text"] == "# 端点演示"
+    assert snapshot["revision"] == 1
+    assert snapshot["updated_at"]
+    assert other_session.status_code == 200
+    assert other_session.json()["text"] == ""
+    assert other_session.json()["revision"] == 0

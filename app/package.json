@@ -11,13 +11,16 @@
     "dev": "vite --config vite.config.ts",
     "check": "npm run typecheck",
     "build": "npm run typecheck && vite build --config vite.config.ts",
+    "build:source": "python3 scripts/build_from_source.py && npm run build",
+    "package:macos": "python3 scripts/package_macos_release.py",
+    "package:macos:local": "python3 scripts/package_macos_release.py --local",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
-    "xtalk-client": "file:resources/artifacts/xtalk-client-0.2.8.tgz"
+    "xtalk-client": "file:../frontend"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",

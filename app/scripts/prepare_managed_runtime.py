@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import subprocess
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RUNTIME_MANIFEST = APP_ROOT / "local-model-runtime" / "Cargo.toml"
+MATCHA_RUNTIME_MANIFEST = APP_ROOT / "matcha-model-runtime" / "Cargo.toml"
 MLX_RUNTIME_PACKAGE = APP_ROOT / "local-model-runtime-mlx"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 MANAGED_RESOURCES = APP_ROOT / "resources" / "managed-runtime"
@@ -19,6 +21,9 @@ WAKE_WORD_MODEL_FILES = (
     "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
     "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
     "tokens.txt",
+)
+MACOS_MANAGED_RUNTIME_RPATH = (
+    "@executable_path/../Resources/managed-runtime/ort"
 )
 
 
@@ -34,12 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple")
     parser.add_argument("--sherpa-server", required=True, type=Path)
-    parser.add_argument("--sherpa-keyword-spotter", required=True, type=Path)
-    parser.add_argument("--sherpa-kws-model-dir", required=True, type=Path)
-    parser.add_argument("--sherpa-ort-library", required=True, type=Path)
-    parser.add_argument("--tts-ort-library", required=True, type=Path)
-    parser.add_argument("--sherpa-cuda-runtime-dir", type=Path)
-    parser.add_argument("--tts-cuda-runtime-dir", type=Path)
+    parser.add_argument("--sherpa-keyword-spotter", type=Path)
+    parser.add_argument("--sherpa-kws-model-dir", type=Path)
+    parser.add_argument("--sherpa-library-dir", required=True, type=Path)
+    parser.add_argument("--ort-library", required=True, type=Path)
+    parser.add_argument("--cuda-runtime-dir", type=Path)
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -120,6 +124,45 @@ def require_directory(path: Path, label: str) -> Path:
     return resolved
 
 
+def sherpa_shared_libraries(directory: Path, target: str) -> list[Path]:
+    """Find the shared sherpa-onnx libraries needed by Matcha.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Target-specific sherpa library directory.
+    target : str
+        Rust target triple.
+
+    Returns
+    -------
+    list[pathlib.Path]
+        Shared sherpa libraries to stage beside ONNX Runtime.
+    """
+
+    if "windows" in target:
+        suffixes = (".dll",)
+    elif "apple" in target:
+        suffixes = (".dylib",)
+    else:
+        suffixes = (".so",)
+    libraries = sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file()
+        and "sherpa-onnx" in path.name.lower()
+        and (
+            path.name.lower().endswith(suffixes)
+            or ("linux" in target and ".so." in path.name.lower())
+        )
+    )
+    if not any("c-api" in path.name.lower() for path in libraries):
+        raise FileNotFoundError(
+            f"sherpa-onnx C API shared library is missing below {directory}"
+        )
+    return libraries
+
+
 def executable_name(name: str, target: str) -> str:
     """Return a platform executable filename.
 
@@ -152,6 +195,25 @@ def copy_file(source: Path, destination: Path) -> None:
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def reset_generated_runtime_files(directory: Path) -> None:
+    """Remove stale generated libraries while retaining tracked guidance.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Shared managed runtime resource directory.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    for path in directory.iterdir():
+        if path.name == "README.md":
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
 
 def target_supports_mlx(target: str) -> bool:
@@ -199,7 +261,18 @@ def build_local_runtime(target: str, debug: bool) -> Path:
     if not debug:
         command.append("--release")
         profile = "release"
-    subprocess.run(command, cwd=APP_ROOT, check=True)
+    environment = dict(os.environ)
+    if "windows" in target:
+        existing_rustflags = environment.get("RUSTFLAGS", "").strip()
+        environment["RUSTFLAGS"] = " ".join(
+            value
+            for value in (
+                existing_rustflags,
+                "-C target-feature=+crt-static",
+            )
+            if value
+        )
+    subprocess.run(command, cwd=APP_ROOT, check=True, env=environment)
     return (
         APP_ROOT
         / "local-model-runtime"
@@ -207,6 +280,62 @@ def build_local_runtime(target: str, debug: bool) -> Path:
         / target
         / profile
         / executable_name("xtalk-local-model-runtime", target)
+    )
+
+
+def build_matcha_runtime(
+    target: str,
+    debug: bool,
+    sherpa_library_dir: Path,
+) -> Path:
+    """Build the Rust Matcha runtime against shared sherpa libraries.
+
+    Parameters
+    ----------
+    target : str
+        Rust target triple.
+    debug : bool
+        Whether to use Cargo's debug profile.
+    sherpa_library_dir : pathlib.Path
+        Directory containing shared sherpa-onnx libraries built for the
+        target.
+
+    Returns
+    -------
+    pathlib.Path
+        Built Matcha executable path.
+    """
+
+    command = [
+        "cargo",
+        "build",
+        "--manifest-path",
+        str(MATCHA_RUNTIME_MANIFEST),
+        "--target",
+        target,
+    ]
+    profile = "debug"
+    if not debug:
+        command.append("--release")
+        profile = "release"
+    environment = dict(os.environ)
+    environment["SHERPA_ONNX_LIB_DIR"] = str(sherpa_library_dir)
+    if "apple" in target:
+        rpath_flag = (
+            "-C link-arg=-Wl,-rpath," + MACOS_MANAGED_RUNTIME_RPATH
+        )
+        existing_rustflags = environment.get("RUSTFLAGS", "").strip()
+        environment["RUSTFLAGS"] = " ".join(
+            value for value in (existing_rustflags, rpath_flag) if value
+        )
+    subprocess.run(command, cwd=APP_ROOT, check=True, env=environment)
+    return (
+        APP_ROOT
+        / "matcha-model-runtime"
+        / "target"
+        / target
+        / profile
+        / executable_name("xtalk-matcha-model-runtime", target)
     )
 
 
@@ -279,12 +408,12 @@ def build_mlx_runtime(debug: bool) -> tuple[Path, Path]:
         products / "xtalk-mlx-model-runtime",
         "MLX model runtime",
     )
-    bundles = list(products.rglob("mlx-swift_Cmlx.bundle"))
-    if len(bundles) != 1 or not bundles[0].is_dir():
+    bundle = products / "mlx-swift_Cmlx.bundle"
+    if not bundle.is_dir():
         raise FileNotFoundError(
-            f"expected one MLX Metal resource bundle below {products}"
+            f"expected the MLX Metal resource bundle at {bundle}"
         )
-    return executable, bundles[0]
+    return executable, bundle
 
 
 def copy_cuda_runtime(source: Path | None, destination: Path) -> None:
@@ -332,19 +461,33 @@ def main() -> int:
     args = parse_args()
     target = resolve_target_triple(args.target_triple)
     sherpa_server = require_file(args.sherpa_server, "sherpa server")
-    sherpa_keyword_spotter = require_file(
-        args.sherpa_keyword_spotter,
-        "sherpa keyword spotter",
+    wake_inputs_supplied = (
+        args.sherpa_keyword_spotter is not None
+        and args.sherpa_kws_model_dir is not None
     )
-    sherpa_kws_model_dir = require_directory(
-        args.sherpa_kws_model_dir,
-        "sherpa keyword-spotting model directory",
+    if (args.sherpa_keyword_spotter is None) != (
+        args.sherpa_kws_model_dir is None
+    ):
+        raise ValueError(
+            "--sherpa-keyword-spotter and --sherpa-kws-model-dir must be supplied together"
+        )
+    sherpa_library_dir = require_directory(
+        args.sherpa_library_dir,
+        "sherpa shared-library directory",
     )
-    sherpa_ort = require_file(args.sherpa_ort_library, "sherpa ONNX Runtime")
-    tts_ort = require_file(args.tts_ort_library, "TTS ONNX Runtime")
+    sherpa_libraries = sherpa_shared_libraries(sherpa_library_dir, target)
+    ort_library = require_file(args.ort_library, "ONNX Runtime 1.27")
+    if "1.27" not in ort_library.name and ort_library.name != "onnxruntime.dll":
+        raise ValueError(
+            "--ort-library must point to the ONNX Runtime 1.27 library"
+        )
     local_runtime = require_file(
         build_local_runtime(target, args.debug),
         "local model runtime",
+    )
+    matcha_runtime = require_file(
+        build_matcha_runtime(target, args.debug, sherpa_library_dir),
+        "Matcha model runtime",
     )
     if target_supports_mlx(target):
         mlx_runtime, mlx_bundle = build_mlx_runtime(args.debug)
@@ -366,53 +509,65 @@ def main() -> int:
         f"{'.exe' if 'windows' in target else ''}",
     )
     copy_file(
+        matcha_runtime,
+        TAURI_BINARIES
+        / f"matcha-model-runtime-{target}"
+        f"{'.exe' if 'windows' in target else ''}",
+    )
+    copy_file(
         sherpa_server,
         TAURI_BINARIES
         / f"sherpa-onnx-offline-websocket-server-{target}"
         f"{'.exe' if 'windows' in target else ''}",
     )
-    copy_file(
-        sherpa_keyword_spotter,
+    staged_keyword_spotter = (
         TAURI_BINARIES
         / f"sherpa-onnx-keyword-spotter-microphone-{target}"
-        f"{'.exe' if 'windows' in target else ''}",
+        f"{'.exe' if 'windows' in target else ''}"
     )
-    for filename in WAKE_WORD_MODEL_FILES:
-        copy_file(
-            require_file(
-                sherpa_kws_model_dir / filename,
-                f"sherpa keyword-spotting model file {filename}",
-            ),
-            WAKE_WORD_RESOURCES / filename,
+    if wake_inputs_supplied:
+        sherpa_keyword_spotter = require_file(
+            args.sherpa_keyword_spotter,
+            "sherpa keyword spotter",
         )
+        sherpa_kws_model_dir = require_directory(
+            args.sherpa_kws_model_dir,
+            "sherpa keyword-spotting model directory",
+        )
+        copy_file(sherpa_keyword_spotter, staged_keyword_spotter)
+        for filename in WAKE_WORD_MODEL_FILES:
+            copy_file(
+                require_file(
+                    sherpa_kws_model_dir / filename,
+                    f"sherpa keyword-spotting model file {filename}",
+                ),
+                WAKE_WORD_RESOURCES / filename,
+            )
+    else:
+        require_file(staged_keyword_spotter, "staged sherpa keyword spotter")
+        for filename in WAKE_WORD_MODEL_FILES:
+            require_file(
+                WAKE_WORD_RESOURCES / filename,
+                f"staged sherpa keyword-spotting model file {filename}",
+            )
     copy_file(
         mlx_runtime,
         TAURI_BINARIES
         / f"mlx-model-runtime-{target}"
         f"{'.exe' if 'windows' in target else ''}",
     )
-    copy_file(
-        tts_ort,
-        MANAGED_RESOURCES / "ort-tts" / tts_ort.name,
-    )
-    copy_file(
-        sherpa_ort,
-        MANAGED_RESOURCES / "sherpa" / sherpa_ort.name,
-    )
+    runtime_directory = MANAGED_RESOURCES / "ort"
+    reset_generated_runtime_files(runtime_directory)
+    copy_file(ort_library, runtime_directory / ort_library.name)
+    for sherpa_library in sherpa_libraries:
+        copy_file(sherpa_library, runtime_directory / sherpa_library.name)
     if mlx_bundle is not None:
         destination = MANAGED_RESOURCES / mlx_bundle.name
         if destination.exists():
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(mlx_bundle, destination)
-    copy_cuda_runtime(
-        args.tts_cuda_runtime_dir,
-        MANAGED_RESOURCES / "ort-tts",
-    )
-    copy_cuda_runtime(
-        args.sherpa_cuda_runtime_dir,
-        MANAGED_RESOURCES / "sherpa",
-    )
+    copy_cuda_runtime(args.cuda_runtime_dir, runtime_directory)
     print(f"prepared managed runtime artifacts for {target}")
     return 0
 

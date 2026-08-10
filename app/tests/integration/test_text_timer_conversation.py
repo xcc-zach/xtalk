@@ -22,10 +22,11 @@ from urllib.request import Request, urlopen
 import pytest
 import websockets
 
+from config_path import require_test_config_path, resolve_test_config_path
+
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = APP_ROOT.parent
-SAMPLE_CONFIG = REPOSITORY_ROOT / "server_configs" / "sample.json"
 VAD_MODEL = Path(
     os.environ.get(
         "XTALK_TEST_VAD_MODEL_PATH",
@@ -170,7 +171,7 @@ def _redaction_values(launch_token: str) -> set[str]:
             sensitive_values.add(value)
 
     try:
-        collect(json.loads(SAMPLE_CONFIG.read_text(encoding="utf-8")))
+        collect(json.loads(resolve_test_config_path().read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         pass
     collect(dict(os.environ))
@@ -327,8 +328,9 @@ def _start_sidecar(
     tmp_path: Path,
     *,
     launch_token: str,
+    config_path: Path,
 ) -> tuple[subprocess.Popen[str], str, _DiagnosticCapture]:
-    """Launch the sidecar with the sample models and return its loopback origin.
+    """Launch the sidecar with the given models and return its loopback origin.
 
     Parameters
     ----------
@@ -336,6 +338,8 @@ def _start_sidecar(
         Per-test writable data directory.
     launch_token : str
         Random per-process app authentication token.
+    config_path : pathlib.Path
+        Existing model configuration file to launch with.
 
     Returns
     -------
@@ -364,7 +368,7 @@ def _start_sidecar(
     launch = {
         "protocol_version": 1,
         "token": launch_token,
-        "config_path": str(SAMPLE_CONFIG),
+        "config_path": str(config_path),
         "data_dir": str(tmp_path),
         "origins": ["tauri://localhost"],
         "config_fallbacks": {
@@ -508,23 +512,28 @@ async def _exercise_text_timer_conversation(
             open_timeout=20,
             close_timeout=5,
         ) as websocket:
-            playback_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+            playback_queue: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue()
             conversation_completed = False
+            active_response_id: str | None = None
 
             async def playback_worker() -> None:
                 """Serialize real-time PCM playback and chunk acknowledgements."""
 
                 nonlocal chunk_ack_count
                 while True:
-                    chunk = await playback_queue.get()
+                    queued_audio = await playback_queue.get()
                     try:
-                        if chunk is None:
+                        if queued_audio is None:
                             return
+                        response_id, chunk = queued_audio
                         chunk_duration_seconds = (len(chunk) // 2) / 48_000.0
                         await asyncio.sleep(chunk_duration_seconds)
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_chunk_played"},
+                                {
+                                    "action": "tts_chunk_played",
+                                    "response_id": response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
@@ -583,9 +592,13 @@ async def _exercise_text_timer_conversation(
                 while True:
                     incoming = await websocket.recv()
                     if isinstance(incoming, bytes):
+                        if active_response_id is None:
+                            raise AssertionError(
+                                "binary TTS arrived without start_tts"
+                            )
                         action_counts["binary_audio"] += 1
                         binary_chunk_count += 1
-                        await playback_queue.put(incoming)
+                        await playback_queue.put((active_response_id, incoming))
                         continue
 
                     try:
@@ -605,7 +618,39 @@ async def _exercise_text_timer_conversation(
 
                     if action == "error":
                         raise AssertionError("sidecar emitted an error action")
+                    if action == "start_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or not isinstance(data.get("response_id"), str)
+                            or not data["response_id"]
+                        ):
+                            raise AssertionError("start_tts response ID is missing")
+                        active_response_id = data["response_id"]
+                        continue
+                    if action == "stop_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("stop_tts response ID mismatched")
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "action": "tts_playback_stopped",
+                                    "response_id": active_response_id,
+                                    "played_audio_ms": 0,
+                                },
+                                separators=(",", ":"),
+                            )
+                        )
+                        active_response_id = None
+                        continue
                     if action == "tts_finished":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("tts_finished response ID mismatched")
                         tts_finished_count += 1
                         try:
                             await asyncio.wait_for(
@@ -623,10 +668,14 @@ async def _exercise_text_timer_conversation(
                         await asyncio.sleep(1.0)
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_playback_finished"},
+                                {
+                                    "action": "tts_playback_finished",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
+                        active_response_id = None
                         playback_finished_ack_count += 1
                         if conversation_is_complete():
                             conversation_completed = True
@@ -769,6 +818,7 @@ async def _exercise_voice_conversation(
             open_timeout=20,
             close_timeout=5,
         ) as websocket:
+            active_response_id: str | None = None
             await websocket.send(
                 json.dumps(
                     {
@@ -811,10 +861,17 @@ async def _exercise_voice_conversation(
                 while True:
                     incoming = await websocket.recv()
                     if isinstance(incoming, bytes):
+                        if active_response_id is None:
+                            raise AssertionError(
+                                "binary TTS arrived without start_tts"
+                            )
                         action_counts["binary_audio"] += 1
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_chunk_played"},
+                                {
+                                    "action": "tts_chunk_played",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
@@ -837,6 +894,33 @@ async def _exercise_voice_conversation(
 
                     if action == "error":
                         raise AssertionError("sidecar emitted an error action")
+                    if action == "start_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or not isinstance(data.get("response_id"), str)
+                            or not data["response_id"]
+                        ):
+                            raise AssertionError("start_tts response ID is missing")
+                        active_response_id = data["response_id"]
+                        continue
+                    if action == "stop_tts":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("stop_tts response ID mismatched")
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "action": "tts_playback_stopped",
+                                    "response_id": active_response_id,
+                                    "played_audio_ms": 0,
+                                },
+                                separators=(",", ":"),
+                            )
+                        )
+                        active_response_id = None
+                        continue
                     if action in {"vad_speech_start", "vad_speech_end"}:
                         if (
                             not isinstance(data, dict)
@@ -874,12 +958,21 @@ async def _exercise_voice_conversation(
                             return
                         continue
                     if action == "tts_finished":
+                        if (
+                            not isinstance(data, dict)
+                            or data.get("response_id") != active_response_id
+                        ):
+                            raise AssertionError("tts_finished response ID mismatched")
                         await websocket.send(
                             json.dumps(
-                                {"action": "tts_playback_finished"},
+                                {
+                                    "action": "tts_playback_finished",
+                                    "response_id": active_response_id,
+                                },
                                 separators=(",", ":"),
                             )
                         )
+                        active_response_id = None
             finally:
                 if not microphone_task.done():
                     microphone_task.cancel()
@@ -916,13 +1009,13 @@ def test_text_message_invokes_timer_and_completes_conversation(
         pytest.skip(
             "set XTALK_RUN_MODEL_TESTS=1 to run the configured conversation"
         )
-    if not SAMPLE_CONFIG.is_file():
-        raise AssertionError("repository sample model configuration is missing")
+    config_path = require_test_config_path()
 
     launch_token = secrets.token_urlsafe(32)
     process, origin, diagnostics = _start_sidecar(
         tmp_path,
         launch_token=launch_token,
+        config_path=config_path,
     )
     shutdown_requested = False
     try:
@@ -985,7 +1078,8 @@ def test_voice_audio_produces_asr_text_and_assistant_response(
         pytest.skip(
             "set XTALK_RUN_MODEL_TESTS=1 to run the configured conversation"
         )
-    for required_path in (SAMPLE_CONFIG, VAD_MODEL, VOICE_FIXTURE):
+    config_path = require_test_config_path()
+    for required_path in (VAD_MODEL, VOICE_FIXTURE):
         if not required_path.is_file():
             raise AssertionError(
                 f"required voice input is missing: {required_path.name}"
@@ -995,6 +1089,7 @@ def test_voice_audio_produces_asr_text_and_assistant_response(
     process, origin, diagnostics = _start_sidecar(
         tmp_path,
         launch_token=launch_token,
+        config_path=config_path,
     )
     shutdown_requested = False
     try:

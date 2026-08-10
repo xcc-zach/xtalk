@@ -88,7 +88,7 @@ class DefaultAgent(Agent):
         backchannel_source_dir: str | Path | None = None,
         tools: list[Tool | Callable[[], Tool]] | None = None,
         system_prompt: str = "",
-        proactive: bool = True,
+        proactive: bool = False,
     ) -> None:
         """Initialize the default agent.
 
@@ -186,9 +186,15 @@ class DefaultAgent(Agent):
             async for item in self._handle_asr_partial(context_data["text"]):
                 yield item
         if context_type == "response_update":
-            self._handle_response_update(context_data["text"])
+            self._handle_response_update(
+                context_data["text"],
+                response_id=context_data.get("response_id"),
+            )
         if context_type == "response_finish":
-            self._handle_response_finish(context_data["text"])
+            self._handle_response_finish(
+                context_data["text"],
+                response_id=context_data.get("response_id"),
+            )
 
     def clone(self) -> "DefaultAgent":
         return DefaultAgent(
@@ -317,15 +323,33 @@ class DefaultAgent(Agent):
         self._already_backchanneled_text = ""
         self._turn_already_to_backchannel_response = {}
 
-    def _handle_response_update(self, text: str) -> None:
+    def _handle_response_update(
+        self,
+        text: str,
+        *,
+        response_id: str | None = None,
+    ) -> None:
         """Record one incremental playback-confirmed assistant update."""
 
-        self._chat_history.append_or_update_ai_message(text, final=False)
+        self._chat_history.append_or_update_ai_message(
+            text,
+            final=False,
+            response_id=response_id,
+        )
 
-    def _handle_response_finish(self, text: str) -> None:
+    def _handle_response_finish(
+        self,
+        text: str,
+        *,
+        response_id: str | None = None,
+    ) -> None:
         """Record one final playback-confirmed assistant update."""
 
-        self._chat_history.append_or_update_ai_message(text, final=True)
+        self._chat_history.append_or_update_ai_message(
+            text,
+            final=True,
+            response_id=response_id,
+        )
 
     # backchannel
     async def _handle_asr_partial(self, asr_text: str) -> AsyncIterator[AgentOutput]:
@@ -450,9 +474,17 @@ class DefaultAgent(Agent):
             # avoid duplicating the same text in chat history.
             response_message.content = ""
             response_message.tool_calls = tool_calls
-            self._chat_history.append_message(response_message)
+            tool_call_message_appended = False
             for tool_call in tool_calls:
                 yield tool_call
+                # The serving layer may suspend this generator here until the
+                # spoken preamble has finished playback. Append its
+                # playback-managed AI message before declaring the tool-call
+                # batch so every ToolMessage remains adjacent to the
+                # AssistantMessage that owns its tool_call_id.
+                if not tool_call_message_appended:
+                    self._chat_history.append_message(response_message)
+                    tool_call_message_appended = True
                 try:
                     tool_result = await self.tool_engine.ainvoke_and_append(
                         tool_call,

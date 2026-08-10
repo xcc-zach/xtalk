@@ -29,6 +29,7 @@ pub(crate) struct NativeToolDefinition {
     id: String,
     origin: ToolOrigin,
     can_delete: bool,
+    can_disable: bool,
     display_name: ToolDisplayName,
     entrypoint: String,
     ui: Option<ToolUiConfig>,
@@ -100,6 +101,8 @@ struct BuiltinToolEntry {
     id: String,
     path: String,
     enabled_by_default: bool,
+    #[serde(default = "default_can_disable")]
+    can_disable: bool,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -145,6 +148,8 @@ enum ToolDirectoryError {
     ToolNotFound,
     #[error("built-in tools cannot be deleted")]
     BuiltinToolImmutable,
+    #[error("the selected built-in tool is required and cannot be disabled")]
+    BuiltinToolRequired,
     #[error("built-in tool catalog version is not supported")]
     UnsupportedBuiltinCatalog,
     #[error("tool preferences version is not supported")]
@@ -164,6 +169,15 @@ pub(crate) fn list_installed_tools(app: &AppHandle) -> Result<Vec<NativeToolDefi
     let preferences_path = tool_preferences_path(app).map_err(|error| error.to_string())?;
     list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
         .map_err(|error| error.to_string())
+}
+
+/// Returns whether one registered built-in or user tool is enabled.
+pub(crate) fn is_tool_enabled(app: &AppHandle, tool_id: &str) -> Result<bool, String> {
+    list_installed_tools(app)?
+        .into_iter()
+        .find(|tool| tool.id == tool_id)
+        .map(|tool| tool.enabled)
+        .ok_or_else(|| ToolDirectoryError::ToolNotFound.to_string())
 }
 
 /// Copies one selected user tool directory into application data.
@@ -284,6 +298,7 @@ fn install_tool_directory_at(
         id,
         origin: ToolOrigin::User,
         can_delete: true,
+        can_disable: true,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
         ui: manifest.ui,
@@ -305,6 +320,9 @@ fn set_tool_enabled_at(
             .iter()
             .find(|entry| entry.id == identifier)
             .ok_or(ToolDirectoryError::ToolNotFound)?;
+        if !enabled && !entry.can_disable {
+            return Err(ToolDirectoryError::BuiltinToolRequired);
+        }
         let mut preferences = load_tool_preferences(preferences_path)?;
         preferences.builtin.insert(
             identifier.to_owned(),
@@ -358,6 +376,7 @@ fn definition_for_entry(
         id: entry.id.clone(),
         origin: ToolOrigin::User,
         can_delete: true,
+        can_disable: true,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
         ui: manifest.ui,
@@ -375,11 +394,15 @@ fn list_builtin_tools_at(
         .tools
         .iter()
         .map(|entry| {
-            let enabled = preferences
-                .builtin
-                .get(&entry.id)
-                .map(|preference| preference.enabled)
-                .unwrap_or(entry.enabled_by_default);
+            let enabled = if entry.can_disable {
+                preferences
+                    .builtin
+                    .get(&entry.id)
+                    .map(|preference| preference.enabled)
+                    .unwrap_or(entry.enabled_by_default)
+            } else {
+                true
+            };
             definition_for_builtin_entry(builtin_tools_root, entry, enabled)
         })
         .collect()
@@ -395,6 +418,7 @@ fn definition_for_builtin_entry(
         id: format!("{BUILTIN_ID_PREFIX}{}", entry.id),
         origin: ToolOrigin::Builtin,
         can_delete: false,
+        can_disable: entry.can_disable,
         display_name: manifest.display_name,
         entrypoint: manifest.entrypoint,
         ui: manifest.ui,
@@ -627,6 +651,10 @@ const fn tool_preferences_version() -> u16 {
 
 const fn default_ui_update_every_seconds() -> f64 {
     DEFAULT_UI_UPDATE_EVERY_SECONDS
+}
+
+const fn default_can_disable() -> bool {
+    true
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), ToolDirectoryError> {
@@ -874,6 +902,42 @@ mod tests {
             .expect("built-in UI source must be readable");
         assert_eq!(ui.tool_id, "builtin:timer");
 
+        fs::remove_dir_all(root).expect("temporary directory must be removable");
+    }
+
+    #[test]
+    fn required_builtin_ignores_stale_disable_preferences() {
+        let root = temporary_directory("required-builtin-tool");
+        let tools_root = root.join("app-data-tools");
+        let builtin_tools_root = root.join("builtin-tools");
+        let preferences_path = root.join(TOOL_PREFERENCES_FILE);
+        write_builtin_catalog(&builtin_tools_root);
+        fs::write(
+            builtin_tools_root.join(BUILTIN_TOOL_CATALOG_FILE),
+            r#"{"version":1,"tools":[{"id":"timer","path":"timer","enabled_by_default":true,"can_disable":false}]}"#,
+        )
+        .expect("required built-in catalog must be writable");
+        fs::write(
+            &preferences_path,
+            r#"{"version":1,"builtin":{"timer":{"enabled":false}}}"#,
+        )
+        .expect("stale preference must be writable");
+
+        let listed = list_installed_tools_at(&tools_root, &builtin_tools_root, &preferences_path)
+            .expect("required built-in must list");
+
+        assert!(listed[0].enabled);
+        assert!(!listed[0].can_disable);
+        assert!(matches!(
+            set_tool_enabled_at(
+                &tools_root,
+                &builtin_tools_root,
+                &preferences_path,
+                "builtin:timer",
+                false,
+            ),
+            Err(ToolDirectoryError::BuiltinToolRequired)
+        ));
         fs::remove_dir_all(root).expect("temporary directory must be removable");
     }
 

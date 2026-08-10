@@ -11,7 +11,6 @@ from ..events import (
     TurnASREndRequested,
     TurnDetectorStartGeneration,
     TurnDetectorStopSpeaking,
-    TTSPlaybackFinished,
 )
 from ...models import Models, TurnDetector
 
@@ -90,17 +89,6 @@ class TurnTakingManager(Manager):
                     TurnASRPauseRequested(session_id=self.session_id),
                     wait_for_completion=True,
                 )
-
-    @Manager.event_handler(TTSPlaybackFinished)
-    async def _on_tts_playback_finished(self, _event: TTSPlaybackFinished) -> None:
-        """Frontend playback finished - stop LLM agent to clean up."""
-        # TODO: check whether this event handler is necessary
-        await self.event_bus.publish(
-            TurnLLMAgentStopRequested(
-                session_id=self.session_id,
-                reason="playback_finished",
-            )
-        )
 
     async def shutdown(self):
         return

@@ -103,11 +103,33 @@ builder. The bundled asynchronous `timer`, matching
 An enabled user tool with the same exported name takes precedence. Unit tests
 cover `Running`, progress,
 `Finished`, stop behavior, developer entrypoint loading, and the public
-`ToolEngine` final update. The model smoke independently sends a text request,
-observes `tool_called` for `timer`, and acknowledges a real assistant/TTS turn.
-It does not require a second proactive LLM report because that model-driven
-report can overlap the first response; no timer-specific serving workaround is
-added for that timing.
+`ToolEngine` update path. `DesktopDefaultAgent` is only a registration wrapper;
+the full turn loop and asynchronous update policy are inherited directly from
+`xtalk.models.agents.default.DefaultAgent`. Consequently every subscribed tool
+progress update wakes the ordinary asynchronous Agent report loop after the
+user has finished speaking. While the user is speaking, intermediate progress
+is ignored and only a final update is deferred, exactly as in the default
+Agent. Tool UI rendering remains an independent observer of those updates.
+
+### Whiteboard tool chain
+
+The bundled `whiteboard` tool keeps **one Markdown text document per
+conversation**. `backend/whiteboard_store.py` owns a session-keyed registry and
+persists each board as JSON under the tool data directory. Four `AsyncTool`s
+operate on the active session's document — `fetch_text`, `add_text`,
+`delete_text`, and `update_text` — each returning the full normalized
+`{action, success, text, revision, message}` snapshot; the tool UI wrapper
+stamps the bound conversation into each call's state so the tools address the
+right store. The store also backs `GET /app/api/whiteboard?session_id=...`,
+which the dedicated Tauri whiteboard window polls (following the main window's
+active session) and renders as Markdown. The window is created as a child of
+the main window so it stays above it, and has no in-page title or revision
+badge; its native title follows i18n. The Tool UI observation channel is
+retained only as a trigger: `structured_payload = True` still attaches the
+snapshot to `tool_ui.emit`, and the main window opens the whiteboard window on
+the first whiteboard emit. A dock button to the right of the start-conversation
+button toggles the window; closing it hides the webview and emits
+`whiteboard-window-hidden` so the button stays in sync.
 
 Text input targets an already-open XTalk session. Since the public SDK's
 `open()` still initializes microphone capture, starting that session requires
@@ -119,7 +141,9 @@ The WebView requests browser-native echo cancellation, automatic gain control,
 and noise suppression, then sends 16 kHz mono PCM through the public
 `xtalk-client` WebSocket with frontend VAD and the custom FastEnhancer disabled.
 Tauri resolves the bundled `models/audio/silero_vad.onnx` resource, and the
-sidecar loads it through the ordinary public XTalk model configuration.
+sidecar loads it through the ordinary public XTalk model configuration. The
+desktop fallback uses a `0.7` speech-probability threshold to reduce ambient
+noise triggers; an explicitly configured VAD still takes precedence.
 Server-originated speech boundaries then start and finish the configured remote
 ASR turn.
 
@@ -165,20 +189,23 @@ ASR WebSocket packet and MOSS multipart HTTP contracts, so the Python model
 clients do not branch on the inference backend. Its MOSS response is likewise
 48 kHz mono PCM16.
 
-ONNX Runtime is an application resource, not a user-installed dependency. The
-sidecar loads the exact packaged dynamic library passed through `--ort-dylib`;
-model weights remain outside the application bundle. A selected
-`managed://sensevoice-small` or `managed://moss-tts-nano` URL makes Tauri read
-the immutable `managed-models.lock.json`, download only that service's pinned
-files into `AppData/models/managed/<id>/<version>/`, verify file sizes and
-SHA-256 values, and atomically write the completion marker. Every later launch
-revalidates the installed snapshot before using it.
+ONNX Runtime is an application resource, not a user-installed dependency.
+SenseVoice, Matcha, and the Rust MOSS sidecar all resolve the same packaged
+ONNX Runtime 1.27 dynamic library; model weights remain outside the application
+bundle. A selected `managed://sensevoice-small`,
+`managed://matcha-icefall-zh-en`, or `managed://moss-tts-nano` URL makes Tauri
+read the immutable `managed-models.lock.json`, download only that service's
+pinned files into `AppData/models/managed/<id>/<version>/`, verify file sizes
+and SHA-256 values, extract pinned archives without allowing path traversal,
+and atomically write the completion marker. Every later launch revalidates the
+installed snapshot before using it.
 
 The managed URL accepts `?backend=cpu`, `?backend=cuda`, or `?backend=mlx`.
 Without a query, Tauri selects a packaged CUDA provider on an NVIDIA device,
 then Apple Silicon MLX, then CPU. An explicitly selected unavailable backend is
 an error instead of an implicit fallback. CUDA and CPU share the ONNX snapshot;
-MLX selects its separately pinned safetensor snapshot.
+MLX selects its separately pinned safetensor snapshot. Matcha supports CPU and
+CUDA only, so its automatic selection skips MLX.
 
 After the user selects a configuration, Tauri inspects it before applying it.
 Configurations that request managed services open a blocking progress dialog.
@@ -189,8 +216,9 @@ automatically. A startup failure leaves the dialog open with the error and a
 close action.
 
 For ONNX, Tauri starts SenseVoice through the packaged native
-`sherpa-onnx-offline-websocket-server` and starts MOSS through the Rust sidecar.
-For MLX, it starts one Swift sidecar per requested service.
+`sherpa-onnx-offline-websocket-server`, Matcha through a dedicated Rust
+sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. For MLX, it starts
+one Swift sidecar per requested supported service.
 It waits for TCP/readiness health boundaries, then deep-merges actual ephemeral
 loopback URLs and the resolved AppData voice path into the Python startup
 overlay. The selected file remains portable and contains no generated ports.
@@ -199,12 +227,15 @@ children are stopped and the previous configuration is restored. An unexpected
 managed-child exit also makes the backend connection unavailable.
 
 The complete local example is
-[`../examples/local_models.json`](../examples/local_models.json). Its LLM
-matches `server_configs/sample.json` while intentionally leaving `api_key`
-empty. SenseVoice consumes 16 kHz PCM through the existing offline WebSocket
-client; MOSS reference audio and generated output use 48 kHz. The companion
+[`../examples/local_models_moss_tts.json`](../examples/local_models_moss_tts.json).
+Its LLM matches `server_configs/sample.json` while intentionally leaving
+`api_key` empty. SenseVoice consumes 16 kHz PCM through the existing offline
+WebSocket client; MOSS reference audio and generated output use 48 kHz. The companion
 [`../examples/local_models_mlx.json`](../examples/local_models_mlx.json)
-explicitly selects MLX.
+explicitly selects MLX. The
+[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
+variant selects the Chinese-English Matcha HTTP client; the sidecar resamples
+its native 16 kHz output to the App-wide 48 kHz mono PCM16 format.
 
 ## Configuration
 
@@ -265,7 +296,8 @@ enablement are App metadata rather than manifest fields. Built-in IDs use the
 
 The native delete command resolves the tool source itself and rejects built-in
 IDs, so deletion protection does not depend on the WebView. Both sources can
-be disabled. The Python sidecar resolves the same `module:factory` entrypoint
+contain optional tools that can be disabled; catalogued required built-ins
+cannot. The Python sidecar resolves the same `module:factory` entrypoint
 for each enabled directory, and user exports take precedence over same-named
 built-ins. A factory must return a list accepted by
 `XtalkBuilder.add_agent_tools()`.
@@ -274,16 +306,51 @@ The configured Agent is built after this registry is loaded, so tool changes
 take effect through a controlled sidecar restart. A failed developer factory is
 omitted without preventing the remaining local service from starting.
 
+Current Time and Web Search use this same built-in path; the adapter no longer
+registers either tool through a private branch. Current Time is catalogued with
+`can_disable=false`, and both the Rust registry and Python loader force it on
+even when an old preference file says otherwise. Web Search is disabled by
+default and uses the public XTalk asynchronous Serper tool factory.
+
+External tool credentials are App metadata, not tool metadata.
+`resources/credentials.json` binds credential IDs to environment-variable
+aliases, dependent built-in IDs, and the canonical environment name injected
+into the sidecar. The trusted Rust layer resolves environment variables first,
+then reads the operating system credential store. It uses macOS Keychain,
+Windows Credential Manager, or Linux Secret Service through target-specific
+native backends. The WebView receives only `configured`, `source`, and storage
+availability; secret values are accepted only by the save command and are
+never returned.
+
+At sidecar start or restart, Rust resolves credentials only for enabled tools
+and adds them directly to the child-process environment. They are absent from
+the newline-delimited startup message, command arguments, AppData, tool
+manifests, and logs. Enabling a bound tool without a resolved credential is
+rejected. Deleting a stored credential disables dependent tools when no
+higher-priority environment value remains. Unsupported or unavailable system
+stores remain usable through environment variables; the App provides no
+volatile session-only credential fallback.
+
 The Codex built-in is represented by one catalog entry and one manifest whose
-factory returns five native async tools: search, create, continue, set-model,
-and delete. Consequently its enabled state is atomic; the App has no per-export
-preference. The bundle is disabled by default. Every business thread and turn
+factory returns six native async tools: search, create, continue, model-list,
+set-model, and delete. Consequently its enabled state is atomic; the App has no
+per-export preference. The bundle is disabled by default. Every business thread and turn
 uses the official Python SDK with `Sandbox.full_access`, accepts any existing
 local directory as `cwd`, uses the SDK's no-prompt approval mode, and explicitly
 reapplies the model and reasoning effort stored for that session. Tool
 descriptions contain the conditional routing rules, so no Codex-specific
 instruction is injected into the Agent's
 developer instructions.
+
+The Python SDK is bundled without `openai-codex-cli-bin`. At first use, the
+built-in resolves a user-installed Codex executable from the inherited `PATH`
+or common package-manager locations, and requires a successful
+`codex --version` probe. The validated absolute path is supplied through
+`CodexConfig.codex_bin`; npm shim directories are prepended to the SDK child
+environment so their corresponding Node.js runtime remains discoverable. The
+validated path is cached for the sidecar process lifetime and discovery runs
+again only if that executable disappears or is no longer executable. If no
+candidate works, the tool returns an actionable installation message.
 
 The App-side session index is SQLite at
 `AppData/tool-data/codex/codex_sessions.sqlite3`. It stores the SDK thread ID,
@@ -295,14 +362,14 @@ IDs must be a subset of the snapshot. Delete archives the SDK thread before
 marking it inactive in the App index, and per-session async locks serialize
 continue, reconfigure, and archive operations.
 
-Asynchronous tool progress is not fed back into the conversational stream.
-The Agent records lifecycle updates in tool history, while only the terminal
-update triggers one final natural-language report. This prevents a long Codex
-turn from appearing as several truncated assistant messages. The Tool UI
-broker retains each running status plus a bounded immutable emit history and
-replays both when the App WebSocket binds or reconnects. Consequently live and
-history cards remain visible even when execution started before the WebView
-channel was ready.
+Subscribed asynchronous tool progress follows the default Agent conversation
+loop. After the user has finished speaking, every subscribed update wakes a
+natural-language report; while the user is speaking, intermediate updates are
+ignored and only the final result is deferred. The Tool UI broker independently
+retains each running status plus a bounded immutable emit history and replays
+both through an authenticated App HTTP snapshot. Consequently live and history
+cards remain visible even when execution started before the WebView began
+polling.
 
 The optional UI entrypoint is self-contained HTML, at most one MiB. It remains
 separate from the Python entrypoint and declares capabilities by registering
@@ -314,28 +381,42 @@ and otherwise accepts 0.1 through 3600 seconds.
 
 The App wraps only native `AsyncTool` classes at registry load time. The wrapper
 delegates the original lifecycle unchanged, observes `astatus()`, and publishes
-read-only events over a launch-token-protected App WebSocket. Live events track
-the active call. Every original initial/update emit produces a separate history
-event containing the emitted message plus status at that moment. History
-snapshots are immutable, bounded to 200 items per session, and stored in WebView
-AppData under the persisted session ID. The broker also keeps the latest 200
-emits per active-process session for reconnect recovery; stable call/sequence
-IDs let the WebView deduplicate those replays. Live state is memory-only.
+read-only events through a launch-token-protected loopback HTTP snapshot. The
+WebView polls that endpoint every 350 ms while a persisted chat session is
+active; the legacy App WebSocket endpoint remains available for compatible
+clients. Live events track the active call. Every original initial/update emit
+produces a separate history event containing the emitted message plus status at
+that moment. History snapshots are immutable, bounded to 200 items per session,
+and stored in WebView AppData under the persisted session ID. The broker also
+keeps the latest 200 emits per active-process session for reconnect recovery;
+stable call/sequence IDs let the WebView deduplicate those replays. Live state
+is memory-only. Completion and cancellation both publish a terminal history
+event; cancellation uses `outcome="cancelled"`. Either terminal event removes
+the corresponding live card even if its final status observation was missed.
 
 The conversation top bar does not repeat the XTalk product name. It remains
 empty when no live-capable tool is running. Active tools create one compact,
 collapsed status bar containing the latest status and running count; the user
 can expand it to inspect all current live UI cards. Live cards are not inserted
-into the message timeline. History cards remain anchored to their immutable
-emit positions.
+into the message timeline. History cards remain anchored to their emit
+positions, while a terminal emit replaces earlier cards from the same call so
+completed or cancelled tools cannot leave a stale Running card. Both the live
+panel and the message timeline reconcile DOM children incrementally to preserve
+iframe browsing contexts during status updates.
 
 Each card uses a separate `sandbox="allow-scripts"` iframe. The injected CSP
 blocks external resources and network APIs, and the bridge suppresses link and
 form actions. The opaque frame origin has no Tauri capability. The frame can
 receive status/emit data and report desired height, but it cannot invoke, stop,
-or otherwise operate the tool. To keep the App's strict top-level CSP, the host
-publishes each prepared document behind a high-entropy, 30-second, one-time
-loopback ticket; the launch token never enters the iframe URL or document. The
+or otherwise operate the tool. The host waits for the document's capability
+handshake before delivering pending data, and retains each pending event until
+the frame acknowledges its `callId` and `sequence`. Bounded short retries keep
+WKWebView's initial `about:blank` load or ready-edge race from consuming an
+event. To keep the App's strict top-level CSP, the host
+publishes each prepared document behind a high-entropy, runtime-scoped loopback
+ticket that remains idempotently readable so WKWebView may perform internal
+reloads. Tickets live only in a capacity-bounded backend memory store; the
+launch token never enters the iframe URL or document. The
 host owns full available width and clamps height to 120–420 px for live cards
 and 80–600 px for history cards, with both also capped at 60% of the window
 height.

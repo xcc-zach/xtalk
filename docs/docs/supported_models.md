@@ -7,7 +7,7 @@ The model *quick-start* repositories are convenience adapters under development.
 <details markdown="1">
 <summary>SherpaOnnx [Recommended]</summary>
 
-**Dependency:** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+**Dependency:** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **Implementation path:** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
@@ -27,6 +27,54 @@ A high-performance speech recognition framework, and more. It can run many speec
 **Path:** [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)
 
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/qwen3-asr-flash)
+
+</details>
+
+<details markdown="1">
+<summary>AgenticASR</summary>
+
+**Dependency:** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**Path:** [`src/xtalk/models/asr/agentic_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/agentic_asr.py)
+
+A speech recognition wrapper that combines the sherpa-onnx WebSocket ASR with
+AgenticASR's K=3 sliding-window refinement. In `streaming` mode it uses the
+online sherpa-onnx WebSocket server; in `offline` mode it simulates streaming
+through `MockStreamRecognizer` over the offline WebSocket server. The Refiner
+is an OpenAI-compatible chat-completions service. XTalk Desktop can manage both
+services locally with `managed://sensevoice-small` and
+`managed://agentic-asr-refiner`. Without a `backend` query, it uses MLX on
+Apple Silicon, CUDA on supported Windows/Linux hosts, and ONNX CPU elsewhere.
+
+**Config params:** `asr_base_url` (sherpa-onnx WebSocket server),
+`refiner_base_url` (OpenAI-compatible Refiner service), `asr_mode`
+(`"streaming"` or `"offline"`, default `"offline"`).
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "ws://127.0.0.1:6006",
+    "refiner_base_url": "http://127.0.0.1:8000/v1",
+    "asr_mode": "offline"
+  }
+}
+```
+
+Managed desktop configuration:
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "managed://sensevoice-small",
+    "refiner_base_url": "managed://agentic-asr-refiner",
+    "asr_mode": "offline"
+  }
+}
+```
+
+[Original Repository](https://github.com/AnXMuy/AgenticASR)
 
 </details>
 
@@ -100,6 +148,21 @@ PCM audio from a MOSS-TTS-Realtime service.
 **Path:** [`src/xtalk/models/tts/cosyvoice.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/cosyvoice.py)
 
 [Details](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/cosyvoice-v3-flash)
+
+</details>
+
+<details markdown="1">
+<summary>SherpaOnnxTTS</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
+
+An HTTP client for the local sherpa-onnx Matcha Chinese-English TTS service. It posts text to `/v1/audio/speech` and returns 48 kHz mono PCM16 audio.
+
+**Config params:** only `base_url`.
+
+[Original Repository](https://github.com/k2-fsa/sherpa-onnx)
 
 </details>
 

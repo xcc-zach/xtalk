@@ -145,11 +145,13 @@ class LLMFirstSentence(Event):
 @dataclass
 class TTSStarted(Event):
     TYPE: ClassVar[str] = "tts.started"
+    response_id: str = ""
 
 
 @dataclass
 class TTSStopped(Event):
     TYPE: ClassVar[str] = "tts.stopped"
+    response_id: str = ""
 
 
 @dataclass
@@ -165,11 +167,13 @@ class TTSResumed(Event):
 @dataclass
 class TTSFinished(Event):
     TYPE: ClassVar[str] = "tts.finished"
+    response_id: str = ""
 
 
 @dataclass
 class LLMAgentResponseUpdate(Event):
     TYPE: ClassVar[str] = "llm_agent.response_update"
+    response_id: str = ""
     text: str = ""
 
 
@@ -179,11 +183,14 @@ class LLMAgentResponseFinish(Event):
 
     Attributes
     ----------
+    response_id : str
+        Stable identifier shared by generation, TTS, playback, and display.
     text : str
         Final response text.
     """
 
     TYPE: ClassVar[str] = "llm_agent.response_finish"
+    response_id: str = ""
     text: str = ""
 
 
@@ -193,11 +200,14 @@ class ResponseUpdate(Event):
 
     Attributes
     ----------
+    response_id : str
+        Response whose cumulative playback-confirmed text is being updated.
     text : str
         Text prefix that has been played to the user.
     """
 
     TYPE: ClassVar[str] = "response.update"
+    response_id: str = ""
     text: str = ""
 
 
@@ -207,11 +217,14 @@ class ResponseFinish(Event):
 
     Attributes
     ----------
+    response_id : str
+        Response whose playback settlement is complete.
     text : str
         Final response prefix that was actually played to the user.
     """
 
     TYPE: ClassVar[str] = "response.finish"
+    response_id: str = ""
     text: str = ""
 
 
@@ -226,6 +239,7 @@ class TTSTextSynthesisStarted(Event):
     """
 
     TYPE: ClassVar[str] = "tts.text_synthesis_started"
+    response_id: str = ""
     text: str = ""
 
 
@@ -243,6 +257,7 @@ class TTSStreamingTextAccepted(Event):
     """
 
     TYPE: ClassVar[str] = "tts.streaming_text_accepted"
+    response_id: str = ""
     text: str = ""
     prepared_audio_ms: float = 0.0
 
@@ -264,6 +279,7 @@ class TTSTextSynthesized(Event):
     """
 
     TYPE: ClassVar[str] = "tts.text_synthesized"
+    response_id: str = ""
     text: str = ""
     audio_duration: float = 0.0
     audio_chunk: bytes = b""
@@ -283,6 +299,7 @@ class TTSTextDeliveryFinished(Event):
     """
 
     TYPE: ClassVar[str] = "tts.text_delivery_finished"
+    response_id: str = ""
     text: str = ""
     succeeded: bool = True
 
@@ -315,6 +332,7 @@ class TTSSpeedChange(Event):
 class TTSChunkReady(Event):
     """Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated."""
     TYPE: ClassVar[str] = "tts.chunk_ready"
+    response_id: str = ""
     audio_chunk: bytes = b""
     sample_rate: int = 48000
 
@@ -328,6 +346,7 @@ class TTSChunkPlayed(Event):
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
+    response_id: str = ""
 
 
 @dataclass
@@ -339,12 +358,14 @@ class TTSPlaybackStopped(Event):
     """
 
     TYPE: ClassVar[str] = "tts.playback_stopped"
+    response_id: str = ""
     played_audio_ms: float = 0.0
 
 
 @dataclass
 class TTSPlaybackFinished(Event):
     TYPE: ClassVar[str] = "tts.playback_finished"
+    response_id: str = ""
 
 
 @dataclass
@@ -431,6 +452,19 @@ class LatencyMetricsUpdated(Event):
 @dataclass
 class TurnTTSStartRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_start_requested"
+    response_id: str = ""
+
+
+@dataclass
+class TurnTTSDeliveryStartRequested(Event):
+    """Allow one prepared TTS response to begin client delivery.
+
+    ``response_id`` selects the prepared response whose text and audio may now
+    cross the client-delivery boundary.
+    """
+
+    TYPE: ClassVar[str] = "turn.tts_delivery_start_requested"
+    response_id: str = ""
 
 
 @dataclass
@@ -446,12 +480,14 @@ class TurnTTSResumeRequested(Event):
 @dataclass
 class TurnTTSStopRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_stop_requested"
+    response_id: str | None = None
     reason: str = ""  # e.g., verification_valid|playback_finished
 
 
 @dataclass
 class TurnTTSFlushRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_flush_requested"
+    response_id: str = ""
 
 
 @dataclass
@@ -529,7 +565,19 @@ class TurnTTSTextAppendRequested(Event):
     """Request to append text into ongoing TTS stream (sim-trans)."""
 
     TYPE: ClassVar[str] = "turn.tts_text_append_requested"
+    response_id: str = ""
     text: str = ""
+
+
+@dataclass
+class TTSResponseClosed(Event):
+    """Signal that one response has completed playback settlement and cleanup.
+
+    ``response_id`` releases only the matching coordinator delivery slot.
+    """
+
+    TYPE: ClassVar[str] = "tts.response_closed"
+    response_id: str = ""
 
 
 # ==================== Speaker Notification (Frontend) ====================

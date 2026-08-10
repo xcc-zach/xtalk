@@ -61,5 +61,11 @@ export default defineConfig({
     target: "es2020",
     minify: process.env.TAURI_ENV_DEBUG ? false : "oxc",
     sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
+    rollupOptions: {
+      input: {
+        main: path.join(appRoot, "ui", "index.html"),
+        whiteboard: path.join(appRoot, "ui", "whiteboard.html"),
+      },
+    },
   },
 });

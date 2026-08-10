@@ -4,6 +4,23 @@ import NIOHTTP1
 import NIOPosix
 import NIOWebSocket
 
+private let refinerModelID = "agentic-asr-refiner"
+private let refinerMaximumTokens = 512
+
+private struct RefinerChatRequest: Decodable, Sendable {
+    let model: String
+    let messages: [RefinerMessage]
+    let maxTokens: Int?
+    let temperature: Float?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case maxTokens = "max_tokens"
+        case temperature
+    }
+}
+
 struct HTTPResult: Sendable {
     let status: HTTPResponseStatus
     let contentType: String
@@ -91,13 +108,16 @@ final class RuntimeHTTPHandler:
     ) {
         let keepAlive = head.isKeepAlive
         if head.method == .GET, head.uri == "/health" {
+            var response: [String: any Sendable] = [
+                "status": "ok",
+                "protocol_version": 1,
+                "engine": service.engineName,
+            ]
+            if service.sampleRate > 0 {
+                response["sample_rate"] = service.sampleRate
+            }
             write(
-                .json([
-                    "status": "ok",
-                    "protocol_version": 1,
-                    "engine": service.engineName,
-                    "sample_rate": service.sampleRate,
-                ]),
+                .json(response),
                 keepAlive: keepAlive,
                 context: context
             )
@@ -109,6 +129,42 @@ final class RuntimeHTTPHandler:
                     "service": "xtalk-mlx-model-runtime",
                     "engine": service.engineName,
                 ]),
+                keepAlive: keepAlive,
+                context: context
+            )
+            return
+        }
+        if service == .agenticASRRefiner {
+            if head.method == .GET,
+               head.uri == "/v1/models" || head.uri == "/models"
+            {
+                write(
+                    .json([
+                        "object": "list",
+                        "data": [[
+                            "id": refinerModelID,
+                            "object": "model",
+                            "owned_by": "xtalk",
+                        ]],
+                    ]),
+                    keepAlive: keepAlive,
+                    context: context
+                )
+                return
+            }
+            if head.method == .POST,
+               head.uri == "/v1/chat/completions"
+                    || head.uri == "/chat/completions"
+            {
+                handleRefinerChat(
+                    body: body,
+                    keepAlive: keepAlive,
+                    context: context
+                )
+                return
+            }
+            write(
+                .json(status: .notFound, ["error": "endpoint not found"]),
                 keepAlive: keepAlive,
                 context: context
             )
@@ -165,6 +221,90 @@ final class RuntimeHTTPHandler:
                 "normalized_text": text,
                 "normalization_method": "mlx-audio-swift",
                 "text_normalization_language": "auto",
+            ])
+        }.whenComplete { result in
+            let context = boundContext.value
+            switch result {
+            case .success(let response):
+                self.write(
+                    response,
+                    keepAlive: keepAlive,
+                    context: context
+                )
+            case .failure(let error):
+                self.write(
+                    .json(
+                        status: .badRequest,
+                        ["error": error.localizedDescription]
+                    ),
+                    keepAlive: keepAlive,
+                    context: context
+                )
+            }
+        }
+    }
+
+    private func handleRefinerChat(
+        body: Data,
+        keepAlive: Bool,
+        context: ChannelHandlerContext
+    ) {
+        let runtime = runtime
+        let boundContext = NIOLoopBound(
+            context,
+            eventLoop: context.eventLoop
+        )
+        context.eventLoop.makeFutureWithTask {
+            let request = try JSONDecoder().decode(
+                RefinerChatRequest.self,
+                from: body
+            )
+            guard request.model == refinerModelID else {
+                throw RuntimeServerError.invalidRefinerModel(request.model)
+            }
+            guard !request.messages.isEmpty else {
+                throw RuntimeServerError.emptyRefinerMessages
+            }
+            guard request.messages.allSatisfy({
+                ["system", "user", "assistant"].contains($0.role)
+            }) else {
+                throw RuntimeServerError.invalidRefinerRole
+            }
+            let maxTokens = request.maxTokens ?? refinerMaximumTokens
+            guard (1 ... refinerMaximumTokens).contains(maxTokens) else {
+                throw RuntimeServerError.invalidRefinerTokenLimit
+            }
+            let temperature = request.temperature ?? 0
+            guard temperature.isFinite, temperature >= 0 else {
+                throw RuntimeServerError.invalidRefinerTemperature
+            }
+            let generation = try await runtime.refine(
+                messages: request.messages,
+                maxTokens: maxTokens
+            )
+            let totalTokens = generation.promptTokenCount
+                + generation.generationTokenCount
+            let assistantMessage: [String: any Sendable] = [
+                "role": "assistant",
+                "content": generation.text,
+            ]
+            let choice: [String: any Sendable] = [
+                "index": 0,
+                "message": assistantMessage,
+                "finish_reason": generation.finishReason,
+            ]
+            let usage: [String: any Sendable] = [
+                "prompt_tokens": generation.promptTokenCount,
+                "completion_tokens": generation.generationTokenCount,
+                "total_tokens": totalTokens,
+            ]
+            return HTTPResult.json([
+                "id": "chatcmpl-\(UUID().uuidString)",
+                "object": "chat.completion",
+                "created": Int(Date().timeIntervalSince1970),
+                "model": refinerModelID,
+                "choices": [choice],
+                "usage": usage,
             ])
         }.whenComplete { result in
             let context = boundContext.value
@@ -335,6 +475,11 @@ enum RuntimeServerError: Error, LocalizedError {
     case missingPromptAudio
     case invalidSeed
     case invalidBoundAddress
+    case invalidRefinerModel(String)
+    case emptyRefinerMessages
+    case invalidRefinerRole
+    case invalidRefinerTokenLimit
+    case invalidRefinerTemperature
 
     var errorDescription: String? {
         switch self {
@@ -344,6 +489,16 @@ enum RuntimeServerError: Error, LocalizedError {
             "seed must be an integer"
         case .invalidBoundAddress:
             "MLX runtime did not bind a TCP port"
+        case .invalidRefinerModel(let model):
+            "Unknown Refiner model \(model); expected \(refinerModelID)"
+        case .emptyRefinerMessages:
+            "messages must not be empty"
+        case .invalidRefinerRole:
+            "messages contain an unsupported role"
+        case .invalidRefinerTokenLimit:
+            "max_tokens must be between 1 and \(refinerMaximumTokens)"
+        case .invalidRefinerTemperature:
+            "temperature must be a non-negative finite number"
         }
     }
 }

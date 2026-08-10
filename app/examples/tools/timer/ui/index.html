@@ -121,6 +121,10 @@
         color: #16855b;
       }
 
+      .badge.cancelled {
+        color: rgb(127 127 127);
+      }
+
       @media (max-width: 520px) {
         .card {
           padding: 16px;
@@ -142,6 +146,42 @@
         .badge {
           display: none;
         }
+      }
+
+      :root[data-mode="history"] .card {
+        padding: 16px 18px;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        gap: 14px;
+      }
+
+      :root[data-mode="history"] .icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+      }
+
+      :root[data-mode="history"] .icon svg {
+        width: 31px;
+        height: 31px;
+      }
+
+      :root[data-mode="history"] .status,
+      :root[data-mode="history"] .message,
+      :root[data-mode="history"] .progress,
+      :root[data-mode="history"] #elapsed {
+        display: none;
+      }
+
+      :root[data-mode="history"] .meta {
+        margin-top: 5px;
+        justify-content: flex-start;
+        font-size: 13px;
+      }
+
+      :root[data-mode="history"] .badge {
+        display: inline-block;
+        min-width: 82px;
+        padding: 9px 12px;
       }
     </style>
   </head>
@@ -171,6 +211,27 @@
       <span id="badge" class="badge">Running</span>
     </main>
     <script>
+      const { language, mode } = window.xtalkToolUI.context;
+      const locale = language.toLowerCase().startsWith("zh") ? "zh" : "en";
+      const copy = {
+        en: {
+          title: "Timer",
+          preparing: "Preparing…",
+          running: "Running",
+          complete: "Complete",
+          cancelled: "Cancelled",
+          seconds: "s",
+        },
+        zh: {
+          title: "计时器",
+          preparing: "准备中…",
+          running: "运行中",
+          complete: "已完成",
+          cancelled: "已取消",
+          seconds: "秒",
+        },
+      }[locale];
+      document.documentElement.dataset.mode = mode;
       const title = document.querySelector("#title");
       const badge = document.querySelector("#badge");
       const status = document.querySelector("#status");
@@ -184,32 +245,41 @@
           Number(match[0]),
         );
 
-      const formatTitle = (value) => {
-        const normalized = String(value || "Timer").replaceAll("_", " ");
-        return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-      };
-
-      const renderStatus = (value, running) => {
-        status.textContent = value || (running ? "Running" : "Complete");
+      const renderStatus = (value, running, outcome) => {
+        const resolvedOutcome = outcome || (running ? "running" : "complete");
+        const cancelled = resolvedOutcome === "cancelled";
+        status.textContent = cancelled
+          ? copy.cancelled
+          : running
+            ? copy.running
+            : copy.complete;
         const [used = 0, duration = Math.max(used, 1)] = numbers(value);
         const maximum = Math.max(duration, 1);
         const percentage = Math.min(100, Math.max(0, (used / maximum) * 100));
         progressValue.style.width = `${percentage}%`;
-        elapsed.textContent = `${used} s`;
-        total.textContent = `${duration} s`;
-        badge.textContent = running ? "Running" : "Complete";
-        badge.classList.toggle("complete", !running);
+        elapsed.textContent = `${used} ${copy.seconds}`;
+        total.textContent = `${duration} ${copy.seconds}`;
+        badge.textContent = cancelled
+          ? copy.cancelled
+          : running
+            ? copy.running
+            : copy.complete;
+        badge.classList.toggle("complete", resolvedOutcome === "complete");
+        badge.classList.toggle("cancelled", cancelled);
       };
 
+      title.textContent = copy.title;
+      status.textContent = copy.preparing;
+      badge.textContent = copy.running;
       window.xtalkToolUI.status((event) => {
-        title.textContent = formatTitle(event.toolName);
-        renderStatus(event.status, event.running);
+        title.textContent = copy.title;
+        renderStatus(event.status, event.running, event.outcome);
       });
 
       window.xtalkToolUI.emit((event) => {
-        title.textContent = formatTitle(event.toolName);
+        title.textContent = copy.title;
         message.textContent = event.message;
-        renderStatus(event.status, event.running);
+        renderStatus(event.status, event.running, event.outcome);
       });
     </script>
   </body>

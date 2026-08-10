@@ -29,6 +29,12 @@ const zhCN = {
   "sidebar.readFailed": "聊天记录读取失败：{{error}}",
   "sidebar.createFailed": "新聊天创建失败：{{error}}",
   "sidebar.switchFailed": "聊天切换失败：{{error}}",
+  "sidebar.delete": "删除",
+  "sidebar.cancel": "取消",
+  "sidebar.deleteTitle": "删除聊天",
+  "sidebar.deleteConfirm": "确定删除“{{title}}”吗？该操作无法撤销。",
+  "sidebar.deleteSessionAria": "删除这条聊天记录",
+  "sidebar.deleteFailed": "聊天删除失败：{{error}}",
   "settings.title": "设置与诊断",
   "settings.open": "打开设置与诊断",
   "settings.close": "关闭设置与诊断",
@@ -62,6 +68,15 @@ const zhCN = {
   "model.notSelected": "尚未选择模型配置",
   "model.choosePrompt": "等待选择 JSON 配置",
   "model.firstLaunch": "首次启动需要选择模型配置文件",
+  "model.firstLaunchTitle": "首次启动配置",
+  "model.firstLaunchDescription":
+    "选择推荐配置可立即使用本地语音模型与 DeepSeek 大语言模型；也可以选择自己的 JSON 配置文件。",
+  "model.recommended": "推荐配置",
+  "model.recommendedDescription":
+    "本地语音模型（SenseVoice + Matcha）搭配 DeepSeek 大语言模型，无需选择文件。",
+  "model.custom": "自定义配置",
+  "model.customDescription": "选择自己的外部 JSON 模型配置文件。",
+  "model.cancel": "取消",
   "model.cancelCurrent": "已取消；继续使用当前配置",
   "model.cancelNone": "已取消；尚未选择模型配置",
   "model.restarting": "正在重启本地服务",
@@ -72,6 +87,17 @@ const zhCN = {
   "model.readFailed": "无法读取模型配置状态",
   "model.dialogTitle": "选择 XTalk 模型配置",
   "model.dialogFilter": "JSON 配置",
+  "llm.title": "配置 LLM API Key",
+  "llm.description":
+    "输入 DeepSeek API Key 后即可开始对话。Key 将保存在系统凭据管理器中，不会写入 AppData。",
+  "llm.linkLabel": "获取 DeepSeek API Key",
+  "llm.placeholder": "粘贴 API Key",
+  "llm.skip": "跳过",
+  "llm.saveAndContinue": "保存并继续",
+  "llm.saving": "正在保存 API Key",
+  "llm.saved": "API Key 已保存",
+  "llm.saveFailed": "API Key 保存失败",
+  "llm.saveFailedDetail": "API Key 保存失败：{{error}}",
   "managed.title": "准备本地模型",
   "managed.preparing": "正在检查模型文件",
   "managed.progress": "本地模型准备进度",
@@ -99,6 +125,7 @@ const zhCN = {
   "tools.enabled": "启用",
   "tools.enableName": "启用{{name}}",
   "tools.disableName": "禁用{{name}}",
+  "tools.requiredName": "{{name}}是必需工具",
   "tools.removeName": "删除{{name}}",
   "tools.removeTitle": "删除已复制的工具",
   "tools.pending": "工具配置已修改；应用并重启本地服务后生效",
@@ -131,38 +158,40 @@ const zhCN = {
   "tools.liveCount": "{{count}} 个工具正在运行",
   "tools.liveExpand": "展开正在运行的工具界面",
   "tools.liveCollapse": "收起正在运行的工具界面",
-  "webSearch.coreTools": "核心工具",
-  "webSearch.timeName": "当前时间",
-  "webSearch.timeDetail": "get_time · 始终启用",
-  "webSearch.name": "联网搜索",
-  "webSearch.detail": "web_search · 异步 Serper 搜索",
-  "webSearch.enableLabel": "启用联网搜索工具",
-  "webSearch.enterKey": "输入 Key",
-  "webSearch.modifyKey": "修改本次 Key",
-  "webSearch.loading": "正在读取联网搜索配置",
-  "webSearch.keyRequired": "请输入本次 App 会话使用的 Serper API Key",
-  "webSearch.keyPendingEnabled":
-    "已输入本次 App 使用的 Key；应用并重启本地服务后生效",
-  "webSearch.keyPendingDisabled":
-    "本次 App 使用的 Key 已修改；应用并重启本地服务后生效",
-  "webSearch.pending": "联网搜索配置已修改；应用并重启本地服务后生效",
-  "webSearch.missingDisabled": "未检测到环境变量；启用联网搜索时会要求输入 Key",
-  "webSearch.enabledEnvironment":
-    "联网搜索已启用，正在使用环境变量中的 Serper Key",
-  "webSearch.enabledSession":
-    "联网搜索已启用，正在使用本次 App 会话的 Serper Key",
-  "webSearch.disabledEnvironment":
-    "联网搜索已关闭，环境变量中的 Serper Key 可用",
-  "webSearch.disabledSession":
-    "联网搜索已关闭，本次 App 会话的 Serper Key 可用",
-  "webSearch.dialogTitle": "配置联网搜索 Key",
-  "webSearch.dialogDescription":
-    "Key 只在本次 App 运行期间保存在内存中，关闭 App 后失效，不会写入本地文件。",
-  "webSearch.keyLabel": "Serper API Key",
-  "webSearch.keyPlaceholder": "输入 Serper API Key",
-  "webSearch.keyValidation": "请输入 Serper API Key",
-  "webSearch.cancel": "取消",
-  "webSearch.useKey": "使用此 Key",
+  "tools.required": "必需",
+  "credentials.title": "服务凭据",
+  "credentials.description":
+    "API Key 保存在操作系统凭据管理器中。环境变量优先，Key 不会写入 AppData、工具目录或启动配置。",
+  "credentials.listLabel": "服务凭据",
+  "credentials.none": "没有已注册的服务凭据",
+  "credentials.count": "共 {{count}} 个服务凭据",
+  "credentials.environment": "由环境变量提供（只读且优先）",
+  "credentials.system": "已保存在系统凭据管理器",
+  "credentials.missing": "未配置",
+  "credentials.unavailable": "当前平台的系统凭据管理器不可用",
+  "credentials.configure": "配置",
+  "credentials.replace": "替换",
+  "credentials.delete": "删除",
+  "credentials.apply": "应用并重启本地服务",
+  "credentials.pending": "凭据已修改；应用并重启本地服务后生效",
+  "credentials.dialogTitle": "保存服务凭据",
+  "credentials.dialogDescription":
+    "Key 将持久保存在操作系统凭据管理器中，不会写入 AppData 或工具目录。",
+  "credentials.keyFor": "{{name}} API Key",
+  "credentials.keyPlaceholder": "输入 API Key",
+  "credentials.keyValidation": "请输入 API Key",
+  "credentials.cancel": "取消",
+  "credentials.save": "保存",
+  "credentials.saving": "正在保存到系统凭据管理器",
+  "credentials.saved": "凭据已保存；应用并重启本地服务后生效",
+  "credentials.saveFailed": "凭据保存失败",
+  "credentials.saveFailedDetail": "凭据保存失败：{{error}}",
+  "credentials.deleting": "正在从系统凭据管理器删除",
+  "credentials.deleted": "凭据已删除；相关工具已关闭，重启后生效",
+  "credentials.deleteFailed": "凭据删除失败",
+  "credentials.deleteFailedDetail": "凭据删除失败：{{error}}",
+  "credentials.required": "请先在“服务凭据”中配置此工具所需的 API Key",
+  "credentials.storeUnavailable": "系统凭据管理器不可用；请改用环境变量",
   "runtime.title": "运行状态",
   "runtime.connection": "连接",
   "runtime.stream": "音频流",
@@ -244,6 +273,13 @@ const zhCN = {
   "voice.stop": "结束对话",
   "voice.connectFailed": "会话连接失败：{{error}}",
   "voice.closeFailed": "会话关闭失败：{{error}}",
+  "whiteboard.show": "显示白板",
+  "whiteboard.hide": "隐藏白板",
+  "whiteboard.windowTitle": "白板",
+  "whiteboard.revision": "版本",
+  "whiteboard.empty": "白板内容为空，等待助手写入内容。",
+  "whiteboard.updated": "更新于 {{time}}",
+  "whiteboard.unavailable": "白板暂不可用：{{error}}",
   "message.user": "你",
   "message.system": "系统",
   "message.copy": "复制消息",
@@ -272,6 +308,12 @@ const en: Record<keyof typeof zhCN, string> = {
   "sidebar.readFailed": "Could not load conversation history: {{error}}",
   "sidebar.createFailed": "Could not create the new chat: {{error}}",
   "sidebar.switchFailed": "Could not switch conversations: {{error}}",
+  "sidebar.delete": "Delete",
+  "sidebar.cancel": "Cancel",
+  "sidebar.deleteTitle": "Delete conversation",
+  "sidebar.deleteConfirm": "Delete \"{{title}}\"? This cannot be undone.",
+  "sidebar.deleteSessionAria": "Delete this conversation",
+  "sidebar.deleteFailed": "Failed to delete conversation: {{error}}",
   "settings.title": "Settings & diagnostics",
   "settings.open": "Open settings and diagnostics",
   "settings.close": "Close settings and diagnostics",
@@ -306,6 +348,15 @@ const en: Record<keyof typeof zhCN, string> = {
   "model.notSelected": "No model configuration selected",
   "model.choosePrompt": "Waiting for a JSON configuration",
   "model.firstLaunch": "Choose a model configuration to finish first-time setup",
+  "model.firstLaunchTitle": "First-time setup",
+  "model.firstLaunchDescription":
+    "Choose the recommended configuration to start with local voice models and the DeepSeek LLM, or select your own JSON configuration file.",
+  "model.recommended": "Recommended configuration",
+  "model.recommendedDescription":
+    "Local voice models (SenseVoice + Matcha) with the DeepSeek LLM; no file selection needed.",
+  "model.custom": "Custom configuration",
+  "model.customDescription": "Choose your own external JSON model configuration file.",
+  "model.cancel": "Cancel",
   "model.cancelCurrent": "Cancelled; continuing with the current configuration",
   "model.cancelNone": "Cancelled; no model configuration selected",
   "model.restarting": "Restarting the local service",
@@ -316,6 +367,17 @@ const en: Record<keyof typeof zhCN, string> = {
   "model.readFailed": "Could not read the model configuration status",
   "model.dialogTitle": "Choose XTalk model configuration",
   "model.dialogFilter": "JSON configuration",
+  "llm.title": "Configure the LLM API key",
+  "llm.description":
+    "Enter your DeepSeek API key to start chatting. The key is stored in the system credential manager and never written to AppData.",
+  "llm.linkLabel": "Get a DeepSeek API key",
+  "llm.placeholder": "Paste the API key",
+  "llm.skip": "Skip",
+  "llm.saveAndContinue": "Save and continue",
+  "llm.saving": "Saving the API key",
+  "llm.saved": "API key saved",
+  "llm.saveFailed": "Could not save the API key",
+  "llm.saveFailedDetail": "Could not save the API key: {{error}}",
   "managed.title": "Preparing local models",
   "managed.preparing": "Checking model files",
   "managed.progress": "Local model preparation progress",
@@ -344,6 +406,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "tools.enabled": "Enabled",
   "tools.enableName": "Enable {{name}}",
   "tools.disableName": "Disable {{name}}",
+  "tools.requiredName": "{{name}} is required",
   "tools.removeName": "Remove {{name}}",
   "tools.removeTitle": "Remove copied tool",
   "tools.pending": "Tool settings changed; apply and restart the local service",
@@ -376,40 +439,47 @@ const en: Record<keyof typeof zhCN, string> = {
   "tools.liveCount": "{{count}} tools running",
   "tools.liveExpand": "Expand running tool UI",
   "tools.liveCollapse": "Collapse running tool UI",
-  "webSearch.coreTools": "Core tools",
-  "webSearch.timeName": "Current time",
-  "webSearch.timeDetail": "get_time · always enabled",
-  "webSearch.name": "Web search",
-  "webSearch.detail": "web_search · asynchronous Serper search",
-  "webSearch.enableLabel": "Enable the web-search tool",
-  "webSearch.enterKey": "Enter key",
-  "webSearch.modifyKey": "Change session key",
-  "webSearch.loading": "Loading web-search settings",
-  "webSearch.keyRequired": "Enter a Serper API key for this App session",
-  "webSearch.keyPendingEnabled":
-    "Session key entered; apply and restart the local service",
-  "webSearch.keyPendingDisabled":
-    "Session key changed; apply and restart the local service",
-  "webSearch.pending":
-    "Web-search settings changed; apply and restart the local service",
-  "webSearch.missingDisabled":
-    "No environment key found; enabling web search will request a key",
-  "webSearch.enabledEnvironment":
-    "Web search is enabled with the Serper key from the environment",
-  "webSearch.enabledSession":
-    "Web search is enabled with the Serper key for this App session",
-  "webSearch.disabledEnvironment":
-    "Web search is disabled; the environment Serper key is available",
-  "webSearch.disabledSession":
-    "Web search is disabled; the App session Serper key is available",
-  "webSearch.dialogTitle": "Configure web-search key",
-  "webSearch.dialogDescription":
-    "The key remains only in memory for this App run. It expires when the App closes and is never written to disk.",
-  "webSearch.keyLabel": "Serper API key",
-  "webSearch.keyPlaceholder": "Enter Serper API key",
-  "webSearch.keyValidation": "Enter a Serper API key",
-  "webSearch.cancel": "Cancel",
-  "webSearch.useKey": "Use this key",
+  "tools.required": "Required",
+  "credentials.title": "Service credentials",
+  "credentials.description":
+    "API keys are stored in the operating system credential manager. Environment variables take precedence, and keys are never written to AppData, tool directories, or startup configuration.",
+  "credentials.listLabel": "Service credentials",
+  "credentials.none": "No service credentials are registered",
+  "credentials.count": "{{count}} service credentials",
+  "credentials.environment":
+    "Provided by environment variable (read-only and preferred)",
+  "credentials.system": "Saved in the system credential manager",
+  "credentials.missing": "Not configured",
+  "credentials.unavailable":
+    "The system credential manager is unavailable on this platform",
+  "credentials.configure": "Configure",
+  "credentials.replace": "Replace",
+  "credentials.delete": "Delete",
+  "credentials.apply": "Apply and restart local service",
+  "credentials.pending":
+    "Credentials changed; apply and restart the local service to use them",
+  "credentials.dialogTitle": "Save service credential",
+  "credentials.dialogDescription":
+    "The key is persisted in the operating system credential manager and is never written to AppData or tool directories.",
+  "credentials.keyFor": "{{name}} API key",
+  "credentials.keyPlaceholder": "Enter API key",
+  "credentials.keyValidation": "Enter an API key",
+  "credentials.cancel": "Cancel",
+  "credentials.save": "Save",
+  "credentials.saving": "Saving to the system credential manager",
+  "credentials.saved":
+    "Credential saved; apply and restart the local service to use it",
+  "credentials.saveFailed": "Could not save credential",
+  "credentials.saveFailedDetail": "Could not save credential: {{error}}",
+  "credentials.deleting": "Deleting from the system credential manager",
+  "credentials.deleted":
+    "Credential deleted; dependent tools were disabled and the change applies after restart",
+  "credentials.deleteFailed": "Could not delete credential",
+  "credentials.deleteFailedDetail": "Could not delete credential: {{error}}",
+  "credentials.required":
+    "Configure the API key required by this tool under Service credentials first",
+  "credentials.storeUnavailable":
+    "The system credential manager is unavailable; use an environment variable instead",
   "runtime.title": "Runtime status",
   "runtime.connection": "Connection",
   "runtime.stream": "Stream",
@@ -491,6 +561,13 @@ const en: Record<keyof typeof zhCN, string> = {
   "voice.stop": "End conversation",
   "voice.connectFailed": "Could not connect the conversation: {{error}}",
   "voice.closeFailed": "Could not close the conversation: {{error}}",
+  "whiteboard.show": "Show whiteboard",
+  "whiteboard.hide": "Hide whiteboard",
+  "whiteboard.windowTitle": "Whiteboard",
+  "whiteboard.revision": "Revision",
+  "whiteboard.empty": "The whiteboard is empty. Ask the assistant to write to it.",
+  "whiteboard.updated": "Updated {{time}}",
+  "whiteboard.unavailable": "Whiteboard unavailable: {{error}}",
   "message.user": "You",
   "message.system": "System",
   "message.copy": "Copy message",
@@ -622,12 +699,20 @@ export function refreshAutomaticLanguage(): boolean {
  * @returns The current-language equivalent when known, otherwise the original.
  */
 export function localizeKnownError(message: string): string {
-  const key: TranslationKey = "native.runtimeUnavailable";
-  return Object.values(dictionaries).some(
-    (dictionary) => dictionary[key] === message,
-  )
-    ? t(key)
-    : message;
+  const translatedKeys: TranslationKey[] = ["native.runtimeUnavailable"];
+  for (const key of translatedKeys) {
+    if (Object.values(dictionaries).some((dictionary) => dictionary[key] === message)) {
+      return t(key);
+    }
+  }
+  const nativeErrors: Readonly<Record<string, TranslationKey>> = {
+    "the selected tool requires a configured service credential":
+      "credentials.required",
+    "the system credential store is unavailable":
+      "credentials.storeUnavailable",
+  };
+  const key = nativeErrors[message];
+  return key === undefined ? message : t(key);
 }
 
 function readLanguagePreference(): LanguagePreference {

@@ -7,7 +7,7 @@
 <details markdown="1">
 <summary>SherpaOnnx [推荐]</summary>
 
-**依赖：** `pip install "xtalk[sherpa-onnx-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+**依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **实现路径：** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
@@ -27,6 +27,53 @@
 **路径：** [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)
 
 [详情](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/qwen3-asr-flash)
+
+</details>
+
+<details markdown="1">
+<summary>AgenticASR</summary>
+
+**依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
+
+**路径：** [`src/xtalk/models/asr/agentic_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/agentic_asr.py)
+
+结合 sherpa-onnx WebSocket ASR 与 AgenticASR K=3 滑窗精修的语音识别封装。
+`streaming` 模式使用 sherpa-onnx 在线 WebSocket 服务；`offline` 模式通过
+`MockStreamRecognizer` 包装离线 WebSocket 服务来模拟流式。Refiner 为
+OpenAI 兼容的 chat-completions 服务。XTalk Desktop 可通过
+`managed://sensevoice-small` 和 `managed://agentic-asr-refiner` 自动下载并
+托管两个本地服务。不指定 `backend` 查询参数时，Apple Silicon 使用 MLX，
+受支持的 Windows/Linux CUDA 设备使用 CUDA，其他平台使用 ONNX CPU。
+
+**配置参数：** `asr_base_url`（sherpa-onnx WebSocket 服务地址）、
+`refiner_base_url`（OpenAI 兼容的 Refiner 服务地址）、`asr_mode`
+（`"streaming"` 或 `"offline"`，默认 `"offline"`）。
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "ws://127.0.0.1:6006",
+    "refiner_base_url": "http://127.0.0.1:8000/v1",
+    "asr_mode": "offline"
+  }
+}
+```
+
+Desktop 托管配置：
+
+```json
+{
+  "type": "AgenticASR",
+  "params": {
+    "asr_base_url": "managed://sensevoice-small",
+    "refiner_base_url": "managed://agentic-asr-refiner",
+    "asr_mode": "offline"
+  }
+}
+```
+
+[原始仓库](https://github.com/AnXMuy/AgenticASR)
 
 </details>
 
@@ -100,6 +147,21 @@ PCM 音频。
 **路径：** [`src/xtalk/models/tts/cosyvoice.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/cosyvoice.py)
 
 [详情](https://bailian.console.aliyun.com/?tab=model#/model-market/detail/cosyvoice-v3-flash)
+
+</details>
+
+<details markdown="1">
+<summary>SherpaOnnxTTS</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
+
+本地 sherpa-onnx Matcha 中英 TTS 服务的 HTTP 客户端。向 `/v1/audio/speech` 提交文本，输出固定为 48 kHz 单声道 PCM16。
+
+**配置参数：** 仅 `base_url`。
+
+[原始仓库](https://github.com/k2-fsa/sherpa-onnx)
 
 </details>
 

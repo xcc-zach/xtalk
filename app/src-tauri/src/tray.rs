@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     App, Manager,
 };
 
@@ -44,12 +44,16 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
                 show_main_window(tray.app_handle());
             }
         });
@@ -61,9 +65,17 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("could not show the main window: window is missing");
+        return;
+    };
+    if let Err(error) = window.unminimize() {
+        eprintln!("could not unminimize the main window: {error}");
+    }
+    if let Err(error) = window.show() {
+        eprintln!("could not show the main window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("could not focus the main window: {error}");
     }
 }

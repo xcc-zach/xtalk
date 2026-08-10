@@ -24,6 +24,18 @@ struct ProtocolTests {
         ])
         #expect(options.service == .senseVoice)
         #expect(options.port == 0)
+
+        let refinerOptions = try RuntimeOptions.parse([
+            "--service", "agentic-asr-refiner",
+            "--model-root", root.path,
+        ])
+        #expect(refinerOptions.service == .agenticASRRefiner)
+        #expect(refinerOptions.service.sampleRate == 0)
+    }
+
+    @Test
+    func stripsRefinerChatTerminators() {
+        #expect(cleanRefinerOutput(" 纠正结果<|im_end|></s>\n") == "纠正结果")
     }
 
     @Test
@@ -69,20 +81,57 @@ struct ProtocolTests {
     }
 
     @Test
-    func splitsMossRequestsAtNaturalClauseBoundaries() {
+    func keepsMossSentencesIntactUntilTheOfficialTokenBudget() {
         let chunks = mossTTSClauseChunks(
             for: "嘿，你好呀。我是你的智能助手，随时准备帮你解答问题或处理任务，咱们直接开始吧。"
-        ).map(mossTTSClosingClauseBoundary)
+        )
         #expect(chunks == [
             "嘿，你好呀。",
-            "我是你的智能助手。",
-            "随时准备帮你解答问题或处理任务。",
-            "咱们直接开始吧。",
+            "我是你的智能助手，随时准备帮你解答问题或处理任务，咱们直接开始吧。",
         ])
         #expect(mossTTSInterChunkPauseSamples(sampleRate: 48_000) == 19_200)
         #expect(mossTTSSeed(for: "那就好。", requestedSeed: 42) == 21)
         #expect(mossTTSSeed(for: "嘿，你好呀。", requestedSeed: 42) == 21)
         #expect(mossTTSSeed(for: "过得怎么样？", requestedSeed: 42) == 42)
+        #expect(mossTTSClosingClauseBoundary("随时准备帮你。") == "随时准备帮你。")
+        #expect(mossTTSClosingClauseBoundary("，咱们直接开始吧") == "咱们直接开始吧。")
+    }
+
+    @Test
+    func normalizesMixedChineseAndAbsolutePathsForSpeech() {
+        let text = "搜完啦，没找到完全叫xtalk的文件。不过路径是 /Applications/XTalk.app/Contents/MacOS/xtalk-desktop，看来它装在应用程序文件夹里。"
+        #expect(mossTTSSpeechText(text) == "搜完啦，没找到完全叫 xtalk 的文件。不过路径如下。slash Applications, slash X Talk dot app, slash Contents, slash Mac O S, slash X Talk desktop. 看来它装在应用程序文件夹里。")
+    }
+
+    @Test
+    func retriesImplausiblyShortAndLongMossCandidates() {
+        #expect(mossTTSCandidateSeeds(for: "嘿，你好呀。", requestedSeed: 42) == [21, 42, 7, 1])
+        #expect(mossTTSCandidateSeeds(for: "搜完啦。", requestedSeed: 42) == [42, 7, 1, 84])
+        let target = mossTTSTargetDurationSeconds(for: "搜完啦，没找到完全叫 xtalk 的文件或文件夹。")
+        #expect(target > 3.0)
+        #expect(!mossTTSDurationIsPreferred(
+            sampleCount: 28_000,
+            sampleRate: 48_000,
+            targetDuration: target
+        ))
+        #expect(mossTTSDurationIsPreferred(
+            sampleCount: 230_000,
+            sampleRate: 48_000,
+            targetDuration: target
+        ))
+    }
+
+    @Test
+    func isolatesShortChineseOpenerBeforeMixedLanguageRemainder() {
+        #expect(mossTTSLeadingMixedClauseChunks(
+            "搜完啦，没找到完全叫 xtalk 的文件或文件夹。"
+        ) == [
+            "搜完啦。",
+            "没找到完全叫 xtalk 的文件或文件夹。",
+        ])
+        #expect(mossTTSLeadingMixedClauseChunks(
+            "不过发现了一个名字里带 xtalk 的文件。"
+        ) == nil)
     }
 
     @Test

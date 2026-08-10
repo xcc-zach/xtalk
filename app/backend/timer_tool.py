@@ -70,6 +70,9 @@ class TimerTool(AsyncTool):
     and wait for the system to deliver progress updates. Do not subscribe when
     ``reminder_interval_seconds`` is omitted. Call ``id_to_async_tool_status``
     only when the user explicitly asks for current progress; never poll status.
+
+    No extra reply is needed before calling this tool, such as "Let me set a
+    timer for you".
     """
 
     name = "timer"
