@@ -139,7 +139,7 @@ curl http://127.0.0.1:18604/health
       "response_policy": "focus_only",
       "focus_speaker_ids": ["S01"],
       "exclude_non_focus_from_history": true,
-      "suppress_when_speaker_missing": false,
+      "suppress_when_speaker_missing": true,
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
@@ -192,7 +192,7 @@ VAD 结束时，客户端总会及时取消正在等待的过期 partial，让 f
 5. VAD end 后提交不可替换的 segment final，并使用其中的高质量音频更新 speaker exemplar pool。
 6. 硬轮次结束后，`MultiSpeakerTurnContextManager` 按 `turn_id` 合并 ASR final 和 MTD timeline。
 7. 启用 `exclude_non_focus_from_history`（`focus_only` 下默认开启）后，ASR partial 会继续实时显示，直到说话人分离首次识别出非 focus 说话人；音频 partial 始终不会进入 Agent 历史。
-8. 最终合并时，纯 focus turn 使用准确的 ASR 文本；混合 turn 只保留 MTD 的 focus 说话人片段；纯非 focus turn 在进入 Agent 和持久化前直接丢弃。无法确定说话人时遵循 `suppress_when_speaker_missing`。
+8. 最终合并时，纯 focus turn 使用准确的 ASR 文本；混合 turn 只保留 MTD 的 focus 说话人片段；纯非 focus turn 在进入 Agent 和持久化前直接丢弃。启用历史 Gate 时，说话人缺失、分离降级或等待超时都会 fail closed，不进入历史；未启用历史 Gate 时，未知说话人的响应行为仍遵循 `suppress_when_speaker_missing`。
 9. `DefaultAgent` 只接收已接受的 ASR 文本、过滤后的 speaker timeline 和 focus active speaker。
 
 历史 Gate 仅在同时满足三项条件时生效：配置了 `speaker_diarization` 模型、`response_policy: "focus_only"`，且 `exclude_non_focus_from_history: true`。将该选项设为 `false` 会保留原有未过滤的多说话人事件流。未配置说话人分离模型时，无论该选项取值如何，ASR partial 和 final 都继续沿用原有单说话人链路。
