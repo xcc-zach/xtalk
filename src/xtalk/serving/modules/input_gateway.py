@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRResultFinal,
     ASRResultPartial,
@@ -166,7 +166,7 @@ class TextMsgHandler(EventListenerMixin):
                     session_id=self.session_id,
                     origin="text",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
             try:
@@ -175,7 +175,7 @@ class TextMsgHandler(EventListenerMixin):
                         session_id=self.session_id,
                         origin="text",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
                 await self.event_bus.publish(
                     ASRResultPartial(
@@ -185,7 +185,7 @@ class TextMsgHandler(EventListenerMixin):
                         speech_pause=True,
                         origin="text",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
             finally:
                 await self.event_bus.publish(
@@ -193,7 +193,7 @@ class TextMsgHandler(EventListenerMixin):
                         session_id=self.session_id,
                         origin="text",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
 
             await self.event_bus.publish(
@@ -218,7 +218,7 @@ class TextMsgHandler(EventListenerMixin):
                 session_id=self.session_id,
                 origin="client",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _handle_tts_playback_finished(self, message_data: dict) -> None:
@@ -228,7 +228,7 @@ class TextMsgHandler(EventListenerMixin):
                 session_id=self.session_id,
                 response_id=str(message_data.get("response_id", "") or ""),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _handle_tts_playback_stopped(self, message_data: dict) -> None:
@@ -246,7 +246,7 @@ class TextMsgHandler(EventListenerMixin):
                 response_id=str(message_data.get("response_id", "") or ""),
                 played_audio_ms=played_audio_ms,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _handle_change_voice(self, message_data: dict) -> None:
@@ -311,7 +311,7 @@ class TextMsgHandler(EventListenerMixin):
                 session_id=self.session_id,
                 response_id=str(message_data.get("response_id", "") or ""),
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _handle_session_config(self, message_data: dict) -> None:

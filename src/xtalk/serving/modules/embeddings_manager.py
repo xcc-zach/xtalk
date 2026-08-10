@@ -5,7 +5,7 @@ import shutil
 from typing import Any
 
 from ...models import Embeddings, Models
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     EmbeddingStatusUpdated,
     TextForEmbeddingReady,
@@ -41,7 +41,7 @@ class EmbeddingsManager(Manager):
                 status="processing",
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         db = await self._run_embedding_job(text)
@@ -52,7 +52,7 @@ class EmbeddingsManager(Manager):
                 text=text,
                 vector_store_instance=db,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     def _resolve_data_dir(self) -> str | None:

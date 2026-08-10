@@ -7,7 +7,7 @@ from typing import Any, Callable, Coroutine, Type
 from fastapi import WebSocket
 
 from ..models import Agent, Models
-from .event_bus import EventBus
+from .event_bus import EventBus, EventDispatchMode
 from .events import Event, LLMAgentLoop
 from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
@@ -290,7 +290,7 @@ class Service:
         await self.input_gateway.handle_connection(already_accepted=already_accepted)
         await self.event_bus.publish(
             LLMAgentLoop(session_id=self.session_id),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await self.input_gateway.handle_message_loop()
 

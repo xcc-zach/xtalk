@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from ...models import Agent, Models
 from ...models.agents import AgentOutput, AgentTurnBoundary
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ConsumeLLMAgentGenerationRequested,
     ErrorOccurred,
@@ -236,7 +236,7 @@ class LLMAgentConsumptionManager(Manager):
                 response_id=None,
                 reason=event.reason,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _consume_stream(
@@ -338,7 +338,7 @@ class LLMAgentConsumptionManager(Manager):
                         session_id=self.session_id,
                         response_id=response_id,
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
             logger.debug(
                 "[realtime-tts-race] stage=append_schedule "
@@ -353,7 +353,7 @@ class LLMAgentConsumptionManager(Manager):
                     response_id=response_id,
                     text=chunk_text,
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
     async def _wait_for_pre_tool_playback_locked(
@@ -435,7 +435,7 @@ class LLMAgentConsumptionManager(Manager):
                     session_id=self.session_id,
                     response_id=response_id,
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         await self._publish_llm_response_finish(response_id, final_text)
 
@@ -515,7 +515,7 @@ class LLMAgentConsumptionManager(Manager):
                 response_id=response_id,
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _publish_llm_response_finish(
@@ -531,7 +531,7 @@ class LLMAgentConsumptionManager(Manager):
                 response_id=response_id,
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _publish_tool_call(self, tool_call: dict[str, Any]) -> None:
@@ -553,7 +553,7 @@ class LLMAgentConsumptionManager(Manager):
                     name=str(name),
                     args=dict(args) if isinstance(args, dict) else {},
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         except Exception as exc:
             logger.error(

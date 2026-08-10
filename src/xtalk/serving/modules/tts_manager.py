@@ -11,7 +11,7 @@ from ...models import (
     SpeechSpeedController,
     StreamingTextTTS,
 )
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ErrorOccurred,
     LLMFirstSentence,
@@ -416,7 +416,7 @@ class TTSManager(Manager):
         for pending_event in pending_events:
             await self.event_bus.publish(
                 pending_event,
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         await self._start_consumer()
 
@@ -498,7 +498,7 @@ class TTSManager(Manager):
         )
         await self.event_bus.publish(
             tts_stopped_event,
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     @Manager.event_handler(TTSResponseClosed, priority=100)
@@ -586,7 +586,10 @@ class TTSManager(Manager):
         """Publish playback metadata only after this response may be delivered."""
 
         if self._delivery_started:
-            await self.event_bus.publish(event, wait_for_completion=True)
+            await self.event_bus.publish(
+                event,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+            )
             return
         self._pending_playback_events.append(event)
 
@@ -684,7 +687,7 @@ class TTSManager(Manager):
                                 response_id=self._response_id or "",
                                 text=item.text,
                             ),
-                            wait_for_completion=True,
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
                     elif isinstance(item, _TTSSentenceEnd):
                         sentence_text = active_sentence_text or item.text
@@ -695,7 +698,7 @@ class TTSManager(Manager):
                                 text=sentence_text,
                                 succeeded=item.succeeded,
                             ),
-                            wait_for_completion=True,
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
                         active_sentence_text = ""
                     elif isinstance(item, TTSQueueItem) and item.audio_chunk:
@@ -724,7 +727,7 @@ class TTSManager(Manager):
                                 sample_rate=item.sample_rate,
                             )
                             await self.event_bus.publish(
-                                event, wait_for_completion=True
+                                event, mode=EventDispatchMode.WAIT_UNTIL_COMPLETE
                             )
                             chunk_ms = self._chunk_duration_ms(
                                 chunk,
@@ -742,7 +745,7 @@ class TTSManager(Manager):
                                 session_id=self.session_id,
                                 response_id=self._response_id or "",
                             ),
-                            wait_for_completion=True,
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
 
                 except asyncio.TimeoutError:
@@ -756,7 +759,7 @@ class TTSManager(Manager):
                                 session_id=self.session_id,
                                 response_id=self._response_id or "",
                             ),
-                            wait_for_completion=True,
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
                     continue
                 except Exception as e:
@@ -799,7 +802,10 @@ class TTSManager(Manager):
             response_id=self._response_id or "",
         )
         # Wait for completion to maintain ordering
-        await self.event_bus.publish(event, wait_for_completion=True)
+        await self.event_bus.publish(
+            event,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
 
     async def _publish_tts_pause(self) -> None:
         """Publish TTSPaused event."""
@@ -1124,7 +1130,7 @@ class TTSManager(Manager):
                 session_id=self.session_id,
                 response_id=response_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         if response_id != self._response_id:
             return

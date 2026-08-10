@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     TTSResponseClosed,
     TTSStopped,
@@ -85,7 +85,7 @@ class TTSResponseCoordinator(Manager):
                     response_id=superseded_response_id,
                     reason="superseded",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         if stop_response_id is not None:
@@ -95,7 +95,7 @@ class TTSResponseCoordinator(Manager):
                     response_id=stop_response_id,
                     reason="response_preempted",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         if restart_response_id is not None:
@@ -104,7 +104,7 @@ class TTSResponseCoordinator(Manager):
                     session_id=self.session_id,
                     response_id=restart_response_id,
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         if delivery_response_id is not None:
@@ -167,7 +167,7 @@ class TTSResponseCoordinator(Manager):
                 session_id=self.session_id,
                 response_id=response_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def shutdown(self) -> None:

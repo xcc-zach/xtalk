@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ...models import ForcedAligner, ForcedAlignmentUnit, Models
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     LLMAgentResponseFinish,
     LLMAgentResponseUpdate,
@@ -1047,7 +1047,7 @@ class TTSPlaybackManager(Manager):
                 response_id=self._active_response_id or "",
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     @Manager.event_handler(LLMAgentResponseFinish, priority=20)
@@ -1195,7 +1195,7 @@ class TTSPlaybackManager(Manager):
                 response_id=self._active_response_id or "",
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _close_response(self, response_id: str) -> None:
@@ -1209,7 +1209,7 @@ class TTSPlaybackManager(Manager):
                 session_id=self.session_id,
                 response_id=response_id,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def shutdown(self) -> None:

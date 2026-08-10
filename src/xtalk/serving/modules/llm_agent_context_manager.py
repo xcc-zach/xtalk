@@ -9,7 +9,7 @@ from typing import Any
 
 from ...models import Agent, Models, SpeakerDiarization
 from ...models.agents import AgentContext
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRResultFinal,
     ASRResultPartial,
@@ -156,7 +156,7 @@ class LLMAgentContextManager(Manager):
                     stream=self.llm_agent.async_accept(context),
                     persistent=context_type == "loop",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         except Exception as e:
             logger.warning(

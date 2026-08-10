@@ -9,7 +9,7 @@ Backend VAD manager used when the frontend cannot run VAD. It mimics the logic i
 - Speech start triggers when speech frames accumulate beyond `min_speech_ms`
 - Speech end triggers when silence frames exceed `redemption_ms`
 - Emits `VADSpeechStart`/`VADSpeechEnd`; speech end is published with
-  `wait_for_completion=True` so higher-priority handlers can flush state first.
+  `mode=EventDispatchMode.WAIT_UNTIL_COMPLETE` so higher-priority handlers can flush state first.
 
 Notes:
 - Relies on `VAD` interface (`is_speech(frame: bytes) -> bool`) from
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ...models import VAD, Models
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     EnhancedAudioFrameReceived,
     TurnInputAbortRequested,
@@ -174,7 +174,7 @@ class VADManager(Manager):
             session_id=self.session_id,
             origin="server",
         )
-        await self.event_bus.publish(evt, wait_for_completion=True)
+        await self.event_bus.publish(evt, mode=EventDispatchMode.WAIT_UNTIL_COMPLETE)
 
     def _clear_detection_state(self) -> None:
         """Clear buffered audio and duration-smoothing state."""

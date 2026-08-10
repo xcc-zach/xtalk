@@ -28,7 +28,7 @@ from ...models.turn_detector.interfaces import (
     TurnDetectionResult,
     TurnVADResult,
 )
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRResultPartial,
     EnhancedAudioFrameReceived,
@@ -193,7 +193,7 @@ class TurnDetectorManager(Manager):
                     session_id=self.session_id,
                     origin="turn_detector",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
             return
 
@@ -206,7 +206,7 @@ class TurnDetectorManager(Manager):
                     session_id=self.session_id,
                     origin="turn_detector",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
     # ----------------------------
