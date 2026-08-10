@@ -141,6 +141,8 @@ Minimal configuration example:
     "multi_speaker": {
       "response_policy": "focus_only",
       "focus_speaker_ids": ["S01"],
+      "exclude_non_focus_from_history": true,
+      "suppress_when_speaker_missing": false,
       "join_timeout_s": 5.0,
       "fallback_on_timeout": true,
       "diarization": {
@@ -192,9 +194,11 @@ At VAD end, the client always cancels a locally waiting obsolete partial so the 
 4. Both vLLM and SGLang-Omni preserve global labels with the same fixed decoder prefix mechanism.
 5. At VAD end, MTD submits a terminal segment final and uses high-quality audio from that result to update the speaker exemplar pool.
 6. At the hard turn boundary, `MultiSpeakerTurnContextManager` joins the ASR final and MTD timeline by `turn_id`.
-7. `DefaultAgent` receives the ASR transcript, speaker timeline, and active speaker together, allowing the LLM to understand who is speaking and remember speaker self-introductions.
+7. With `exclude_non_focus_from_history` enabled (the default for `focus_only`), ASR partials remain visible to the frontend until diarization first identifies a non-focus speaker, while audio partials never reach Agent history.
+8. At the final join, a focus-only turn keeps the accurate ASR transcript, a mixed turn keeps only focus-speaker MTD segments, and a pure non-focus turn is dropped before Agent and persistence consumers. Unknown-speaker turns follow `suppress_when_speaker_missing`.
+9. `DefaultAgent` receives only the accepted ASR transcript, filtered speaker timeline, and active focus speaker together.
 
-The multi-speaker path is enabled automatically whenever a `speaker_diarization` model is configured. Without that model, ASR finals continue through the original single-speaker path. `service_config.multi_speaker` only controls orchestration and response policies.
+The history gate requires all three conditions: a configured `speaker_diarization` model, `response_policy: "focus_only"`, and `exclude_non_focus_from_history: true`. Setting the option to `false` preserves the previous unfiltered multi-speaker event flow. Without a diarization model, ASR partials and finals continue through the original single-speaker path regardless of this option.
 
 ## 5. SGLang-Omni validation
 
