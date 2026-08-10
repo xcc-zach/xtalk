@@ -482,7 +482,11 @@ Unsubscribe a handler from an event type.
 _Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
-async def publish(self, event: Event, wait_for_completion: bool = False) -> bool
+async def publish(
+    self,
+    event: Event,
+    mode: EventDispatchMode | str = EventDispatchMode.RETURN_AFTER_DISPATCH,
+) -> bool
 ```
 
 Publish an event to all matching handlers.
@@ -491,8 +495,9 @@ Publish an event to all matching handlers.
 
 - `event` (`Event`)
   Event instance to dispatch.
-- `wait_for_completion` (`bool, optional`)
-  Whether to await handler completion before returning.
+- `mode` (`EventDispatchMode | str, optional`)
+  Controls return and propagation behavior. Canonical values and the short
+  aliases `dispatch`, `wait`, and `wait_stoppable` are accepted.
 
 ##### Returns
 
