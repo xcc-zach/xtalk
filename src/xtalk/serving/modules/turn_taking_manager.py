@@ -5,6 +5,9 @@ from ..interfaces import Manager
 from ..events import (
     VADSpeechStart,
     VADSpeechEnd,
+    SpeakerInterruptionDecision,
+    TurnLLMAgentPauseRequested,
+    TurnLLMAgentResumeRequested,
     TurnLLMAgentStopRequested,
     TurnASRStartRequested,
     TurnASRPauseRequested,
@@ -12,7 +15,7 @@ from ..events import (
     TurnDetectorStartGeneration,
     TurnDetectorStopSpeaking,
 )
-from ...models import Models, TurnDetector
+from ...models import Models, SpeakerDiarization, TurnDetector
 
 
 class TurnTakingManager(Manager):
@@ -28,12 +31,14 @@ class TurnTakingManager(Manager):
         self.event_bus = event_bus
         self.session_id = session_id
         self._turn_detector_model = models.get(TurnDetector)
+        self._speaker_diarization_enabled = models.get(SpeakerDiarization) is not None
         self._vad_transition_lock = asyncio.Lock()
         self._next_turn_id = 0
         self._next_segment_id = 0
         self._turn_open = False
         self._current_turn_id = 0
         self._current_segment_id = 0
+        self._speaker_decision_pending = False
 
     @Manager.event_handler(TurnDetectorStartGeneration, priority=99)
     async def _on_turn_detector_start_generation(
@@ -44,6 +49,8 @@ class TurnTakingManager(Manager):
     # Stop speaking must be handled before starting generation
     @Manager.event_handler(TurnDetectorStopSpeaking, priority=100)
     async def _on_turn_detector_stop_speaking(self, _event: TurnDetectorStopSpeaking):
+        if self._speaker_diarization_enabled:
+            return
         await self.event_bus.publish(
             TurnLLMAgentStopRequested(
                 session_id=self.session_id,
@@ -71,6 +78,12 @@ class TurnTakingManager(Manager):
                 self._turn_open = True
             self._next_segment_id += 1
             self._current_segment_id = self._next_segment_id
+            if self._speaker_diarization_enabled:
+                self._speaker_decision_pending = True
+                await self.event_bus.publish(
+                    TurnLLMAgentPauseRequested(session_id=self.session_id),
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                )
             await self.event_bus.publish(
                 TurnASRStartRequested(
                     session_id=self.session_id,
@@ -79,6 +92,8 @@ class TurnTakingManager(Manager):
                 ),
                 mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
+            if self._speaker_diarization_enabled:
+                return
             if self._turn_detector_model is None:
                 await self.event_bus.publish(
                     TurnLLMAgentStopRequested(
@@ -86,6 +101,30 @@ class TurnTakingManager(Manager):
                     ),
                     mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
+
+    @Manager.event_handler(SpeakerInterruptionDecision, priority=100)
+    async def _on_speaker_interruption_decision(
+        self,
+        event: SpeakerInterruptionDecision,
+    ) -> None:
+        """Commit or discard a paused interruption for the current segment."""
+
+        if (
+            not self._speaker_decision_pending
+            or event.turn_id != self._current_turn_id
+            or event.segment_id != self._current_segment_id
+        ):
+            return
+        self._speaker_decision_pending = False
+        event_type = (
+            TurnLLMAgentStopRequested
+            if event.should_interrupt
+            else TurnLLMAgentResumeRequested
+        )
+        await self.event_bus.publish(
+            event_type(session_id=self.session_id),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
 
     @Manager.event_handler(VADSpeechEnd)
     async def _on_vad_end(self, event: VADSpeechEnd):
