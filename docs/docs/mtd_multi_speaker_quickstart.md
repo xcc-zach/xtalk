@@ -198,6 +198,8 @@ At VAD end, the client always cancels a locally waiting obsolete partial so the 
 8. At the final join, a focus-only turn keeps the accurate ASR transcript, a mixed turn keeps only focus-speaker MTD segments, and a pure non-focus turn is dropped before Agent and persistence consumers. When the history gate is enabled, missing, degraded, or timed-out speaker results fail closed and do not enter history. Outside the history gate, unknown-speaker response behavior continues to follow `suppress_when_speaker_missing`.
 9. `DefaultAgent` receives only the accepted ASR transcript, filtered speaker timeline, and active focus speaker together.
 
+While the AI is replying, a VAD speech start first pauses current LLM consumption and TTS playback when a `speaker_diarization` model is configured. The first diarization partial containing valid speech produces one speaker interruption decision: a focus speaker stops the current response, while a non-focus speaker resumes it. A segment final provides the fallback for short speech without a reliable partial. If the speaker is still missing, the decision follows `suppress_when_speaker_missing`: `true` resumes and `false` stops. Each VAD segment accepts only its first reliable decision so changing partial labels cannot repeatedly pause and resume playback.
+
 The history gate requires all three conditions: a configured `speaker_diarization` model, `response_policy: "focus_only"`, and `exclude_non_focus_from_history: true`. Setting the option to `false` preserves the previous unfiltered multi-speaker event flow. Without a diarization model, ASR partials and finals continue through the original single-speaker path regardless of this option.
 
 ## 5. SGLang-Omni validation

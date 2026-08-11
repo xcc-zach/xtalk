@@ -195,6 +195,8 @@ VAD 结束时，客户端总会及时取消正在等待的过期 partial，让 f
 8. 最终合并时，纯 focus turn 使用准确的 ASR 文本；混合 turn 只保留 MTD 的 focus 说话人片段；纯非 focus turn 在进入 Agent 和持久化前直接丢弃。启用历史 Gate 时，说话人缺失、分离降级或等待超时都会 fail closed，不进入历史；未启用历史 Gate 时，未知说话人的响应行为仍遵循 `suppress_when_speaker_missing`。
 9. `DefaultAgent` 只接收已接受的 ASR 文本、过滤后的 speaker timeline 和 focus active speaker。
 
+AI 正在回复时，如果配置了 `speaker_diarization` 模型，VAD 起声会先暂停当前 LLM 消费和 TTS 播放。首个包含有效语音内容的 diarization partial 会产生一次说话人中断决策：focus 说话人停止当前回复，非 focus 说话人恢复当前回复。短语音没有可靠 partial 时由 segment final 兜底；说话人仍缺失时沿用 `suppress_when_speaker_missing`，值为 `true` 时恢复、值为 `false` 时停止。每个 VAD segment 只接受第一次可靠决策，避免 partial 标签变化导致反复暂停和恢复。
+
 历史 Gate 仅在同时满足三项条件时生效：配置了 `speaker_diarization` 模型、`response_policy: "focus_only"`，且 `exclude_non_focus_from_history: true`。将该选项设为 `false` 会保留原有未过滤的多说话人事件流。未配置说话人分离模型时，无论该选项取值如何，ASR partial 和 final 都继续沿用原有单说话人链路。
 
 ## 5. SGLang-Omni 实测结果
