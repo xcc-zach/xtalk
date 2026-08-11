@@ -602,6 +602,18 @@ class SpeakerDiarizationPartial(Event):
 
 
 @dataclass
+class SpeakerInterruptionDecision(Event):
+    """Resolve a paused barge-in after identifying its active speaker."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.interruption_decision"
+    turn_id: int = 0
+    segment_id: int = 0
+    speaker_id: str | None = None
+    should_interrupt: bool = False
+    reason: str = ""
+
+
+@dataclass
 class SpeakerDiarizationSegmentFinal(Event):
     """Terminal diarization result for one VAD segment."""
 

@@ -18,6 +18,7 @@ from ..events import (
     EnhancedAudioFrameReceived,
     MultiSpeakerTurnReady,
     SpeakerDiarizationPartial,
+    SpeakerInterruptionDecision,
     SpeakerDiarizationSegmentFinal,
     SpeakerDiarizationTurnFinal,
     TurnASREndRequested,
@@ -165,6 +166,7 @@ class MultiSpeakerTurnContextManager(Manager):
         self._published: set[int] = set()
         self._timeout_tasks: dict[int, asyncio.Task[None]] = {}
         self._turns_with_non_focus_speech: set[int] = set()
+        self._interruption_decided_segments: set[int] = set()
 
     @Manager.event_handler(
         EnhancedAudioFrameReceived,
@@ -413,21 +415,27 @@ class MultiSpeakerTurnContextManager(Manager):
             return
         state.last_partial_text = diarization_text
         state.published_partial_revision = request.revision
-        await self.event_bus.publish(
-            SpeakerDiarizationPartial(
-                session_id=self.session_id,
-                turn_id=request.turn_id,
-                segment_id=request.segment_id,
-                revision=request.revision,
-                source_start_sample=request.source_start_sample,
-                source_end_sample=request.source_start_sample
-                + len(request.current_pcm16) // self.BYTES_PER_SAMPLE,
-                sample_rate=self.SAMPLE_RATE,
-                raw_text=result.raw_text,
-                diarization_text=diarization_text,
-                segments=segments,
-                latency_ms=result.latency_ms,
-            )
+        partial = SpeakerDiarizationPartial(
+            session_id=self.session_id,
+            turn_id=request.turn_id,
+            segment_id=request.segment_id,
+            revision=request.revision,
+            source_start_sample=request.source_start_sample,
+            source_end_sample=request.source_start_sample
+            + len(request.current_pcm16) // self.BYTES_PER_SAMPLE,
+            sample_rate=self.SAMPLE_RATE,
+            raw_text=result.raw_text,
+            diarization_text=diarization_text,
+            segments=segments,
+            latency_ms=result.latency_ms,
+        )
+        await self.event_bus.publish(partial)
+        await self._publish_interruption_decision(
+            turn_id=request.turn_id,
+            segment_id=request.segment_id,
+            segments=segments,
+            allow_missing=False,
+            reason="partial",
         )
 
     async def _publish_segment_final(
@@ -488,7 +496,60 @@ class MultiSpeakerTurnContextManager(Manager):
         )
         turn.finals[event.segment_id] = event
         await self.event_bus.publish(event)
+        await self._publish_interruption_decision(
+            turn_id=event.turn_id,
+            segment_id=event.segment_id,
+            segments=event.segments,
+            allow_missing=True,
+            reason=(
+                f"segment_final:{event.degraded_reason}"
+                if event.degraded
+                else "segment_final"
+            ),
+        )
         await self._maybe_publish_turn_final(event.turn_id)
+
+    async def _publish_interruption_decision(
+        self,
+        *,
+        turn_id: int,
+        segment_id: int,
+        segments: list[Mapping[str, Any]],
+        allow_missing: bool,
+        reason: str,
+    ) -> None:
+        """Publish the first reliable speaker decision for one VAD segment."""
+
+        if segment_id in self._interruption_decided_segments:
+            return
+        active_segment = next(
+            (
+                item
+                for item in reversed(segments)
+                if str(item.get("text") or "").strip()
+            ),
+            None,
+        )
+        if active_segment is None and not allow_missing:
+            return
+        raw_speaker_id = (
+            active_segment.get("speaker_id") if active_segment is not None else None
+        )
+        speaker_id = (
+            str(raw_speaker_id).strip() if raw_speaker_id is not None else ""
+        )
+        normalized_speaker_id = speaker_id or None
+        self._interruption_decided_segments.add(segment_id)
+        await self.event_bus.publish(
+            SpeakerInterruptionDecision(
+                session_id=self.session_id,
+                turn_id=turn_id,
+                segment_id=segment_id,
+                speaker_id=normalized_speaker_id,
+                should_interrupt=self._should_respond(normalized_speaker_id),
+                reason=reason,
+            )
+        )
 
     async def _maybe_publish_turn_final(self, turn_id: int) -> None:
         """Publish one ordered turn timeline after its barrier is complete."""

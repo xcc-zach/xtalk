@@ -16,6 +16,7 @@ from xtalk.serving.events import (
     ASRResultPartial,
     EnhancedAudioFrameReceived,
     MultiSpeakerTurnReady,
+    SpeakerInterruptionDecision,
     SpeakerDiarizationTurnFinal,
     TurnASREndRequested,
     TurnASRStartRequested,
@@ -262,6 +263,66 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             SpeakerDiarizationTurnFinal(session_id="session"),
         )
         self.assertIsNone(unknown)
+
+    async def test_first_reliable_speaker_publishes_one_interruption_decision(
+        self,
+    ) -> None:
+        """Commit only the first reliable partial decision for each segment."""
+
+        event_bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(event_bus.shutdown)
+        manager = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({SpeakerDiarization: _FakeDiarization()}),
+        )
+        self.addAsyncCleanup(manager.shutdown)
+
+        await manager._publish_interruption_decision(
+            turn_id=1,
+            segment_id=1,
+            segments=[{"speaker_id": "S02", "text": "旁人说话"}],
+            allow_missing=False,
+            reason="partial",
+        )
+        await manager._publish_interruption_decision(
+            turn_id=1,
+            segment_id=1,
+            segments=[{"speaker_id": "S01", "text": "迟到的标签变化"}],
+            allow_missing=False,
+            reason="partial",
+        )
+
+        decisions = event_bus.get_history(event_type=SpeakerInterruptionDecision.TYPE)
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].speaker_id, "S02")
+        self.assertFalse(decisions[0].should_interrupt)
+
+    async def test_missing_speaker_final_uses_suppression_policy(self) -> None:
+        """Resolve a segment-final fallback using suppress-when-missing."""
+
+        event_bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(event_bus.shutdown)
+        manager = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({SpeakerDiarization: _FakeDiarization()}),
+            config={"multi_speaker": {"suppress_when_speaker_missing": True}},
+        )
+        self.addAsyncCleanup(manager.shutdown)
+
+        await manager._publish_interruption_decision(
+            turn_id=1,
+            segment_id=1,
+            segments=[],
+            allow_missing=True,
+            reason="segment_final:timeout",
+        )
+
+        decisions = event_bus.get_history(event_type=SpeakerInterruptionDecision.TYPE)
+        self.assertEqual(len(decisions), 1)
+        self.assertIsNone(decisions[0].speaker_id)
+        self.assertFalse(decisions[0].should_interrupt)
 
     async def test_default_gate_keeps_partial_out_of_history_and_agent(self) -> None:
         """Show previews until non-focus speech, while always shielding history."""
