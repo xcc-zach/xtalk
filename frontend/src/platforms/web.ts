@@ -776,7 +776,9 @@ function createPausableTimeout(
     };
 }
 class WebOutputAudioSession extends BaseOutputAudioSession {
+    private static readonly AUDIO_FADE_IN_SECONDS = 0.004;
     private audioContext: AudioContext | null = null;
+    private outputGain: GainNode | null = null;
     private audioBufferSources: AudioBufferSourceNode[] = [];
     private audioBufferSourceTimes = new Map<
         AudioBufferSourceNode,
@@ -793,6 +795,7 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
     private serverTtsFinished = false;
     private pausedByServer = false;
     private drainingPausedChunks = false;
+    private needsFadeIn = false;
     constructor(private config: OutputAudioSessionConfig) {
         super();
     }
@@ -801,6 +804,9 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             throw new Error('Session already started');
         }
         this.audioContext = new window.AudioContext({ sampleRate: this.config.sampleRate });
+        this.outputGain = this.audioContext.createGain();
+        this.outputGain.gain.value = 0;
+        this.outputGain.connect(this.audioContext.destination);
         this.audioContext.onstatechange = () => {
             if (this.audioContext?.state === "running" && !this.pausedByServer) {
                 void this.drainPausedChunks();
@@ -814,6 +820,8 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         }
         await this.stop();
         this.audioContext.onstatechange = null;
+        this.outputGain?.disconnect();
+        this.outputGain = null;
         this.audioContext.close();
         this.audioContext = null;
         this.audioTimeToPlay = 0;
@@ -828,6 +836,7 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         }
         this.activeResponseId = responseId;
         this.serverTtsFinished = false;
+        this.needsFadeIn = true;
     }
     async pause(): Promise<void> {
         if (!this.audioContext) {
@@ -891,6 +900,14 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         this.serverTtsFinished = false;
         this.pausedByServer = false;
         this.activeResponseId = null;
+        this.needsFadeIn = false;
+        if (this.audioContext && this.outputGain) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+        }
+        if (responseId && this.audioContext?.state === "suspended") {
+            await this.audioContext.resume();
+        }
         // DO NOT suspend to avoid pop sounds after restart
         // await this.audioContext?.suspend();
         return { unconfirmedPlayedMs };
@@ -919,7 +936,7 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         await this.allChunksPlayedCallback(responseId);
     }
     async pushAudioChunk(pcm_chunk_int16: ArrayBuffer): Promise<void> {
-        if (!this.audioContext) {
+        if (!this.audioContext || !this.outputGain) {
             throw new Error('Session not started');
         }
         const responseId = this.activeResponseId;
@@ -952,7 +969,7 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         buffer.getChannelData(0).set(float32);
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+        source.connect(this.outputGain);
 
         // Mount onended callback before starting
         source.onended = () => {
@@ -966,6 +983,15 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         const currentTime = this.audioContext.currentTime;
         if (this.audioTimeToPlay < currentTime) {
             this.audioTimeToPlay = currentTime;
+        }
+        if (this.needsFadeIn) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+            this.outputGain.gain.linearRampToValueAtTime(
+                1,
+                currentTime + WebOutputAudioSession.AUDIO_FADE_IN_SECONDS,
+            );
+            this.needsFadeIn = false;
         }
         const chunkStartTime = this.audioTimeToPlay;
         const chunkEndTime = chunkStartTime + buffer.duration / source.playbackRate.value;
