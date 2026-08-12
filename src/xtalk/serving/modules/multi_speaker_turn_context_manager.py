@@ -526,7 +526,7 @@ class MultiSpeakerTurnContextManager(Manager):
             (
                 item
                 for item in reversed(segments)
-                if str(item.get("text") or "").strip()
+                if str(item.get("speaker_id") or "").strip()
             ),
             None,
         )
@@ -578,7 +578,7 @@ class MultiSpeakerTurnContextManager(Manager):
             (
                 str(item["speaker_id"])
                 for item in reversed(timeline)
-                if str(item.get("text") or "").strip()
+                if str(item.get("speaker_id") or "").strip()
             ),
             None,
         )
@@ -760,7 +760,6 @@ class MultiSpeakerTurnContextManager(Manager):
             if diarization_event is not None
             else None
         )
-        should_respond = self._should_respond(active_speaker_id)
         asr_text = asr_event.text
         diarization_segments = (
             [dict(item) for item in diarization_event.segments]
@@ -788,6 +787,9 @@ class MultiSpeakerTurnContextManager(Manager):
                 diarization_text,
                 history_active_speaker_id,
             ) = filtered
+
+        response_speaker_id = active_speaker_id or history_active_speaker_id
+        should_respond = self._should_respond(response_speaker_id)
 
         self._finish_turn(turn_id)
         if self.history_gate_enabled:
@@ -885,6 +887,16 @@ class MultiSpeakerTurnContextManager(Manager):
             if self.suppress_when_speaker_missing:
                 return None
             return asr_event.text, segments, _render_timeline(segments), None
+
+        if active_speaker_id is None:
+            active_speaker_id = next(
+                (
+                    str(segment["speaker_id"]).strip()
+                    for segment in reversed(segments)
+                    if str(segment.get("speaker_id") or "").strip()
+                ),
+                None,
+            )
 
         must_filter_segments = non_focus_seen or (
             bool(unknown_segments) and self.suppress_when_speaker_missing

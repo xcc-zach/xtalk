@@ -31,9 +31,10 @@ from xtalk.serving.modules.output_gateway import OutputGateway
 class _FakeDiarization:
     """Record generic snapshot calls and return one speaker segment."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, text: str = "测试") -> None:
         self.calls: list[dict[str, Any]] = []
         self.closed = False
+        self.text = text
 
     async def decode_snapshot(
         self,
@@ -59,7 +60,7 @@ class _FakeDiarization:
                     "start_s": 0.0,
                     "end_s": len(pcm16) / (sample_rate * 2),
                     "speaker_id": "S01",
-                    "text": "测试",
+                    "text": self.text,
                 }
             ],
             metrics={"backend": "fake"},
@@ -139,7 +140,7 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
 
         event_bus = EventBus(enable_history=True)
         self.addAsyncCleanup(event_bus.shutdown)
-        model = _FakeDiarization()
+        model = _FakeDiarization(text="")
         manager = MultiSpeakerTurnContextManager(
             event_bus=event_bus,
             session_id="session",
@@ -583,6 +584,54 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(accepted_finals[0].text, "准确的 ASR 文本！")
         ready = event_bus.get_history(event_type=MultiSpeakerTurnReady.TYPE)
         self.assertEqual(ready[0].asr_text, "准确的 ASR 文本！")
+        self.assertTrue(ready[0].should_respond)
+
+    async def test_empty_text_campplus_segment_keeps_first_speaker_active(
+        self,
+    ) -> None:
+        """Treat a CAM++ speaker-only segment as an active focus speaker."""
+
+        event_bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(event_bus.shutdown)
+        manager = MultiSpeakerTurnContextManager(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({SpeakerDiarization: _FakeDiarization()}),
+            config={
+                "multi_speaker": {
+                    "suppress_when_speaker_missing": True,
+                }
+            },
+        )
+        self.addAsyncCleanup(manager.shutdown)
+
+        await event_bus.publish(
+            ASRResultFinal(
+                session_id="session",
+                turn_id=7,
+                text="首次说话",
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED,
+        )
+        await manager._on_diarization_final(
+            SpeakerDiarizationTurnFinal(
+                session_id="session",
+                turn_id=7,
+                segments=[
+                    {
+                        "start_s": 0.0,
+                        "end_s": 1.0,
+                        "speaker_id": "S01",
+                        "text": "",
+                    }
+                ],
+                active_speaker_id=None,
+            )
+        )
+
+        ready = event_bus.get_history(event_type=MultiSpeakerTurnReady.TYPE)
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(ready[0].active_speaker_id, "S01")
         self.assertTrue(ready[0].should_respond)
 
     async def test_history_gate_drops_missing_speaker_even_with_fallback_enabled(
