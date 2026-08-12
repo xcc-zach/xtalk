@@ -30,7 +30,7 @@
       "response_policy": "focus_only",
       "focus_speaker_ids": ["S01"],
       "exclude_non_focus_from_history": true,
-      "suppress_when_speaker_missing": false,
+      "suppress_when_speaker_missing": true,
       "join_timeout_s": 30.0,
       "fallback_on_timeout": true,
       "diarization": {
