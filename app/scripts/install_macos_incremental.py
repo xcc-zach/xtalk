@@ -363,6 +363,8 @@ def build_desktop(*, build_ui: bool, build_frontend: bool) -> Path:
             "cargo",
             "build",
             "--release",
+            "--features",
+            "tauri/custom-protocol",
             "--manifest-path",
             str(APP_ROOT / "src-tauri" / "Cargo.toml"),
         ]
