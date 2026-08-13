@@ -332,6 +332,12 @@ pub(crate) fn request_app_exit(app: tauri::AppHandle) {
 }
 
 fn handle_run_event(app: &tauri::AppHandle, event: RunEvent) {
+    #[cfg(target_os = "macos")]
+    if let RunEvent::Reopen { .. } = &event {
+        tray::show_main_window(app);
+        return;
+    }
+
     let RunEvent::ExitRequested { api, .. } = event else {
         return;
     };

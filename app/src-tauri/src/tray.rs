@@ -64,7 +64,7 @@ pub(crate) fn setup(app: &mut App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         eprintln!("could not show the main window: window is missing");
         return;
