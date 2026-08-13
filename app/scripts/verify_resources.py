@@ -30,11 +30,15 @@ MTD_LICENSE_PATH = (
 )
 MTD_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_mtd.json"
 CAMPPLUS_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_campplus.json"
+QWEN3_ASR_EXAMPLE_PATH = (
+    APP_ROOT / "examples" / "local_models_qwen3_asr_0_6b_int8.json"
+)
 REQUIRED_MANAGED_MODEL_IDS = {
     "agentic-asr-refiner",
     "agentic-asr-refiner-mlx",
     "campplus",
     "matcha-icefall-zh-en",
+    "qwen3-asr-0.6b-int8",
     "sensevoice-small",
     "sensevoice-small-mlx",
     "moss-tts-nano",
@@ -498,6 +502,32 @@ def verify_campplus_packaging() -> None:
         raise ValueError("Tauri bundle must package the CAM++ example")
 
 
+def verify_qwen3_asr_packaging() -> None:
+    """Require the Qwen3-ASR INT8 example in Tauri bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the Qwen3-ASR example is absent.
+    ValueError
+        Raised when Tauri does not package the example at its runtime path.
+    """
+
+    if not QWEN3_ASR_EXAMPLE_PATH.is_file():
+        raise FileNotFoundError(QWEN3_ASR_EXAMPLE_PATH)
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resources = tauri_config.get("bundle", {}).get("resources", {})
+    if (
+        resources.get("../examples/local_models_qwen3_asr_0_6b_int8.json")
+        != "examples/local_models_qwen3_asr_0_6b_int8.json"
+    ):
+        raise ValueError("Tauri bundle must package the Qwen3-ASR INT8 example")
+
+
 def verify_no_bundled_default_config() -> None:
     """Reject a release bundle that contains a default model configuration."""
 
@@ -680,6 +710,7 @@ def main() -> int:
     verify_mtd_source_manifest()
     verify_mtd_packaging()
     verify_campplus_packaging()
+    verify_qwen3_asr_packaging()
     verify_builtin_tools_and_credentials()
     print("resource verification passed")
     return 0

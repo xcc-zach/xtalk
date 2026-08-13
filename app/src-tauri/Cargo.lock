@@ -5549,6 +5549,7 @@ dependencies = [
  "bzip2",
  "getrandom 0.3.4",
  "keyring",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

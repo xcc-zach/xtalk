@@ -88,6 +88,7 @@ pub(crate) struct BackendSupervisor {
     state: Mutex<BackendSupervisorState>,
     operation_gate: Mutex<()>,
     app_close_started: AtomicBool,
+    app_close_finished: AtomicBool,
 }
 
 impl BackendSupervisor {
@@ -110,6 +111,7 @@ impl BackendSupervisor {
             }),
             operation_gate: Mutex::new(()),
             app_close_started: AtomicBool::new(false),
+            app_close_finished: AtomicBool::new(false),
         })
     }
 
@@ -237,11 +239,21 @@ impl BackendSupervisor {
         state.manager = manager;
     }
 
-    /// Marks the first main-window close request as accepted.
+    /// Marks the first application close request as accepted.
     pub(crate) fn begin_app_close(&self) -> bool {
         self.app_close_started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
+    }
+
+    /// Marks application shutdown cleanup as complete.
+    pub(crate) fn finish_app_close(&self) {
+        self.app_close_finished.store(true, Ordering::Release);
+    }
+
+    /// Returns whether application shutdown cleanup has completed.
+    pub(crate) fn is_app_close_finished(&self) -> bool {
+        self.app_close_finished.load(Ordering::Acquire)
     }
 
     /// Stops the active sidecar, when one exists.
@@ -250,6 +262,20 @@ impl BackendSupervisor {
         let manager = self.state.lock().await.manager.take();
         if let Some(manager) = manager {
             manager.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    /// Immediately stops all child processes during application exit.
+    pub(crate) fn shutdown_for_app_close(&self) -> Result<(), BackendError> {
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| BackendError::ShutdownBusy)?;
+        let manager = state.manager.take();
+        drop(state);
+        if let Some(manager) = manager {
+            manager.force_shutdown_now()?;
         }
         Ok(())
     }
@@ -405,16 +431,33 @@ impl BackendManager {
         }
 
         let child = self.child.lock().await.take();
-        if let Some(child) = child {
-            child.kill()?;
-        }
-
-        if !self.wait_for_exit(FORCED_SHUTDOWN_TIMEOUT).await {
-            self.managed_services.shutdown().await;
-            return Err(BackendError::ForcedShutdownTimedOut);
-        }
-
+        let kill_result = child
+            .map(CommandChild::kill)
+            .transpose()
+            .map(|_| ())
+            .map_err(BackendError::from);
+        let exited = self.wait_for_exit(FORCED_SHUTDOWN_TIMEOUT).await;
         self.managed_services.shutdown().await;
+        kill_result?;
+        if exited {
+            Ok(())
+        } else {
+            Err(BackendError::ForcedShutdownTimedOut)
+        }
+    }
+
+    fn force_shutdown_now(&self) -> Result<(), BackendError> {
+        self.shutting_down.store(true, Ordering::Release);
+        let mut child_handle = self
+            .child
+            .try_lock()
+            .map_err(|_| BackendError::ShutdownBusy)?;
+        let child = child_handle.take();
+        drop(child_handle);
+        let backend_result = child.map(force_kill_command_child).transpose();
+        let managed_result = self.managed_services.force_shutdown_now();
+        backend_result?;
+        managed_result?;
         Ok(())
     }
 
@@ -435,6 +478,29 @@ impl BackendManager {
 
         timeout(duration, wait).await.unwrap_or(false) || self.terminated.load(Ordering::Acquire)
     }
+}
+
+#[cfg(unix)]
+fn force_kill_command_child(child: CommandChild) -> Result<(), tauri_plugin_shell::Error> {
+    let pid = child.pid();
+    // SAFETY: the PID belongs to the app-backend child returned by Tauri's
+    // shell plugin and SIGKILL is a fixed POSIX signal.
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    drop(child);
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error.into())
+    }
+}
+
+#[cfg(not(unix))]
+fn force_kill_command_child(child: CommandChild) -> Result<(), tauri_plugin_shell::Error> {
+    child.kill()
 }
 
 #[derive(Serialize)]
@@ -528,6 +594,8 @@ pub(crate) enum BackendError {
     Unavailable,
     #[error("the controlled shutdown task failed: {0}")]
     ShutdownTask(String),
+    #[error("a child-process handle is busy during application exit")]
+    ShutdownBusy,
     #[error("the controlled shutdown endpoint is invalid")]
     InvalidShutdownEndpoint,
     #[error("the controlled shutdown endpoint returned a non-success HTTP status")]

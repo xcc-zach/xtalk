@@ -58,6 +58,7 @@
       "../resources/manifests/managed-models.lock.json": "manifests/managed-models.lock.json",
       "../resources/credentials.json": "credentials.json",
       "../examples/local_models_matcha.json": "examples/local_models_matcha.json",
+      "../examples/local_models_qwen3_asr_0_6b_int8.json": "examples/local_models_qwen3_asr_0_6b_int8.json",
       "../examples/local_models_campplus.json": "examples/local_models_campplus.json",
       "../examples/local_models_mtd.json": "examples/local_models_mtd.json",
       "../resources/tools/": "tools/",

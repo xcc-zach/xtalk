@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -298,6 +299,10 @@ def resource_file_mappings() -> tuple[tuple[Path, Path], ...]:
         (
             Path("examples/local_models_matcha.json"),
             Path("examples/local_models_matcha.json"),
+        ),
+        (
+            Path("examples/local_models_qwen3_asr_0_6b_int8.json"),
+            Path("examples/local_models_qwen3_asr_0_6b_int8.json"),
         ),
         (
             Path("examples/local_models_campplus.json"),
@@ -675,11 +680,97 @@ def install_backend_runtime(app: Path, executable: Path, runtime: Path) -> None:
     verify_internal_bundle_links(app)
 
 
-def stop_running_app(timeout_s: float = 10.0) -> None:
+def installed_app_process_ids(app: Path, *, include_desktop: bool = True) -> set[int]:
+    """Return processes executing binaries from one installed App bundle.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Installed App bundle whose native processes should be inspected.
+    include_desktop : bool, optional
+        Whether to include the main ``xtalk-desktop`` process.
+
+    Returns
+    -------
+    set[int]
+        Matching process identifiers.
+    """
+
+    macos_prefix = f"{app / 'Contents' / 'MacOS'}/"
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    process_ids: set[int] = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        pid_text, command = fields
+        if not command.startswith(macos_prefix):
+            continue
+        executable_name = command[len(macos_prefix) :].split(maxsplit=1)[0]
+        if not include_desktop and executable_name == "xtalk-desktop":
+            continue
+        process_ids.add(int(pid_text))
+    return process_ids
+
+
+def stop_installed_helpers(app: Path, timeout_s: float = 5.0) -> None:
+    """Stop App-bundled helper processes left behind by macOS Quit.
+
+    Parameters
+    ----------
+    app : pathlib.Path
+        Installed App bundle whose helper processes must stop.
+    timeout_s : float, optional
+        Maximum wait after forcing remaining helpers to exit.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when a bundled helper remains alive after SIGKILL.
+    """
+
+    helpers = installed_app_process_ids(app, include_desktop=False)
+    for pid in helpers:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    graceful_deadline = time.monotonic() + 1.0
+    while helpers and time.monotonic() < graceful_deadline:
+        time.sleep(0.05)
+        helpers &= installed_app_process_ids(app, include_desktop=False)
+
+    for pid in helpers:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        remaining = installed_app_process_ids(app, include_desktop=False)
+        if not remaining:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(
+        "XTalk helper processes did not stop: "
+        + ", ".join(str(pid) for pid in sorted(remaining))
+    )
+
+
+def stop_running_app(app: Path, timeout_s: float = 10.0) -> None:
     """Ask the installed XTalk process to quit before replacing code.
 
     Parameters
     ----------
+    app : pathlib.Path
+        Installed App bundle being updated.
     timeout_s : float, optional
         Maximum graceful-shutdown wait.
 
@@ -689,31 +780,26 @@ def stop_running_app(timeout_s: float = 10.0) -> None:
         Raised when the desktop process remains alive.
     """
 
-    initial = subprocess.run(
-        ["pgrep", "-x", "xtalk-desktop"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if initial.returncode == 1:
+    initial = installed_app_process_ids(app)
+    initial_helpers = installed_app_process_ids(app, include_desktop=False)
+    if not initial:
         return
-    run(
-        [
-            "osascript",
-            "-e",
-            'tell application id "com.xtalk.desktop" to quit',
-        ],
-        check=False,
-    )
+    if initial - initial_helpers:
+        run(
+            [
+                "osascript",
+                "-e",
+                'tell application id "com.xtalk.desktop" to quit',
+            ],
+            check=False,
+        )
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["pgrep", "-x", "xtalk-desktop"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 1:
+        processes = installed_app_process_ids(app)
+        helpers = installed_app_process_ids(app, include_desktop=False)
+        desktop_processes = processes - helpers
+        if not desktop_processes:
+            stop_installed_helpers(app)
             return
         time.sleep(0.1)
     raise RuntimeError("XTalk did not quit; close it and rerun the installer")
@@ -765,7 +851,7 @@ def main() -> int:
             extras=extras,
         )
 
-    stop_running_app()
+    stop_running_app(app)
     contents = app / "Contents"
     if desktop_executable is not None:
         atomic_copy_file(

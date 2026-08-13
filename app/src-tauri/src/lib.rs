@@ -14,12 +14,12 @@ use sidecar::{
     inspect_managed_model_config, BackendSupervisor, NativeBackendConnection,
     NativeModelConfigSelection,
 };
-use tauri::{Manager, State, WindowEvent};
+use tauri::{Manager, RunEvent, State, WindowEvent};
 use tools::NativeToolDefinition;
 
 /// Runs the XTalk Desktop native shell.
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -51,8 +51,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(handle_window_event)
-        .run(tauri::generate_context!())
-        .expect("failed to run XTalk Desktop");
+        .build(tauri::generate_context!())
+        .expect("failed to build XTalk Desktop");
+    app.run(handle_run_event);
 }
 
 #[tauri::command]
@@ -233,14 +234,34 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
         return;
     }
 
-    let window = window.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = supervisor.shutdown().await {
-            eprintln!("app-backend shutdown did not complete cleanly: {error}");
-        }
-        if let Err(error) = window.destroy() {
-            eprintln!("failed to destroy the main window: {error}");
-        }
-        app.exit(0);
-    });
+    if let Err(error) = supervisor.shutdown_for_app_close() {
+        eprintln!("app-backend shutdown did not complete cleanly: {error}");
+    }
+    if let Err(error) = window.destroy() {
+        eprintln!("failed to destroy the main window: {error}");
+    }
+    supervisor.finish_app_close();
+    app.exit(0);
+}
+
+fn handle_run_event(app: &tauri::AppHandle, event: RunEvent) {
+    let RunEvent::ExitRequested { api, code, .. } = event else {
+        return;
+    };
+
+    let supervisor = app.state::<Arc<BackendSupervisor>>().inner().clone();
+    if supervisor.is_app_close_finished() {
+        return;
+    }
+
+    api.prevent_exit();
+    if !supervisor.begin_app_close() {
+        return;
+    }
+
+    if let Err(error) = supervisor.shutdown_for_app_close() {
+        eprintln!("app-backend shutdown did not complete cleanly: {error}");
+    }
+    supervisor.finish_app_close();
+    app.exit(code.unwrap_or(0));
 }
