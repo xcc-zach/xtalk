@@ -14,10 +14,10 @@ download.
 
 `managed-models.lock.json` is also checked in, but its files are not bundled.
 It pins every path, byte size, SHA-256, and immutable HTTPS URL needed by the
-optional SenseVoice and MOSS services. Tauri validates this manifest and
-installs only services selected through a supported `managed://` URL. CPU and
-CUDA use the pinned ONNX snapshots; Apple Silicon MLX uses separately pinned
-safetensor snapshots selected with `?backend=mlx`.
+optional SenseVoice, Qwen3-ASR, and MOSS services. Tauri validates this
+manifest and installs only services selected through a supported `managed://`
+URL. CPU, CUDA, and Qwen Core ML use pinned ONNX snapshots; Apple Silicon MLX
+uses separately pinned safetensor snapshots selected with `?backend=mlx`.
 
 `native-runtimes.lock.json` pins the official shared sherpa-onnx archive for
 each supported macOS, Linux, and Windows x64/ARM64 target. Each archive carries

@@ -324,7 +324,12 @@ to have Tauri download and start both SenseVoice and the AgenticASR Refiner. The
 forces MLX. Use
 [`examples/local_models_matcha.json`](examples/local_models_matcha.json) to
 select Matcha Chinese-English TTS. Matcha accepts CPU and CUDA backends; it does
-not select MLX.
+not select MLX. The
+[`examples/local_models_qwen3_asr_0_6b_int8.json`](examples/local_models_qwen3_asr_0_6b_int8.json)
+example selects the managed Qwen3-ASR 0.6B INT8 snapshot. Its `auto` backend
+prefers Core ML on macOS and CUDA where available, then falls back to the native
+ARM/x64 CPU provider. Use `?backend=coreml`, `?backend=cuda`, or `?backend=cpu`
+to force a Qwen backend; Qwen does not accept `backend=mlx`.
 
 ## Built-in and user tool directories
 

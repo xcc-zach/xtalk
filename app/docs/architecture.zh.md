@@ -152,8 +152,10 @@ Python 后端通过健康检查前，界面其余区域保持不可交互；成�
 启动失败时，窗口会保留错误信息和关闭操作。
 
 ONNX 模式下，Tauri 通过随包的原生 `sherpa-onnx-offline-websocket-server` 启动
-SenseVoice，通过独立 Rust sherpa-onnx HTTP sidecar 启动 Matcha，并通过另一项
-Rust sidecar 启动 MOSS；MLX 模式下，每项受支持服务分别启动一个 Swift sidecar。
+SenseVoice 和 Qwen3-ASR 0.6B INT8，通过独立 Rust sherpa-onnx HTTP sidecar 启动
+Matcha，并通过另一项 Rust sidecar 启动 MOSS。Qwen 在 macOS 上自动优先选择
+Core ML；若 Core ML 启动失败则回退 CPU，并保留未完成文件供 HTTP Range 续传。
+MLX 模式下，每项受支持服务分别启动一个 Swift sidecar；Qwen 不使用该 sidecar。
 它等待 TCP/readiness 就绪边界，再把真实临时 loopback
 地址和解析后的 AppData 音色路径深度合并进 Python 启动 overlay；外部配置因此不含
 运行时端口。安装、模型进程或 Python 启动任一步骤失败时，刚启动的全部子进程都会
@@ -168,6 +170,8 @@ Rust sidecar 启动 MOSS；MLX 模式下，每项受支持服务分别启动一�
 MLX。[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
 则选择中英双语 Matcha HTTP 客户端；sidecar 会把原生 16 kHz 输出重采样为 App
 统一的 48 kHz 单声道 PCM16。
+[`../examples/local_models_qwen3_asr_0_6b_int8.json`](../examples/local_models_qwen3_asr_0_6b_int8.json)
+则仅选择固定版本的 Qwen3-ASR 0.6B INT8 编码器和解码器。
 
 ## 配置
 
