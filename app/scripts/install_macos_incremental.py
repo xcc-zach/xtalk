@@ -872,6 +872,10 @@ def main() -> int:
             APP_ROOT / "src-tauri" / "icons" / "icon.icns",
             contents / "Resources" / "icon.icns",
         )
+        atomic_copy_file(
+            APP_ROOT / "src-tauri" / "icons" / "icon.icns",
+            contents / "Resources" / "icon-v3.icns",
+        )
 
     sign_and_verify(app)
     if not args.no_launch:

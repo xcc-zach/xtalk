@@ -19,7 +19,7 @@
       </feMerge>
     </filter>
   </defs>
-  <g transform="translate(51.2 51.2) scale(.8)">
+  <g transform="translate(38.4 38.4) scale(.85)">
     <rect width="512" height="512" rx="124" fill="url(#surface)"/>
     <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#C9C1FF" stroke-opacity=".14" stroke-width="2"/>
     <circle cx="401" cy="108" r="54" fill="#45D9C5" fill-opacity=".08"/>

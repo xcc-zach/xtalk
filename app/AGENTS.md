@@ -74,9 +74,10 @@ the new value.
 
 ### `icon`
 
-Use only for the native macOS `app/src-tauri/icons/icon.icns`. Changes to
-`app/ui/assets/app-icon.svg` belong to `ui`. Finder or Launchpad may retain an
-icon cache after the App bundle itself has been updated correctly.
+Use only for the native macOS `app/src-tauri/icons/icon.icns`. It updates both
+the conventional resource and the versioned `icon-v3.icns` cache key. Changes
+to `app/ui/assets/app-icon.svg` belong to `ui`. Finder or Launchpad may retain
+an icon cache after the App bundle itself has been updated correctly.
 
 ```sh
 npm run install:macos:incremental -- icon
