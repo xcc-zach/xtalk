@@ -16,6 +16,13 @@ MTD_RUNTIME_MANIFEST = APP_ROOT / "mtd-model-runtime" / "Cargo.toml"
 MLX_RUNTIME_PACKAGE = APP_ROOT / "local-model-runtime-mlx"
 TAURI_BINARIES = APP_ROOT / "src-tauri" / "binaries"
 MANAGED_RESOURCES = APP_ROOT / "resources" / "managed-runtime"
+WAKE_WORD_RESOURCES = APP_ROOT / "resources" / "models" / "wake-word"
+WAKE_WORD_MODEL_FILES = (
+    "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+    "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+    "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+    "tokens.txt",
+)
 MACOS_MANAGED_RUNTIME_RPATH = (
     "@executable_path/../Resources/managed-runtime/ort"
 )
@@ -33,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple")
     parser.add_argument("--sherpa-server", required=True, type=Path)
+    parser.add_argument("--sherpa-keyword-spotter", type=Path)
+    parser.add_argument("--sherpa-kws-model-dir", type=Path)
     parser.add_argument("--sherpa-library-dir", required=True, type=Path)
     parser.add_argument("--ort-library", required=True, type=Path)
     parser.add_argument("--mtd-source-dir", required=True, type=Path)
@@ -295,7 +304,18 @@ def build_local_runtime(target: str, debug: bool) -> Path:
     if not debug:
         command.append("--release")
         profile = "release"
-    subprocess.run(command, cwd=APP_ROOT, check=True)
+    environment = dict(os.environ)
+    if "windows" in target:
+        existing_rustflags = environment.get("RUSTFLAGS", "").strip()
+        environment["RUSTFLAGS"] = " ".join(
+            value
+            for value in (
+                existing_rustflags,
+                "-C target-feature=+crt-static",
+            )
+            if value
+        )
+    subprocess.run(command, cwd=APP_ROOT, check=True, env=environment)
     return (
         APP_ROOT
         / "local-model-runtime"
@@ -530,6 +550,16 @@ def main() -> int:
     args = parse_args()
     target = resolve_target_triple(args.target_triple)
     sherpa_server = require_file(args.sherpa_server, "sherpa server")
+    wake_inputs_supplied = (
+        args.sherpa_keyword_spotter is not None
+        and args.sherpa_kws_model_dir is not None
+    )
+    if (args.sherpa_keyword_spotter is None) != (
+        args.sherpa_kws_model_dir is None
+    ):
+        raise ValueError(
+            "--sherpa-keyword-spotter and --sherpa-kws-model-dir must be supplied together"
+        )
     sherpa_library_dir = require_directory(
         args.sherpa_library_dir,
         "sherpa shared-library directory",
@@ -598,6 +628,36 @@ def main() -> int:
     )
     copy_file(sherpa_server, staged_sherpa_server)
     add_macos_managed_runtime_rpath(staged_sherpa_server, target)
+    staged_keyword_spotter = (
+        TAURI_BINARIES
+        / f"sherpa-onnx-keyword-spotter-microphone-{target}"
+        f"{'.exe' if 'windows' in target else ''}"
+    )
+    if wake_inputs_supplied:
+        sherpa_keyword_spotter = require_file(
+            args.sherpa_keyword_spotter,
+            "sherpa keyword spotter",
+        )
+        sherpa_kws_model_dir = require_directory(
+            args.sherpa_kws_model_dir,
+            "sherpa keyword-spotting model directory",
+        )
+        copy_file(sherpa_keyword_spotter, staged_keyword_spotter)
+        for filename in WAKE_WORD_MODEL_FILES:
+            copy_file(
+                require_file(
+                    sherpa_kws_model_dir / filename,
+                    f"sherpa keyword-spotting model file {filename}",
+                ),
+                WAKE_WORD_RESOURCES / filename,
+            )
+    else:
+        require_file(staged_keyword_spotter, "staged sherpa keyword spotter")
+        for filename in WAKE_WORD_MODEL_FILES:
+            require_file(
+                WAKE_WORD_RESOURCES / filename,
+                f"staged sherpa keyword-spotting model file {filename}",
+            )
     copy_file(
         mlx_runtime,
         TAURI_BINARIES

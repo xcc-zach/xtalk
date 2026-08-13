@@ -20,6 +20,7 @@ SOURCE_BUILD_ROOT = APP_ROOT / ".build" / "source-inputs"
 DEFAULT_XTALK_EXTRAS = ("ali", "silero-vad")
 MINIMUM_PYTHON_VERSION = (3, 10)
 BUILD_PACKAGE_REQUIREMENT = "build==1.5.0"
+NPM_EXECUTABLE = "npm.cmd" if os.name == "nt" else "npm"
 
 
 def run(
@@ -286,13 +287,13 @@ def build_frontend_package() -> tuple[Path, str]:
     """Build and pack the current repository ``frontend`` sources."""
 
     environment = npm_environment()
-    run(["npm", "ci"], cwd=FRONTEND_ROOT, env=environment)
-    run(["npm", "run", "build"], cwd=FRONTEND_ROOT, env=environment)
+    run([NPM_EXECUTABLE, "ci"], cwd=FRONTEND_ROOT, env=environment)
+    run([NPM_EXECUTABLE, "run", "build"], cwd=FRONTEND_ROOT, env=environment)
     package_directory = SOURCE_BUILD_ROOT / "frontend"
     package_directory.mkdir(parents=True, exist_ok=True)
     result = run(
         [
-            "npm",
+            NPM_EXECUTABLE,
             "pack",
             "--json",
             "--pack-destination",
@@ -364,7 +365,7 @@ def install_fresh_client(client_package: Path) -> None:
         shutil.rmtree(installed_client)
     run(
         [
-            "npm",
+            NPM_EXECUTABLE,
             "install",
             "--no-save",
             "--package-lock=false",

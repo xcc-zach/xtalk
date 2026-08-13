@@ -932,6 +932,34 @@ def test_sherpa_non_macos_sidecar_skips_macos_rpath(
     assert calls == []
 
 
+def test_windows_local_runtime_uses_one_static_crt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Align native tokenizer libraries on the Windows static CRT."""
+
+    module = load_script("prepare_managed_runtime")
+    calls: list[dict[str, object]] = []
+
+    def record_command(
+        command: list[str],
+        *,
+        cwd: Path,
+        check: bool,
+        env: dict[str, str],
+    ) -> None:
+        del command, cwd, check
+        calls.append(env)
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+    monkeypatch.setenv("RUSTFLAGS", "-C debuginfo=1")
+
+    module.build_local_runtime("x86_64-pc-windows-msvc", True)
+
+    assert calls[0]["RUSTFLAGS"] == (
+        "-C debuginfo=1 -C target-feature=+crt-static"
+    )
+
+
 def test_managed_runtime_stages_only_onnx_cuda_provider_files(
     tmp_path: Path,
 ) -> None:
@@ -950,6 +978,38 @@ def test_managed_runtime_stages_only_onnx_cuda_provider_files(
     assert (destination / "libonnxruntime_providers_cuda.so").is_file()
     assert (destination / "libonnxruntime_providers_shared.so").is_file()
     assert not (destination / "unrelated.txt").exists()
+
+
+def test_managed_runtime_declares_complete_wake_word_model_layout() -> None:
+    """Stage every model file required by the sherpa keyword spotter."""
+
+    module = load_script("prepare_managed_runtime")
+
+    assert module.WAKE_WORD_MODEL_FILES == (
+        "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+        "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+        "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
+        "tokens.txt",
+    )
+    assert (
+        APP_ROOT / "resources" / "models" / "wake-word" / "keywords.txt"
+    ).read_text(encoding="utf-8").strip() == (
+        "n ǐ h ǎo x iǎo k è :3.0 #0.25 @你好小克"
+    )
+
+
+def test_windows_stages_sherpa_onnx_runtime_beside_sidecars() -> None:
+    """Override a conflicting system ONNX Runtime during Windows startup."""
+
+    config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.windows.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert config["bundle"]["resources"] == {
+        "../resources/managed-runtime/ort/onnxruntime.dll": "onnxruntime.dll"
+    }
 
 
 def test_managed_runtime_finds_shared_sherpa_libraries(

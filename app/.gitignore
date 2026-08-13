@@ -17,10 +17,13 @@ src-tauri/binaries/matcha-model-runtime-*
 src-tauri/binaries/mtd-model-runtime-*
 src-tauri/binaries/mlx-model-runtime-*
 src-tauri/binaries/sherpa-onnx-offline-websocket-server-*
+src-tauri/binaries/sherpa-onnx-keyword-spotter-microphone-*
 resources/managed-runtime/ort-tts/*
 resources/managed-runtime/ort/*
 resources/managed-runtime/mlx-swift_Cmlx.bundle/
 resources/managed-runtime/sherpa/*
+resources/models/wake-word/*.onnx
+resources/models/wake-word/tokens.txt
 !resources/managed-runtime/ort/README.md
 src-tauri/gen/
 src-tauri/target/

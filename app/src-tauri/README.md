@@ -14,6 +14,7 @@ app/src-tauri/binaries/
 ├── mtd-model-runtime-<target-triple>[.exe]
 ├── mlx-model-runtime-<target-triple>[.exe]
 ├── sherpa-onnx-offline-websocket-server-<target-triple>[.exe]
+├── sherpa-onnx-keyword-spotter-microphone-<target-triple>[.exe]
 └── app-backend-runtime/
     └── PyInstaller onedir runtime files
 ```
@@ -41,7 +42,9 @@ python ../scripts/build_backend.py \
 Prepare the optional managed native runtimes for the current platform:
 
 ```sh
-python ../scripts/download_managed_runtime.py
+python ../scripts/download_managed_runtime.py \
+  --sherpa-keyword-spotter /path/to/sherpa-onnx-keyword-spotter-microphone \
+  --sherpa-kws-model-dir /path/to/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
 ```
 
 The script selects the Rust host target, downloads its official sherpa shared
@@ -66,6 +69,13 @@ logged.
 Apple Silicon builds compile the pinned Swift MLX service and stage its Metal
 resource bundle. The Apple Silicon host must have Xcode's Metal Toolchain
 component installed (`xcodebuild -downloadComponent MetalToolchain`).
+The keyword spotter and KWS model are supplied explicitly once and remain as
+ignored staged artifacts for subsequent packaging runs.
+
+The staging step also packages the local keyword spotter and the fixed
+`你好小克` KWS model. On Windows, `tauri.windows.conf.json` places the shared
+ONNX Runtime DLL beside the packaged sidecars so it takes precedence over an
+incompatible system copy.
 
 `tauri.conf.json` bundles the runtime directory as
 `$RESOURCE/app-backend-runtime` and launches the external binary with
@@ -136,7 +146,9 @@ chooses CUDA, then MLX, then CPU. The external JSON is never rewritten.
 
 `Info.plist` and `Entitlements.plist` provide the macOS microphone usage
 description and hardened-runtime audio-input entitlement. The WebView requests
-microphone access only when the user starts a voice conversation.
+microphone access when the user starts a voice conversation; the packaged local
+keyword spotter also uses it while the user has explicitly enabled background
+voice wake.
 
 ## Adding a Tauri command
 

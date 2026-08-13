@@ -5,7 +5,7 @@
       "id": "current_time",
       "path": "current_time",
       "enabled_by_default": true,
-      "can_disable": true
+      "can_disable": false
     },
     {
       "id": "web_search",
