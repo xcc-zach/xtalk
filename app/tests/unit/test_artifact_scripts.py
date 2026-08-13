@@ -885,10 +885,11 @@ def test_sherpa_macos_sidecar_embeds_packaged_runtime_rpath(
     module = load_script("prepare_managed_runtime")
     executable = tmp_path / "sherpa-onnx-offline-websocket-server"
     executable.write_bytes(b"mach-o")
-    commands: list[tuple[list[str], bool]] = []
+    commands: list[list[str]] = []
 
-    def record_command(command: list[str], *, check: bool) -> None:
-        commands.append((command, check))
+    def record_command(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="")
 
     monkeypatch.setattr(module.subprocess, "run", record_command)
 
@@ -898,16 +899,43 @@ def test_sherpa_macos_sidecar_embeds_packaged_runtime_rpath(
     )
 
     assert commands == [
-        (
-            [
-                "install_name_tool",
-                "-add_rpath",
-                "@executable_path/../Resources/managed-runtime/ort",
-                str(executable),
-            ],
-            True,
-        )
+        ["otool", "-l", str(executable)],
+        [
+            "install_name_tool",
+            "-add_rpath",
+            "@executable_path/../Resources/managed-runtime/ort",
+            str(executable),
+        ],
     ]
+
+
+def test_sherpa_macos_sidecar_reuses_existing_packaged_runtime_rpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep repeated native runtime staging idempotent on macOS."""
+
+    module = load_script("prepare_managed_runtime")
+    executable = tmp_path / "sherpa-onnx-keyword-spotter-microphone"
+    executable.write_bytes(b"mach-o")
+    commands: list[list[str]] = []
+
+    def record_command(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="path @executable_path/../Resources/managed-runtime/ort",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+
+    module.add_macos_managed_runtime_rpath(
+        executable,
+        "aarch64-apple-darwin",
+    )
+
+    assert commands == [["otool", "-l", str(executable)]]
 
 
 def test_sherpa_non_macos_sidecar_skips_macos_rpath(

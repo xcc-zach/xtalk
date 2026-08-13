@@ -213,6 +213,14 @@ def add_macos_managed_runtime_rpath(executable: Path, target: str) -> None:
 
     if "apple" not in target:
         return
+    inspection = subprocess.run(
+        ["otool", "-l", str(executable)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if MACOS_MANAGED_RUNTIME_RPATH in inspection.stdout:
+        return
     subprocess.run(
         [
             "install_name_tool",
@@ -659,6 +667,7 @@ def main() -> int:
                 WAKE_WORD_RESOURCES / filename,
                 f"staged sherpa keyword-spotting model file {filename}",
             )
+    add_macos_managed_runtime_rpath(staged_keyword_spotter, target)
     copy_file(
         mlx_runtime,
         TAURI_BINARIES
