@@ -196,10 +196,12 @@ the Python backend passes its health check, at which point the dialog closes
 automatically. A startup failure leaves the dialog open with the error and a
 close action.
 
-For ONNX, Tauri starts SenseVoice through the packaged native
-`sherpa-onnx-offline-websocket-server`, Matcha through a dedicated Rust
-sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. For MLX, it starts
-one Swift sidecar per requested supported service.
+For ONNX, Tauri starts SenseVoice and Qwen3-ASR 0.6B INT8 through the packaged
+native `sherpa-onnx-offline-websocket-server`, Matcha through a dedicated Rust
+sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. Qwen auto-selects
+Core ML on macOS, falls back to CPU when Core ML startup fails, and preserves
+partial model downloads for HTTP range resumption. For MLX, Tauri starts one
+Swift sidecar per requested supported service; Qwen does not use that sidecar.
 It waits for TCP/readiness health boundaries, then deep-merges actual ephemeral
 loopback URLs and the resolved AppData voice path into the Python startup
 overlay. The selected file remains portable and contains no generated ports.
@@ -216,7 +218,9 @@ WebSocket client; MOSS reference audio and generated output use 48 kHz. The comp
 explicitly selects MLX. The
 [`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
 variant selects the Chinese-English Matcha HTTP client; the sidecar resamples
-its native 16 kHz output to the App-wide 48 kHz mono PCM16 format.
+its native 16 kHz output to the App-wide 48 kHz mono PCM16 format. The
+[`../examples/local_models_qwen3_asr_0_6b_int8.json`](../examples/local_models_qwen3_asr_0_6b_int8.json)
+variant selects only the pinned Qwen3-ASR 0.6B INT8 encoder and decoder.
 
 ## Configuration
 
