@@ -36,6 +36,31 @@ export interface NativeCredentialDefinition {
   storageAvailable: boolean;
 }
 
+/** Native lifecycle states for background wake-word detection. */
+export type NativeWakeWordState =
+  | "disabled"
+  | "starting"
+  | "listening"
+  | "paused"
+  | "error";
+
+/** Background wake-word selection and live detector state. */
+export interface NativeWakeWordSettings {
+  /** Whether the user selected background wake-word detection. */
+  enabled: boolean;
+  /** Fixed phrase recognized by the packaged keyword file. */
+  phrase: string;
+  /** Current native detector lifecycle state. */
+  state: NativeWakeWordState;
+  /** Latest detector failure, or `null` while healthy. */
+  lastError: string | null;
+}
+
+/** Event emitted after the configured wake phrase is detected. */
+export interface NativeWakeWordDetected {
+  /** Phrase recognized by the native detector. */
+  phrase: string;
+}
 /**
  * Managed services referenced by one selected model configuration.
  */
@@ -106,6 +131,13 @@ const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
 const CREDENTIALS_COMMAND = "get_credentials";
 const DELETE_CREDENTIAL_COMMAND = "delete_credential";
+const WAKE_WORD_SETTINGS_COMMAND = "get_wake_word_settings";
+const SET_WAKE_WORD_ENABLED_COMMAND = "set_wake_word_enabled";
+const PAUSE_WAKE_WORD_COMMAND = "pause_wake_word";
+const RESUME_WAKE_WORD_COMMAND = "resume_wake_word";
+const WAKE_WORD_DETECTED_EVENT = "wake-word-detected";
+const WAKE_WORD_STATUS_EVENT = "wake-word-status-changed";
+const APP_BACKGROUNDING_EVENT = "app-backgrounding";
 const ENSURE_BACKEND_STARTED_COMMAND = "ensure_backend_started";
 const INSTALLED_TOOLS_COMMAND = "get_installed_tools";
 const INSTALL_TOOL_DIRECTORY_COMMAND = "install_tool_directory";
@@ -213,6 +245,100 @@ export async function deleteNativeCredential(
     credentialId,
   });
   return parseNativeCredentialDefinition(payload);
+}
+
+/**
+ * Reads the background wake-word selection and live native state.
+ *
+ * @returns Validated wake-word settings from Tauri.
+ */
+export async function getNativeWakeWordSettings(): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(WAKE_WORD_SETTINGS_COMMAND),
+  );
+}
+
+/**
+ * Enables or disables background wake-word detection.
+ *
+ * @param enabled Desired persisted selection.
+ * @param listenImmediately Whether the detector should claim the microphone now.
+ * @returns Updated native detector state.
+ */
+export async function setNativeWakeWordEnabled(
+  enabled: boolean,
+  listenImmediately: boolean,
+): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(SET_WAKE_WORD_ENABLED_COMMAND, {
+      enabled,
+      listenImmediately,
+    }),
+  );
+}
+
+/** Releases the wake-word microphone before a realtime conversation starts. */
+export async function pauseNativeWakeWord(): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(PAUSE_WAKE_WORD_COMMAND),
+  );
+}
+
+/** Restarts background wake-word detection after a conversation closes. */
+export async function resumeNativeWakeWord(): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(RESUME_WAKE_WORD_COMMAND),
+  );
+}
+
+/**
+ * Subscribes to native detector state changes.
+ *
+ * @param listener Validated wake-word settings listener.
+ * @returns Function that removes the native event subscription.
+ */
+export async function listenNativeWakeWordStatus(
+  listener: (settings: NativeWakeWordSettings) => void,
+): Promise<UnlistenFn> {
+  requireTauriRuntime();
+  return listen<unknown>(WAKE_WORD_STATUS_EVENT, (event) => {
+    listener(parseNativeWakeWordSettings(event.payload));
+  });
+}
+
+/**
+ * Subscribes to successful native wake-word detections.
+ *
+ * @param listener Validated detection listener.
+ * @returns Function that removes the native event subscription.
+ */
+export async function listenNativeWakeWordDetected(
+  listener: (event: NativeWakeWordDetected) => void,
+): Promise<UnlistenFn> {
+  requireTauriRuntime();
+  return listen<unknown>(WAKE_WORD_DETECTED_EVENT, (event) => {
+    if (!isRecord(event.payload) || typeof event.payload.phrase !== "string") {
+      throw new Error("Tauri returned an invalid wake-word detection payload.");
+    }
+    listener({ phrase: event.payload.phrase });
+  });
+}
+
+/**
+ * Subscribes to native main-window backgrounding requests.
+ *
+ * @param listener Callback that releases the active conversation microphone.
+ * @returns Function that removes the native event subscription.
+ */
+export async function listenNativeAppBackgrounding(
+  listener: () => void,
+): Promise<UnlistenFn> {
+  requireTauriRuntime();
+  return listen(APP_BACKGROUNDING_EVENT, listener);
 }
 
 /**
@@ -442,6 +568,31 @@ function parseNativeBackendConnection(
   }
 
   return { origin, launchToken: normalizedToken };
+}
+
+function parseNativeWakeWordSettings(payload: unknown): NativeWakeWordSettings {
+  if (!isRecord(payload)) {
+    throw new Error("Tauri returned invalid wake-word settings.");
+  }
+  const state = payload.state;
+  const lastError = payload.lastError;
+  if (
+    typeof payload.enabled !== "boolean" ||
+    typeof payload.phrase !== "string" ||
+    !payload.phrase.trim() ||
+    !["disabled", "starting", "listening", "paused", "error"].includes(
+      String(state),
+    ) ||
+    (lastError !== null && typeof lastError !== "string")
+  ) {
+    throw new Error("Tauri returned malformed wake-word settings.");
+  }
+  return {
+    enabled: payload.enabled,
+    phrase: payload.phrase,
+    state: state as NativeWakeWordState,
+    lastError,
+  };
 }
 
 function parseManagedModelProgress(

@@ -152,6 +152,25 @@ The model is pinned by upstream commit and SHA-256 in
 missing or changed file, and the installed application never downloads this
 base runtime asset.
 
+## Background voice wake
+
+Background voice wake is an explicit persisted user selection. Tauri owns a
+packaged `sherpa-onnx-keyword-spotter-microphone` process independently of the
+WebView audio pipeline and reads only its local keyword detections. The fixed
+`你好小克` keyword file and the bilingual
+`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` encoder, decoder, joiner, and
+token table are staged by `prepare_managed_runtime.py`. No captured wake audio
+is stored or sent to the Python sidecar.
+
+The keyword spotter and an XTalk Session never own the microphone at the same
+time. Manual conversation start pauses the spotter before `Session.open()`;
+conversation close resumes it. A native detection first stops the spotter,
+shows and focuses the main window, and emits a trusted event to the WebView.
+The UI then selects a new conversation and opens the public Session, which uses
+the existing proactive Agent greeting. While wake is enabled, closing the main
+window hides it to the system tray and asks the UI to close any active Session.
+Only the tray Quit action performs full application and sidecar shutdown.
+
 ## Optional native model runtime
 
 Optional downloadable speech models run in a separate Rust HTTP sidecar under
@@ -408,10 +427,13 @@ height.
 
 ## Shutdown
 
-The UI closes its XTalk session before requesting shutdown. Tauri asks the
-authenticated Python sidecar shutdown endpoint to stop, waits for a bounded
-interval, and terminates only the child it started if graceful shutdown does
-not finish. Managed model processes are then stopped in reverse startup order.
+Without background voice wake, closing the main window follows the normal full
+shutdown path. With wake enabled, the close request hides the window to the
+system tray and releases the conversation microphone instead. The tray Quit
+action stops the wake-word process, asks the authenticated Python sidecar
+shutdown endpoint to stop, waits for a bounded interval, and terminates only
+children it started if graceful shutdown does not finish. Managed model
+processes are then stopped in reverse startup order.
 
 ## Phase 0 limitations
 

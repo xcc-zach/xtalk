@@ -57,8 +57,7 @@ pub fn show_whiteboard_window(app: &AppHandle) -> Result<bool, String> {
                 match builder.parent(&main_window) {
                     Ok(parented) => builder = parented,
                     Err(error) => {
-                        let message =
-                            format!("failed to parent whiteboard window: {error}");
+                        let message = format!("failed to parent whiteboard window: {error}");
                         log_whiteboard(app, &message);
                         return Err(message);
                     }
@@ -109,7 +108,10 @@ pub fn hide_whiteboard_window(app: &AppHandle) -> Result<bool, String> {
 ///
 /// Returns the resulting visibility.
 pub fn set_whiteboard_window_visible(app: &AppHandle, visible: bool) -> Result<bool, String> {
-    log_whiteboard(app, &format!("set_whiteboard_window_visible called with {visible}"));
+    log_whiteboard(
+        app,
+        &format!("set_whiteboard_window_visible called with {visible}"),
+    );
     if visible {
         show_whiteboard_window(app)
     } else {
@@ -136,7 +138,5 @@ pub fn handle_whiteboard_window_event(window: &Window, event: &WindowEvent) {
     if let Err(error) = window.hide() {
         eprintln!("failed to hide the whiteboard window: {error}");
     }
-    let _ = window
-        .app_handle()
-        .emit(WHITEBOARD_WINDOW_HIDDEN_EVENT, ());
+    let _ = window.app_handle().emit(WHITEBOARD_WINDOW_HIDDEN_EVENT, ());
 }

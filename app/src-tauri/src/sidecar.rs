@@ -904,8 +904,20 @@ fn is_complete_python_runtime(path: &Path) -> bool {
         entry
             .file_name()
             .to_str()
-            .is_some_and(|name| name.starts_with("libpython"))
+            .is_some_and(is_python_runtime_library)
     })
+}
+
+fn is_python_runtime_library(name: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        name.starts_with("python") && name.ends_with(".dll")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        name.starts_with("libpython")
+    }
 }
 
 async fn wait_for_health(port: u16, token: &str) -> Result<(), BackendError> {

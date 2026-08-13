@@ -117,6 +117,22 @@ sidecar 再通过 XTalk 普通公开模型配置加载它。桌面端回退配�
 `resources/manifests/audio-models.lock.json`。资源校验会拒绝缺失或被修改的文件；
 安装后的应用不会为这项基础运行资源执行在线下载。
 
+## 后台语音唤醒
+
+后台语音唤醒必须由用户明确开启，并保存这一开关。Tauri 在 WebView 音频管线之外监管
+随包的 `sherpa-onnx-keyword-spotter-microphone` 进程，只读取其本地关键词检测结果。
+固定的“你好小克”关键词文件，以及中英双语
+`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` 的 encoder、decoder、joiner 和 token
+表，由 `prepare_managed_runtime.py` 在构建时准备。唤醒监听产生的音频不会保存，也不会
+发送给 Python sidecar。
+
+关键词检测进程与 XTalk Session 不会同时占用麦克风。用户手动开始对话时，App 会先
+暂停关键词检测，再调用 `Session.open()`；对话结束后恢复检测。原生检测到唤醒词时，
+会先停止检测进程、显示并聚焦主窗口，再向 WebView 发送可信事件。UI 随后选择一个新
+会话并打开公共 Session，复用现有 Agent 的主动问候。启用语音唤醒后，关闭主窗口只会
+将其隐藏到系统托盘，并要求 UI 关闭当前 Session；只有托盘中的“退出”会真正关闭应用
+和所有 sidecar。
+
 ## 可选原生模型运行时
 
 按需下载的可选语音模型运行在独立的 Rust HTTP sidecar
@@ -317,9 +333,10 @@ history 卡片限制在 80–600 px；两者还同时受窗口高度 60% 的上�
 
 ## 关闭
 
-UI 先关闭 XTalk Session，再请求关闭。Tauri 调用受认证的 Python sidecar shutdown
-endpoint，在有限时间内等待；若优雅关闭失败，只终止它自己启动的子进程。随后按
-启动顺序的逆序停止 managed 模型进程。
+未启用后台语音唤醒时，关闭主窗口会执行完整退出流程。启用后，关闭请求会把窗口隐藏
+到系统托盘，并释放当前会话使用的麦克风。托盘中的“退出”会停止唤醒词进程，再调用
+受认证的 Python sidecar shutdown endpoint 并在有限时间内等待；若优雅关闭失败，只
+终止 App 自己启动的子进程。随后按启动顺序的逆序停止 managed 模型进程。
 
 ## Phase 0 限制
 

@@ -112,11 +112,14 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-For a build that supports managed SenseVoice, Matcha, and MOSS services,
-download and stage the locked native runtime for the current platform:
+For a build that supports managed SenseVoice, Matcha, MOSS, and local
+background wake, download and stage the locked native runtime for the current
+platform:
 
 ```bash
-python scripts/download_managed_runtime.py
+python scripts/download_managed_runtime.py \
+  --sherpa-keyword-spotter /path/to/sherpa-onnx-keyword-spotter-microphone \
+  --sherpa-kws-model-dir /path/to/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
 ```
 
 The script selects the Rust host triple, downloads the corresponding official
@@ -124,6 +127,9 @@ sherpa-onnx shared archive, verifies its locked SHA-256, and uses the Sherpa
 server and ONNX Runtime 1.27 from that same archive. It then builds and stages
 the App's native sidecars. The supported macOS, Linux, and Windows x64/ARM64
 archives are pinned in `resources/manifests/native-runtimes.lock.json`.
+The keyword-spotter executable and KWS model are explicit build inputs because
+they are not part of that shared runtime archive. Later packaging runs reuse
+the validated staged copies.
 
 Optional weights are not bundled. Their immutable revisions, paths, sizes, and
 SHA-256 values are pinned in
@@ -490,6 +496,15 @@ FastEnhancer stay disabled; the sidecar runs the packaged Silero model and emits
 server speech boundaries before the configured ASR. This lets
 `server_configs/sample.json` work unchanged while preserving any explicit
 user-provided `vad` configuration.
+
+Background voice wake is opt-in. When enabled, closing the main window hides it
+to the system tray instead of exiting. Tauri supervises the packaged
+`sherpa-onnx-keyword-spotter-microphone` process and listens locally for
+`你好小克`; no wake audio is stored or uploaded. A detection stops the keyword
+spotter before showing the window and opening a fresh XTalk session, so the
+existing proactive Agent greeting starts the conversation without simultaneous
+microphone ownership. Ending the conversation resumes keyword detection. Use
+the tray Quit action for a full sidecar and application shutdown.
 
 Architecture details are documented in
 [`docs/architecture.md`](docs/architecture.md) and

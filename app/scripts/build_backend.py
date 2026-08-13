@@ -106,6 +106,29 @@ def selected_python_version(python: Path) -> tuple[int, int]:
     return int(major), int(minor)
 
 
+def selected_python_base_prefix(python: Path) -> Path:
+    """Return the base installation directory for a Python interpreter.
+
+    Parameters
+    ----------
+    python : pathlib.Path
+        Python executable to inspect.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved ``sys.base_prefix`` reported by the interpreter.
+    """
+
+    result = subprocess.run(
+        [str(python), "-c", "import sys; print(sys.base_prefix)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip()).resolve()
+
+
 def resolve_target_triple(explicit: str | None) -> str:
     """Resolve the Rust target triple used by Tauri sidecars.
 
@@ -360,6 +383,12 @@ def build_onedir(interpreter: Path, target: str) -> tuple[Path, Path]:
     config_path.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     environment["PYINSTALLER_CONFIG_DIR"] = str(config_path)
+    if "windows" in target:
+        conda_runtime = selected_python_base_prefix(interpreter) / "Library" / "bin"
+        if conda_runtime.is_dir():
+            environment["PATH"] = os.pathsep.join(
+                (str(conda_runtime), environment.get("PATH", ""))
+            )
 
     runtime_dir_name = "app-backend-runtime"
     command = [

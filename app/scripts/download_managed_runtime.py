@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple")
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--sherpa-keyword-spotter", type=Path)
+    parser.add_argument("--sherpa-kws-model-dir", type=Path)
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 
@@ -544,7 +546,13 @@ def locate_runtime_inputs(root: Path, target: str) -> tuple[Path, Path, Path]:
     return server, c_api.parent, ort
 
 
-def prepare_runtime(target: str, cache: Path, debug: bool) -> None:
+def prepare_runtime(
+    target: str,
+    cache: Path,
+    debug: bool,
+    sherpa_keyword_spotter: Path | None = None,
+    sherpa_kws_model_dir: Path | None = None,
+) -> None:
     """Download the locked archive and invoke the native staging build.
 
     Parameters
@@ -555,6 +563,10 @@ def prepare_runtime(target: str, cache: Path, debug: bool) -> None:
         Persistent build cache directory.
     debug : bool
         Whether to build Rust sidecars without the release profile.
+    sherpa_keyword_spotter : pathlib.Path | None, optional
+        Target-specific microphone keyword-spotter executable to stage.
+    sherpa_kws_model_dir : pathlib.Path | None, optional
+        Directory containing the fixed wake-word model files.
     """
 
     record = load_target_record(target)
@@ -577,6 +589,12 @@ def prepare_runtime(target: str, cache: Path, debug: bool) -> None:
         "--mtd-source-dir",
         str(mtd_source),
     ]
+    if sherpa_keyword_spotter is not None:
+        command.extend(
+            ["--sherpa-keyword-spotter", str(sherpa_keyword_spotter)]
+        )
+    if sherpa_kws_model_dir is not None:
+        command.extend(["--sherpa-kws-model-dir", str(sherpa_kws_model_dir)])
     if debug:
         command.append("--debug")
     subprocess.run(command, cwd=APP_ROOT, check=True)
@@ -593,7 +611,13 @@ def main() -> int:
 
     args = parse_args()
     target = resolve_target_triple(args.target_triple)
-    prepare_runtime(target, args.cache_dir.expanduser().resolve(), args.debug)
+    prepare_runtime(
+        target,
+        args.cache_dir.expanduser().resolve(),
+        args.debug,
+        args.sherpa_keyword_spotter,
+        args.sherpa_kws_model_dir,
+    )
     return 0
 
 
