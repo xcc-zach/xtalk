@@ -156,11 +156,13 @@ base runtime asset.
 
 Background voice wake is an explicit persisted user selection. Tauri owns a
 packaged `sherpa-onnx-keyword-spotter-microphone` process independently of the
-WebView audio pipeline and reads only its local keyword detections. The fixed
-`你好小克` keyword file and the bilingual
-`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` encoder, decoder, joiner, and
-token table are staged by `prepare_managed_runtime.py`. No captured wake audio
-is stored or sent to the Python sidecar.
+WebView audio pipeline and reads only its local keyword detections. The wake
+phrase is user-editable and defaults to `你好小克`. Tauri converts Chinese text
+to tone-marked pinyin tokens and English words through the packaged `en.phone`
+lexicon, then writes the active keyword file to AppData. The bilingual
+`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` encoder, decoder, joiner, token
+table, and English lexicon are staged by `prepare_managed_runtime.py`. No
+captured wake audio is stored or sent to the Python sidecar.
 
 The keyword spotter and an XTalk Session never own the microphone at the same
 time. Manual conversation start pauses the spotter before `Session.open()`;

@@ -72,10 +72,12 @@ component installed (`xcodebuild -downloadComponent MetalToolchain`).
 The keyword spotter and KWS model are supplied explicitly once and remain as
 ignored staged artifacts for subsequent packaging runs.
 
-The staging step also packages the local keyword spotter and the fixed
-`你好小克` KWS model. On Windows, `tauri.windows.conf.json` places the shared
-ONNX Runtime DLL beside the packaged sidecars so it takes precedence over an
-incompatible system copy.
+The staging step also packages the local keyword spotter, bilingual KWS model,
+and `en.phone` pronunciation lexicon. The App converts the user-editable wake
+phrase to model tokens and writes the active keyword file to AppData; the
+default phrase is `你好小克`. On Windows, `tauri.windows.conf.json` places the
+shared ONNX Runtime DLL beside the packaged sidecars so it takes precedence
+over an incompatible system copy.
 
 `tauri.conf.json` bundles the runtime directory as
 `$RESOURCE/app-backend-runtime` and launches the external binary with

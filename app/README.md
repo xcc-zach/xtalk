@@ -499,9 +499,12 @@ user-provided `vad` configuration.
 
 Background voice wake is opt-in. When enabled, closing the main window hides it
 to the system tray instead of exiting. Tauri supervises the packaged
-`sherpa-onnx-keyword-spotter-microphone` process and listens locally for
-`你好小克`; no wake audio is stored or uploaded. A detection stops the keyword
-spotter before showing the window and opening a fresh XTalk session, so the
+`sherpa-onnx-keyword-spotter-microphone` process and listens locally for the
+user-editable wake phrase, which defaults to `你好小克`; no wake audio is stored
+or uploaded. Chinese phrases are converted to tone-marked pinyin tokens and
+English phrases use the packaged `en.phone` lexicon. The generated keyword file
+is stored in AppData. A detection stops the keyword spotter before showing the
+window and opening a fresh XTalk session, so the
 existing proactive Agent greeting starts the conversation without simultaneous
 microphone ownership. Ending the conversation resumes keyword detection. Use
 the tray Quit action for a full sidecar and application shutdown.
