@@ -143,7 +143,7 @@
                 <span>
                   <strong data-i18n="wakeWord.enable">启用后台语音唤醒</strong>
                   <small data-i18n="wakeWord.description">
-                    关闭窗口后继续在本机监听唤醒词，不保存或上传音频。
+                    关闭窗口后继续在本机监听唤醒词。
                   </small>
                 </span>
                 <input
@@ -153,19 +153,21 @@
                   data-i18n-aria-label="wakeWord.enableLabel"
                 />
               </label>
-              <div class="settings-path">
+              <label class="settings-path wake-word-phrase-field">
                 <span data-i18n="wakeWord.phrase">唤醒词</span>
-                <code id="wake-word-phrase">你好小克</code>
-              </div>
-              <p
-                id="wake-word-status"
-                class="settings-status"
-                role="status"
-                aria-live="polite"
-                data-i18n="wakeWord.loading"
-              >
-                正在读取语音唤醒状态
-              </p>
+                <input
+                  id="wake-word-phrase-input"
+                  type="text"
+                  value="你好小克"
+                  maxlength="32"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="唤醒词"
+                  data-i18n-aria-label="wakeWord.phrase"
+                  placeholder="输入中文或英文唤醒词"
+                  data-i18n-placeholder="wakeWord.phrasePlaceholder"
+                />
+              </label>
             </div>
           </details>
 

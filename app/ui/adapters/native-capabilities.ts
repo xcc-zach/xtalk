@@ -48,7 +48,7 @@ export type NativeWakeWordState =
 export interface NativeWakeWordSettings {
   /** Whether the user selected background wake-word detection. */
   enabled: boolean;
-  /** Fixed phrase recognized by the packaged keyword file. */
+  /** User-selected phrase recognized by the generated keyword file. */
   phrase: string;
   /** Current native detector lifecycle state. */
   state: NativeWakeWordState;
@@ -133,6 +133,7 @@ const CREDENTIALS_COMMAND = "get_credentials";
 const DELETE_CREDENTIAL_COMMAND = "delete_credential";
 const WAKE_WORD_SETTINGS_COMMAND = "get_wake_word_settings";
 const SET_WAKE_WORD_ENABLED_COMMAND = "set_wake_word_enabled";
+const SET_WAKE_WORD_PHRASE_COMMAND = "set_wake_word_phrase";
 const PAUSE_WAKE_WORD_COMMAND = "pause_wake_word";
 const RESUME_WAKE_WORD_COMMAND = "resume_wake_word";
 const WAKE_WORD_DETECTED_EVENT = "wake-word-detected";
@@ -274,6 +275,26 @@ export async function setNativeWakeWordEnabled(
   return parseNativeWakeWordSettings(
     await invoke<unknown>(SET_WAKE_WORD_ENABLED_COMMAND, {
       enabled,
+      listenImmediately,
+    }),
+  );
+}
+
+/**
+ * Updates the persisted phrase used by background wake-word detection.
+ *
+ * @param phrase Natural-language Chinese or English wake phrase.
+ * @param listenImmediately Whether the updated detector should claim the microphone now.
+ * @returns Updated native detector state.
+ */
+export async function setNativeWakeWordPhrase(
+  phrase: string,
+  listenImmediately: boolean,
+): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(SET_WAKE_WORD_PHRASE_COMMAND, {
+      phrase,
       listenImmediately,
     }),
   );

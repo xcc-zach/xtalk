@@ -18,6 +18,7 @@ const APP_COMMANDS: &[&str] = &[
     "pause_wake_word",
     "resume_wake_word",
     "set_wake_word_enabled",
+    "set_wake_word_phrase",
     "shutdown_backend",
     "show_whiteboard_window",
     "hide_whiteboard_window",
