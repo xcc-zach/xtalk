@@ -876,6 +876,62 @@ def test_managed_runtime_uses_target_specific_binary_names() -> None:
     assert not module.target_supports_mtd_metal("x86_64-apple-darwin")
 
 
+def test_sherpa_macos_sidecar_embeds_packaged_runtime_rpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Let dyld find the managed ONNX Runtime before sidecar startup."""
+
+    module = load_script("prepare_managed_runtime")
+    executable = tmp_path / "sherpa-onnx-offline-websocket-server"
+    executable.write_bytes(b"mach-o")
+    commands: list[tuple[list[str], bool]] = []
+
+    def record_command(command: list[str], *, check: bool) -> None:
+        commands.append((command, check))
+
+    monkeypatch.setattr(module.subprocess, "run", record_command)
+
+    module.add_macos_managed_runtime_rpath(
+        executable,
+        "aarch64-apple-darwin",
+    )
+
+    assert commands == [
+        (
+            [
+                "install_name_tool",
+                "-add_rpath",
+                "@executable_path/../Resources/managed-runtime/ort",
+                str(executable),
+            ],
+            True,
+        )
+    ]
+
+
+def test_sherpa_non_macos_sidecar_skips_macos_rpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not invoke macOS tooling while staging another platform."""
+
+    module = load_script("prepare_managed_runtime")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+
+    module.add_macos_managed_runtime_rpath(
+        tmp_path / "sherpa-onnx-offline-websocket-server",
+        "x86_64-unknown-linux-gnu",
+    )
+
+    assert calls == []
+
+
 def test_managed_runtime_stages_only_onnx_cuda_provider_files(
     tmp_path: Path,
 ) -> None:
@@ -1052,6 +1108,26 @@ def test_matcha_local_models_example_uses_sherpa_tts_client() -> None:
     assert example["tts"] == {
         "type": "SherpaOnnxTTS",
         "params": {"base_url": "managed://matcha-icefall-zh-en"},
+    }
+
+
+def test_qwen3_asr_example_selects_only_the_int8_managed_model() -> None:
+    """Keep the first Qwen3-ASR example limited to the 0.6B INT8 model."""
+
+    example = json.loads(
+        (
+            APP_ROOT
+            / "examples"
+            / "local_models_qwen3_asr_0_6b_int8.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert example["asr"] == {
+        "type": "SherpaOnnxASR",
+        "params": {
+            "base_url": "managed://qwen3-asr-0.6b-int8",
+            "mode": "offline",
+        },
     }
 
 

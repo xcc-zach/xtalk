@@ -1,7 +1,7 @@
 //! Optional local-model installation and process supervision.
 
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddrV4, TcpListener},
     path::{Component, Path, PathBuf},
@@ -13,7 +13,7 @@ use std::{
 };
 
 use bzip2::read::BzDecoder;
-use reqwest::{redirect::Policy, Client, Response};
+use reqwest::{header::RANGE, redirect::Policy, Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -38,6 +38,7 @@ const MLX_SIDECAR_NAME: &str = "mlx-model-runtime";
 const SHERPA_SIDECAR_NAME: &str = "sherpa-onnx-offline-websocket-server";
 const SENSEVOICE_ID: &str = "sensevoice-small";
 const SENSEVOICE_MLX_ID: &str = "sensevoice-small-mlx";
+const QWEN3_ASR_06B_INT8_ID: &str = "qwen3-asr-0.6b-int8";
 const REFINER_ID: &str = "agentic-asr-refiner";
 const REFINER_MLX_ID: &str = "agentic-asr-refiner-mlx";
 const MOSS_TTS_ID: &str = "moss-tts-nano";
@@ -47,6 +48,7 @@ const MTD_ID: &str = "moss-transcribe-diarize";
 const CAMPPLUS_ID: &str = "campplus";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
+const QWEN3_ASR_06B_INT8_URL: &str = "managed://qwen3-asr-0.6b-int8";
 const REFINER_URL: &str = "managed://agentic-asr-refiner";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
 const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
@@ -55,9 +57,10 @@ const CAMPPLUS_URL: &str = "managed://campplus";
 const DEFAULT_MOSS_VOICE_URL: &str = "managed://moss-tts-nano/voices/zh_1.wav";
 const INSTALL_MARKER: &str = ".complete.json";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+const QWEN3_ASR_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const MTD_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_READY_LINE_BYTES: usize = 4 * 1024;
 const MANAGED_PROGRESS_EVENT: &str = "managed-model-progress";
 const HUGGING_FACE_ORIGIN: &str = "https://huggingface.co/";
@@ -99,6 +102,7 @@ struct ManagedServicesInner {
 #[derive(Default)]
 struct ManagedRequest {
     sensevoice: Option<ManagedBackend>,
+    qwen3_asr_06b_int8: Option<ManagedQwenBackend>,
     refiner: Option<ManagedBackend>,
     agentic_asr: bool,
     moss_tts: Option<ManagedBackend>,
@@ -125,6 +129,14 @@ enum ManagedMtdBackend {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ManagedCampPlusBackend {
+    Auto,
+    Cpu,
+    Cuda,
+    Coreml,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedQwenBackend {
     Auto,
     Cpu,
     Cuda,
@@ -237,6 +249,8 @@ pub(crate) enum ManagedError {
     TerminatedBeforeReady(String),
     #[error("managed model service emitted an invalid readiness message")]
     InvalidReady,
+    #[error("managed model process handles are busy during application exit")]
+    ShutdownBusy,
     #[error("the MLX managed runtime is supported only on Apple Silicon macOS")]
     UnsupportedMlxPlatform,
     #[error("the CUDA managed runtime is not available on this device")]
@@ -256,6 +270,7 @@ impl ManagedServices {
     ) -> Result<(Self, Value), ManagedError> {
         let request = parse_managed_request(config_path)?;
         let active = request.sensevoice.is_some()
+            || request.qwen3_asr_06b_int8.is_some()
             || request.refiner.is_some()
             || request.mtd.is_some()
             || request.campplus.is_some()
@@ -322,6 +337,7 @@ impl ManagedServices {
     ) -> Result<Value, ManagedError> {
         let mut overlay = json!({});
         let service_count = usize::from(request.sensevoice.is_some())
+            + usize::from(request.qwen3_asr_06b_int8.is_some())
             + usize::from(request.refiner.is_some())
             + usize::from(request.mtd.is_some())
             + usize::from(request.campplus.is_some())
@@ -374,6 +390,82 @@ impl ManagedServices {
                     start_sensevoice(app, &model_root, backend).await?
                 }
                 ManagedBackend::Auto => unreachable!("auto backend must be resolved"),
+            };
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            if request.agentic_asr {
+                overlay["asr"] = json!({
+                    "params": {
+                        "asr_base_url": format!("ws://127.0.0.1:{port}"),
+                        "asr_mode": "offline"
+                    }
+                });
+            } else {
+                overlay["asr"] = json!({
+                    "params": {
+                        "base_url": format!("ws://127.0.0.1:{port}"),
+                        "mode": "offline"
+                    }
+                });
+            }
+        }
+
+        if let Some(requested_backend) = request.qwen3_asr_06b_int8 {
+            service_index += 1;
+            let backend = resolve_qwen_backend(app, requested_backend)?;
+            let service_manifest = find_service(manifest, QWEN3_ASR_06B_INT8_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = match start_qwen3_asr_06b_int8(app, &model_root, backend).await {
+                Ok(started) => started,
+                Err(error)
+                    if requested_backend == ManagedQwenBackend::Auto
+                        && backend != ManagedQwenBackend::Cpu =>
+                {
+                    eprintln!(
+                        "Qwen3 ASR failed to start with {}; falling back to CPU: {error}",
+                        qwen_backend_name(backend)
+                    );
+                    start_qwen3_asr_06b_int8(app, &model_root, ManagedQwenBackend::Cpu).await?
+                }
+                Err(error) => return Err(error),
             };
             let port = started.port;
             self.accept(started).await;
@@ -726,12 +818,60 @@ impl ManagedServices {
     pub(crate) async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         self.inner.healthy.store(false, Ordering::Release);
-        let mut children = self.inner.children.lock().await;
-        while let Some(child) = children.pop() {
-            if let Err(error) = child.kill() {
-                eprintln!("failed to stop a managed model service: {error}");
-            }
+        let mut child_handles = self.inner.children.lock().await;
+        let children = child_handles.drain(..).rev().collect();
+        drop(child_handles);
+        stop_managed_children(children);
+    }
+
+    /// Immediately stops managed processes without waiting for an async lock.
+    pub(crate) fn force_shutdown_now(&self) -> Result<(), ManagedError> {
+        self.inner.shutting_down.store(true, Ordering::Release);
+        self.inner.healthy.store(false, Ordering::Release);
+        let mut child_handles = self
+            .inner
+            .children
+            .try_lock()
+            .map_err(|_| ManagedError::ShutdownBusy)?;
+        let children = child_handles.drain(..).rev().collect();
+        drop(child_handles);
+        stop_managed_children(children);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn stop_managed_children(children: Vec<CommandChild>) {
+    for child in children {
+        let pid = child.pid();
+        if let Err(error) = signal_managed_process(pid, libc::SIGKILL) {
+            eprintln!("failed to kill managed model service {pid}: {error}");
         }
+        drop(child);
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_managed_children(children: Vec<CommandChild>) {
+    for child in children {
+        if let Err(error) = child.kill() {
+            eprintln!("failed to stop a managed model service: {error}");
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_managed_process(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: the PID belongs to a managed child process and `signal` is one
+    // of the fixed POSIX signals supplied by this module.
+    if unsafe { libc::kill(pid as libc::pid_t, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
     }
 }
 
@@ -741,6 +881,9 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     let mut services = Vec::new();
     if request.sensevoice.is_some() {
         services.push(SENSEVOICE_ID.to_owned());
+    }
+    if request.qwen3_asr_06b_int8.is_some() {
+        services.push(QWEN3_ASR_06B_INT8_ID.to_owned());
     }
     if request.refiner.is_some() {
         services.push(REFINER_ID.to_owned());
@@ -768,12 +911,12 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
     if asr_type == Some("AgenticASR") {
         request.agentic_asr = true;
         if let Some(base_url) = model_param(&config, "asr", "asr_base_url")? {
-            request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
+            parse_managed_asr(base_url, &mut request)?;
         }
         if let Some(base_url) = model_param(&config, "asr", "refiner_base_url")? {
             request.refiner = parse_managed_backend(base_url, REFINER_URL, "Refiner")?;
         }
-        if request.sensevoice.is_some() {
+        if request.sensevoice.is_some() || request.qwen3_asr_06b_int8.is_some() {
             match model_param(&config, "asr", "asr_mode")? {
                 None | Some("offline") => {}
                 Some(mode) => {
@@ -784,8 +927,8 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
             }
         }
     } else if let Some(base_url) = model_param(&config, "asr", "base_url")? {
-        request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
-        if request.sensevoice.is_some() {
+        parse_managed_asr(base_url, &mut request)?;
+        if request.sensevoice.is_some() || request.qwen3_asr_06b_int8.is_some() {
             require_model_type(&config, "asr", "SherpaOnnxASR")?;
         }
     }
@@ -820,6 +963,19 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
     }
 
     Ok(request)
+}
+
+fn parse_managed_asr(base_url: &str, request: &mut ManagedRequest) -> Result<(), ManagedError> {
+    if is_service_url(base_url, SENSEVOICE_URL) {
+        request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
+    } else if is_service_url(base_url, QWEN3_ASR_06B_INT8_URL) {
+        request.qwen3_asr_06b_int8 = parse_managed_qwen_backend(base_url)?;
+    } else if base_url.starts_with(MANAGED_ROOT) {
+        return Err(ManagedError::InvalidConfiguration(format!(
+            "unsupported managed ASR URL `{base_url}`"
+        )));
+    }
+    Ok(())
 }
 
 fn is_service_url(base_url: &str, service_url: &str) -> bool {
@@ -871,6 +1027,25 @@ fn parse_managed_campplus_backend(
         }
         value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
             format!("unsupported managed CAM++ URL `{base_url}`"),
+        )),
+        _ => Ok(None),
+    }
+}
+
+fn parse_managed_qwen_backend(base_url: &str) -> Result<Option<ManagedQwenBackend>, ManagedError> {
+    match base_url {
+        value if value == QWEN3_ASR_06B_INT8_URL => Ok(Some(ManagedQwenBackend::Auto)),
+        value if value == format!("{QWEN3_ASR_06B_INT8_URL}?backend=cpu") => {
+            Ok(Some(ManagedQwenBackend::Cpu))
+        }
+        value if value == format!("{QWEN3_ASR_06B_INT8_URL}?backend=cuda") => {
+            Ok(Some(ManagedQwenBackend::Cuda))
+        }
+        value if value == format!("{QWEN3_ASR_06B_INT8_URL}?backend=coreml") => {
+            Ok(Some(ManagedQwenBackend::Coreml))
+        }
+        value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
+            format!("unsupported managed Qwen3 ASR URL `{base_url}`"),
         )),
         _ => Ok(None),
     }
@@ -949,6 +1124,34 @@ fn select_campplus_backend(
         ManagedCampPlusBackend::Auto if cuda_available => Ok(ManagedCampPlusBackend::Cuda),
         ManagedCampPlusBackend::Auto if coreml_available => Ok(ManagedCampPlusBackend::Coreml),
         ManagedCampPlusBackend::Auto => Ok(ManagedCampPlusBackend::Cpu),
+    }
+}
+
+fn resolve_qwen_backend(
+    app: &AppHandle,
+    requested: ManagedQwenBackend,
+) -> Result<ManagedQwenBackend, ManagedError> {
+    select_qwen_backend(
+        requested,
+        cuda_is_available(app, ManagedServiceKind::SenseVoice)?,
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn select_qwen_backend(
+    requested: ManagedQwenBackend,
+    cuda_available: bool,
+    coreml_available: bool,
+) -> Result<ManagedQwenBackend, ManagedError> {
+    match requested {
+        ManagedQwenBackend::Cpu => Ok(ManagedQwenBackend::Cpu),
+        ManagedQwenBackend::Cuda if cuda_available => Ok(ManagedQwenBackend::Cuda),
+        ManagedQwenBackend::Cuda => Err(ManagedError::UnsupportedCudaPlatform),
+        ManagedQwenBackend::Coreml if coreml_available => Ok(ManagedQwenBackend::Coreml),
+        ManagedQwenBackend::Coreml => Err(ManagedError::UnsupportedCoremlPlatform),
+        ManagedQwenBackend::Auto if cuda_available => Ok(ManagedQwenBackend::Cuda),
+        ManagedQwenBackend::Auto if coreml_available => Ok(ManagedQwenBackend::Coreml),
+        ManagedQwenBackend::Auto => Ok(ManagedQwenBackend::Cpu),
     }
 }
 
@@ -1331,11 +1534,44 @@ async fn download_file(
             .and_then(|value| value.to_str())
             .unwrap_or_default()
     ));
-    let response = send_download_request(client, &manifest.url).await?;
-    let mut output = File::create(&partial)?;
+    let mut resume_from = fs::metadata(&partial)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if resume_from > manifest.size {
+        fs::remove_file(&partial)?;
+        resume_from = 0;
+    }
+    if resume_from == manifest.size {
+        if sha256_file(&partial)? == manifest.sha256 {
+            if destination.exists() {
+                fs::remove_file(&destination)?;
+            }
+            fs::rename(partial, destination)?;
+            return Ok(());
+        }
+        fs::remove_file(&partial)?;
+        resume_from = 0;
+    }
+
+    let response = send_download_request(client, &manifest.url, resume_from).await?;
     let mut response = response;
     let mut digest = Sha256::new();
-    let mut written = 0_u64;
+    let mut written = resume_from;
+    let mut output = if resume_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
+        let mut input = File::open(&partial)?;
+        let mut buffer = [0_u8; 128 * 1024];
+        loop {
+            let count = input.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        OpenOptions::new().append(true).open(&partial)?
+    } else {
+        written = 0;
+        File::create(&partial)?
+    };
     let mut last_progress = Instant::now() - Duration::from_secs(1);
     while let Some(chunk) = response.chunk().await? {
         output.write_all(&chunk)?;
@@ -1370,12 +1606,18 @@ async fn download_file(
     Ok(())
 }
 
-async fn send_download_request(client: &Client, url: &str) -> Result<Response, ManagedError> {
-    let primary_result = client
-        .get(url)
-        .send()
-        .await
-        .and_then(Response::error_for_status);
+async fn send_download_request(
+    client: &Client,
+    url: &str,
+    resume_from: u64,
+) -> Result<Response, ManagedError> {
+    let primary = client.get(url);
+    let primary = if resume_from > 0 {
+        primary.header(RANGE, format!("bytes={resume_from}-"))
+    } else {
+        primary
+    };
+    let primary_result = primary.send().await.and_then(Response::error_for_status);
     let primary_error = match primary_result {
         Ok(response) => return Ok(response),
         Err(error) => error,
@@ -1383,8 +1625,13 @@ async fn send_download_request(client: &Client, url: &str) -> Result<Response, M
     let Some(mirror_url) = hugging_face_mirror_url(url) else {
         return Err(ManagedError::Download(primary_error));
     };
-    client
-        .get(mirror_url)
+    let mirror = client.get(mirror_url);
+    let mirror = if resume_from > 0 {
+        mirror.header(RANGE, format!("bytes={resume_from}-"))
+    } else {
+        mirror
+    };
+    mirror
         .send()
         .await
         .and_then(Response::error_for_status)
@@ -1732,6 +1979,56 @@ async fn start_sensevoice(
     })
 }
 
+async fn start_qwen3_asr_06b_int8(
+    app: &AppHandle,
+    model_root: &Path,
+    backend: ManagedQwenBackend,
+) -> Result<StartedService, ManagedError> {
+    let port = reserve_loopback_port()?;
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    find_ort_library(&runtime_dir)?;
+    let mut command = app.shell().sidecar(SHERPA_SIDECAR_NAME)?.args([
+        format!("--port={port}"),
+        "--num-work-threads=2".to_owned(),
+        "--num-threads=3".to_owned(),
+        "--max-batch-size=1".to_owned(),
+        format!("--provider={}", qwen_backend_name(backend)),
+        format!(
+            "--qwen3-asr-conv-frontend={}",
+            model_root.join("conv_frontend.onnx").display()
+        ),
+        format!(
+            "--qwen3-asr-encoder={}",
+            model_root.join("encoder.int8.onnx").display()
+        ),
+        format!(
+            "--qwen3-asr-decoder={}",
+            model_root.join("decoder.int8.onnx").display()
+        ),
+        format!(
+            "--qwen3-asr-tokenizer={}",
+            model_root.join("tokenizer").display()
+        ),
+        "--qwen3-asr-max-new-tokens=512".to_owned(),
+        format!("--log-file={}", model_root.join("sherpa.log").display()),
+    ]);
+    command = configure_library_path(command, &runtime_dir);
+    let (mut events, child) = command.spawn()?;
+    if let Err(error) =
+        wait_for_tcp_ready_with_timeout(&mut events, port, QWEN3_ASR_STARTUP_TIMEOUT).await
+    {
+        let _ = child.kill();
+        return Err(error);
+    }
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
 fn onnx_backend_name(backend: ManagedBackend) -> &'static str {
     match backend {
         ManagedBackend::Cpu => "cpu",
@@ -1739,6 +2036,15 @@ fn onnx_backend_name(backend: ManagedBackend) -> &'static str {
         ManagedBackend::Auto | ManagedBackend::Mlx => {
             unreachable!("only resolved ONNX backends have provider names")
         }
+    }
+}
+
+fn qwen_backend_name(backend: ManagedQwenBackend) -> &'static str {
+    match backend {
+        ManagedQwenBackend::Cpu => "cpu",
+        ManagedQwenBackend::Cuda => "cuda",
+        ManagedQwenBackend::Coreml => "coreml",
+        ManagedQwenBackend::Auto => unreachable!("auto Qwen backend must be resolved"),
     }
 }
 
@@ -1820,7 +2126,16 @@ async fn wait_for_tcp_ready(
     events: &mut Receiver<CommandEvent>,
     port: u16,
 ) -> Result<(), ManagedError> {
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    wait_for_tcp_ready_with_timeout(events, port, STARTUP_TIMEOUT).await
+}
+
+async fn wait_for_tcp_ready_with_timeout(
+    events: &mut Receiver<CommandEvent>,
+    port: u16,
+    startup_timeout: Duration,
+) -> Result<(), ManagedError> {
+    let deadline = Instant::now() + startup_timeout;
+    let mut stderr = String::new();
     loop {
         if tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
             .await
@@ -1833,10 +2148,27 @@ async fn wait_for_tcp_ready(
         }
         tokio::select! {
             event = events.recv() => {
-                if matches!(event, Some(CommandEvent::Terminated(_)) | None) {
-                    return Err(ManagedError::TerminatedBeforeReady(
-                        "no diagnostic output".to_owned(),
-                    ));
+                match event {
+                    Some(CommandEvent::Stderr(line)) => {
+                        if stderr.len() < MAX_READY_LINE_BYTES {
+                            let detail = String::from_utf8_lossy(&line);
+                            for character in detail.chars() {
+                                if stderr.len() + character.len_utf8() > MAX_READY_LINE_BYTES {
+                                    break;
+                                }
+                                stderr.push(character);
+                            }
+                        }
+                    }
+                    Some(CommandEvent::Terminated(_)) | None => {
+                        let detail = stderr.trim();
+                        return Err(ManagedError::TerminatedBeforeReady(if detail.is_empty() {
+                            "no diagnostic output".to_owned()
+                        } else {
+                            detail.to_owned()
+                        }));
+                    }
+                    _ => {}
                 }
             }
             _ = sleep(STARTUP_POLL_INTERVAL) => {}
@@ -1902,11 +2234,11 @@ mod tests {
     use super::{
         extract_service_archives, hugging_face_mirror_url, inspect_model_config,
         parse_managed_request, resolve_moss_voices, safe_join, select_backend,
-        select_campplus_backend, select_mtd_backend, verify_installed_service,
+        select_campplus_backend, select_mtd_backend, select_qwen_backend, verify_installed_service,
         write_install_marker, ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend,
-        ManagedCampPlusBackend, ManagedMtdBackend, ManagedServiceManifest, ManagedVoice,
-        CAMPPLUS_ID, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID, REFINER_ID,
-        SENSEVOICE_ID,
+        ManagedCampPlusBackend, ManagedMtdBackend, ManagedQwenBackend, ManagedServiceManifest,
+        ManagedVoice, CAMPPLUS_ID, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID,
+        QWEN3_ASR_06B_INT8_ID, REFINER_ID, SENSEVOICE_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
@@ -2011,6 +2343,69 @@ mod tests {
             ManagedCampPlusBackend::Cpu
         );
         assert!(select_campplus_backend(ManagedCampPlusBackend::Coreml, false, false).is_err());
+    }
+
+    #[test]
+    fn automatic_qwen_backend_prefers_cuda_then_coreml_then_cpu() {
+        assert_eq!(
+            select_qwen_backend(ManagedQwenBackend::Auto, true, true).expect("select CUDA"),
+            ManagedQwenBackend::Cuda
+        );
+        assert_eq!(
+            select_qwen_backend(ManagedQwenBackend::Auto, false, true).expect("select CoreML"),
+            ManagedQwenBackend::Coreml
+        );
+        assert_eq!(
+            select_qwen_backend(ManagedQwenBackend::Coreml, false, true)
+                .expect("select explicit CoreML"),
+            ManagedQwenBackend::Coreml
+        );
+        assert_eq!(
+            select_qwen_backend(ManagedQwenBackend::Auto, false, false).expect("select CPU"),
+            ManagedQwenBackend::Cpu
+        );
+        assert!(select_qwen_backend(ManagedQwenBackend::Coreml, false, false).is_err());
+    }
+
+    #[test]
+    fn parses_qwen3_asr_int8_without_accepting_mlx() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {
+                        "base_url": "managed://qwen3-asr-0.6b-int8?backend=coreml",
+                        "mode": "offline"
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert_eq!(request.qwen3_asr_06b_int8, Some(ManagedQwenBackend::Coreml));
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [QWEN3_ASR_06B_INT8_ID]);
+
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {
+                        "base_url": "managed://qwen3-asr-0.6b-int8?backend=mlx",
+                        "mode": "offline"
+                    }
+                }
+            }))
+            .expect("serialize invalid config"),
+        )
+        .expect("write invalid config");
+        assert!(parse_managed_request(&config_path).is_err());
     }
 
     #[test]

@@ -545,6 +545,8 @@ function managedServiceName(serviceId: string): string {
       return "SenseVoice Small";
     case "sensevoice-small-mlx":
       return "SenseVoice Small (MLX)";
+    case "qwen3-asr-0.6b-int8":
+      return "Qwen3-ASR 0.6B INT8";
     case "agentic-asr-refiner":
       return "AgenticASR Refiner";
     case "agentic-asr-refiner-mlx":

@@ -54,6 +54,9 @@ def test_resource_scope_matches_declared_static_bundle_inputs() -> None:
     assert mappings[Path("examples/local_models_campplus.json")] == Path(
         "examples/local_models_campplus.json"
     )
+    assert mappings[Path("examples/local_models_qwen3_asr_0_6b_int8.json")] == Path(
+        "examples/local_models_qwen3_asr_0_6b_int8.json"
+    )
     assert mappings[Path("resources/credentials.json")] == Path(
         "credentials.json"
     )

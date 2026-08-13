@@ -190,6 +190,30 @@ def copy_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def add_macos_managed_runtime_rpath(executable: Path, target: str) -> None:
+    """Let a packaged macOS sidecar resolve shared managed-runtime libraries.
+
+    Parameters
+    ----------
+    executable : pathlib.Path
+        Staged Mach-O executable to update before App signing.
+    target : str
+        Rust-style target triple for the staged executable.
+    """
+
+    if "apple" not in target:
+        return
+    subprocess.run(
+        [
+            "install_name_tool",
+            "-add_rpath",
+            MACOS_MANAGED_RUNTIME_RPATH,
+            str(executable),
+        ],
+        check=True,
+    )
+
+
 def reset_generated_runtime_files(directory: Path) -> None:
     """Remove stale generated libraries while retaining tracked guidance.
 
@@ -567,12 +591,13 @@ def main() -> int:
         / f"mtd-model-runtime-{target}"
         f"{'.exe' if 'windows' in target else ''}",
     )
-    copy_file(
-        sherpa_server,
+    staged_sherpa_server = (
         TAURI_BINARIES
         / f"sherpa-onnx-offline-websocket-server-{target}"
-        f"{'.exe' if 'windows' in target else ''}",
+        f"{'.exe' if 'windows' in target else ''}"
     )
+    copy_file(sherpa_server, staged_sherpa_server)
+    add_macos_managed_runtime_rpath(staged_sherpa_server, target)
     copy_file(
         mlx_runtime,
         TAURI_BINARIES
