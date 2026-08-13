@@ -25,6 +25,7 @@
     "allow-save-credential",
     "allow-set-tool-enabled",
     "allow-set-wake-word-enabled",
+    "allow-set-wake-word-phrase",
     "allow-shutdown-backend",
     "allow-show-whiteboard-window",
     "allow-hide-whiteboard-window",

@@ -26,6 +26,7 @@ import {
   saveNativeCredential,
   setNativeToolEnabled,
   setNativeWakeWordEnabled,
+  setNativeWakeWordPhrase,
   type NativeBackendConnection,
   type NativeManagedModelProgress,
   type NativeCredentialDefinition,
@@ -95,6 +96,7 @@ const WAKE_WORD_SUMMARY_KEYS: Record<
   paused: "wakeWord.statePaused",
   error: "wakeWord.stateError",
 };
+const WAKE_WORD_PHRASE_DEBOUNCE_MS = 500;
 const WHITEBOARD_TOOL_ID = "builtin:whiteboard";
 
 const elements = {
@@ -162,8 +164,9 @@ const elements = {
   wakeWordEnabledToggle: requireElement<HTMLInputElement>(
     "wake-word-enabled-toggle",
   ),
-  wakeWordPhrase: requireElement<HTMLElement>("wake-word-phrase"),
-  wakeWordStatus: requireElement<HTMLElement>("wake-word-status"),
+  wakeWordPhraseInput: requireElement<HTMLInputElement>(
+    "wake-word-phrase-input",
+  ),
   wakeWordSummary: requireElement<HTMLElement>("wake-word-summary"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
   developerToolsStatus: requireElement<HTMLElement>(
@@ -305,6 +308,8 @@ let backendState: BackendState = "loading";
 let modelConfigPath: string | null = null;
 let wakeWordSettings: NativeWakeWordSettings | null = null;
 let wakeWordOperation = false;
+let wakeWordPhraseComposing = false;
+let wakeWordPhraseUpdateTimer: number | null = null;
 let pendingWakeWordActivation = false;
 let backgroundingRequested = false;
 let recommendedConfigPath: string | null = null;
@@ -2390,25 +2395,12 @@ function renderInstalledTools(tools: NativeToolDefinition[]): void {
 function renderWakeWordSettings(settings: NativeWakeWordSettings): void {
   wakeWordSettings = settings;
   elements.wakeWordEnabledToggle.checked = settings.enabled;
-  elements.wakeWordPhrase.textContent = settings.phrase;
+  elements.wakeWordPhraseInput.value = settings.phrase;
   elements.wakeWordSummary.textContent = t(
     WAKE_WORD_SUMMARY_KEYS[settings.state],
   );
-  const statusKey: TranslationKey =
-    settings.state === "disabled"
-      ? "wakeWord.disabled"
-      : settings.state === "starting"
-        ? "wakeWord.starting"
-        : settings.state === "listening"
-          ? "wakeWord.listening"
-          : settings.state === "paused"
-            ? "wakeWord.paused"
-            : "wakeWord.error";
-  elements.wakeWordStatus.textContent = t(statusKey, {
-    phrase: settings.phrase,
-    error: settings.lastError ?? t("wakeWord.stateError"),
-  });
   elements.wakeWordEnabledToggle.disabled = wakeWordOperation;
+  elements.wakeWordPhraseInput.disabled = wakeWordOperation;
 }
 
 function renderCredentials(items: NativeCredentialDefinition[]): void {
@@ -2491,6 +2483,8 @@ function updateToolControls(): void {
   elements.applyCredentialChangesButton.disabled =
     busy || !hasPendingChanges || modelConfigPath === null;
   elements.wakeWordEnabledToggle.disabled =
+    wakeWordOperation || wakeWordSettings === null;
+  elements.wakeWordPhraseInput.disabled =
     wakeWordOperation || wakeWordSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
@@ -2585,6 +2579,56 @@ async function updateWakeWordEnabled(enabled: boolean): Promise<void> {
       renderWakeWordSettings(wakeWordSettings);
     }
   }
+}
+
+async function updateWakeWordPhrase(phrase: string): Promise<void> {
+  if (wakeWordOperation || wakeWordSettings === null) {
+    return;
+  }
+  if (phrase.trim() === wakeWordSettings.phrase) {
+    elements.wakeWordPhraseInput.value = wakeWordSettings.phrase;
+    return;
+  }
+  wakeWordOperation = true;
+  elements.wakeWordEnabledToggle.disabled = true;
+  elements.wakeWordPhraseInput.disabled = true;
+  try {
+    const conversationActive =
+      latestSnapshot.connectionState === "connected" ||
+      latestSnapshot.connectionState === "reconnecting";
+    renderWakeWordSettings(
+      await setNativeWakeWordPhrase(phrase, !conversationActive),
+    );
+  } catch (error) {
+    await refreshWakeWordSettings().catch(() => undefined);
+    showError("wakeWord.updateFailed", { error });
+  } finally {
+    wakeWordOperation = false;
+    if (wakeWordSettings !== null) {
+      renderWakeWordSettings(wakeWordSettings);
+    }
+  }
+}
+
+function scheduleWakeWordPhraseUpdate(): void {
+  if (wakeWordPhraseComposing) {
+    return;
+  }
+  if (wakeWordPhraseUpdateTimer !== null) {
+    window.clearTimeout(wakeWordPhraseUpdateTimer);
+  }
+  wakeWordPhraseUpdateTimer = window.setTimeout(() => {
+    wakeWordPhraseUpdateTimer = null;
+    void updateWakeWordPhrase(elements.wakeWordPhraseInput.value);
+  }, WAKE_WORD_PHRASE_DEBOUNCE_MS);
+}
+
+function submitWakeWordPhraseUpdate(): void {
+  if (wakeWordPhraseUpdateTimer !== null) {
+    window.clearTimeout(wakeWordPhraseUpdateTimer);
+    wakeWordPhraseUpdateTimer = null;
+  }
+  void updateWakeWordPhrase(elements.wakeWordPhraseInput.value);
 }
 
 async function detachCurrentAdapter(): Promise<void> {
@@ -3142,11 +3186,8 @@ async function initializeApplication(): Promise<void> {
 
 async function initializeNativeWakeWord(): Promise<void> {
   await listenNativeWakeWordStatus(renderWakeWordSettings);
-  await listenNativeWakeWordDetected((event) => {
+  await listenNativeWakeWordDetected(() => {
     pendingWakeWordActivation = true;
-    elements.wakeWordStatus.textContent = t("wakeWord.detected", {
-      phrase: event.phrase,
-    });
     void activatePendingWakeWordConversation();
   });
   await listenNativeAppBackgrounding(() => {
@@ -3380,6 +3421,29 @@ elements.installToolDirectoryButton.addEventListener("click", () => {
 });
 elements.wakeWordEnabledToggle.addEventListener("change", () => {
   void updateWakeWordEnabled(elements.wakeWordEnabledToggle.checked);
+});
+elements.wakeWordPhraseInput.addEventListener("change", () => {
+  submitWakeWordPhraseUpdate();
+});
+elements.wakeWordPhraseInput.addEventListener("input", () => {
+  scheduleWakeWordPhraseUpdate();
+});
+elements.wakeWordPhraseInput.addEventListener("compositionstart", () => {
+  wakeWordPhraseComposing = true;
+  if (wakeWordPhraseUpdateTimer !== null) {
+    window.clearTimeout(wakeWordPhraseUpdateTimer);
+    wakeWordPhraseUpdateTimer = null;
+  }
+});
+elements.wakeWordPhraseInput.addEventListener("compositionend", () => {
+  wakeWordPhraseComposing = false;
+  scheduleWakeWordPhraseUpdate();
+});
+elements.wakeWordPhraseInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    elements.wakeWordPhraseInput.blur();
+  }
 });
 elements.credentialForm.addEventListener("submit", (event) => {
   event.preventDefault();

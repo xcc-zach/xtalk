@@ -22,6 +22,7 @@ WAKE_WORD_MODEL_FILES = (
     "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
     "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
     "tokens.txt",
+    "en.phone",
 )
 MACOS_MANAGED_RUNTIME_RPATH = (
     "@executable_path/../Resources/managed-runtime/ort"

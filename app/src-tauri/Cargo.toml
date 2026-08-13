@@ -21,6 +21,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 bzip2 = { version = "0.4", features = ["static"] }
 getrandom = "0.3"
+pinyin = { version = "0.11", default-features = false, features = ["plain", "with_tone"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

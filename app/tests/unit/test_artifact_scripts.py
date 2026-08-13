@@ -990,6 +990,7 @@ def test_managed_runtime_declares_complete_wake_word_model_layout() -> None:
         "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
         "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx",
         "tokens.txt",
+        "en.phone",
     )
     assert (
         APP_ROOT / "resources" / "models" / "wake-word" / "keywords.txt"

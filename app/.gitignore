@@ -24,6 +24,7 @@ resources/managed-runtime/mlx-swift_Cmlx.bundle/
 resources/managed-runtime/sherpa/*
 resources/models/wake-word/*.onnx
 resources/models/wake-word/tokens.txt
+resources/models/wake-word/en.phone
 !resources/managed-runtime/ort/README.md
 src-tauri/gen/
 src-tauri/target/
