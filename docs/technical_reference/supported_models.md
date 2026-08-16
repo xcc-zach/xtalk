@@ -1,17 +1,24 @@
 The model *quick-start* repositories are convenience adapters under development. If you encounter any issue, open an issue directly in the X-Talk repository and use the *original repository* to start the service.
 
+`[Managed]` in a title indicates that the X-Talk desktop app can automatically download and enable the model. Each entry also lists its available inference backends and the automatic default selection rule.
+
 ### Speech Recognition
 
 **Name in config**: `asr`
 
 <details markdown="1">
-<summary>SherpaOnnx [Recommended]</summary>
+<summary>SherpaOnnx [Recommended] [Managed]</summary>
 
 **Dependency:** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **Implementation path:** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
 A high-performance speech recognition framework, and more. It can run many speech recognition models.
+
+**[Managed] Models and inference backends:**
+
+- `sensevoice-small`: supports `cpu`, `cuda`, and `mlx`. By default, it uses CUDA when available, otherwise MLX on supported Apple Silicon devices, and CPU in all other cases.
+- `qwen3-asr-0.6b-int8`: supports `cpu`, `cuda`, and `coreml`. By default, it uses CUDA when available, otherwise Core ML when available, and CPU in all other cases.
 
 [Quick Start](https://github.com/xcc-zach/xtalk-sherpa-onnx-asr)
 
@@ -31,7 +38,7 @@ A high-performance speech recognition framework, and more. It can run many speec
 </details>
 
 <details markdown="1">
-<summary>AgenticASR</summary>
+<summary>AgenticASR [Managed]</summary>
 
 **Dependency:** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
@@ -41,10 +48,11 @@ A speech recognition wrapper that combines the sherpa-onnx WebSocket ASR with
 AgenticASR's K=3 sliding-window refinement. In `streaming` mode it uses the
 online sherpa-onnx WebSocket server; in `offline` mode it simulates streaming
 through `MockStreamRecognizer` over the offline WebSocket server. The Refiner
-is an OpenAI-compatible chat-completions service. XTalk Desktop can manage both
+is an OpenAI-compatible chat-completions service. X-Talk Desktop can manage both
 services locally with `managed://sensevoice-small` and
-`managed://agentic-asr-refiner`. Without a `backend` query, it uses MLX on
-Apple Silicon, CUDA on supported Windows/Linux hosts, and ONNX CPU elsewhere.
+`managed://agentic-asr-refiner`.
+
+**[Managed] Inference backends:** supports `cpu`, `cuda`, and `mlx`. By default, it uses CUDA when available, otherwise MLX on supported Apple Silicon devices, and CPU in all other cases.
 
 **Config params:** `asr_base_url` (sherpa-onnx WebSocket server),
 `refiner_base_url` (OpenAI-compatible Refiner service), `asr_mode`
@@ -99,7 +107,7 @@ Managed desktop configuration:
 </details>
 
 <details markdown="1">
-<summary>MossTTSNano</summary>
+<summary>MossTTSNano [Managed]</summary>
 
 **Dependency:** None
 
@@ -109,6 +117,8 @@ An HTTP client for the official Python/FastAPI service and XTalk's native Rust
 ONNX and Swift MLX services. All use multipart `POST /api/generate` with `text`
 and `prompt_audio`, return base64 PCM16 WAV, and keep client output fixed at
 48 kHz mono PCM16. `voices` uses the same `{name, path}` entries as IndexTTS.
+
+**[Managed] Inference backends:** supports `cpu`, `cuda`, and `mlx`. By default, it uses CUDA when available, otherwise MLX on supported Apple Silicon devices, and CPU in all other cases.
 
 ```json
 {
@@ -152,13 +162,15 @@ PCM audio from a MOSS-TTS-Realtime service.
 </details>
 
 <details markdown="1">
-<summary>SherpaOnnxTTS</summary>
+<summary>SherpaOnnxTTS [Managed]</summary>
 
 **Dependency:** None
 
 **Path:** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
 
 An HTTP client for the local sherpa-onnx Matcha Chinese-English TTS service. It posts text to `/v1/audio/speech` and returns 48 kHz mono PCM16 audio.
+
+**[Managed] Inference backends:** supports `cpu` and `cuda`. By default, it uses CUDA when available and CPU otherwise.
 
 **Config params:** only `base_url`.
 
