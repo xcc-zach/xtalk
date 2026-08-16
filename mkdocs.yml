@@ -60,6 +60,7 @@ plugins:
             'App Tutorial': 桌面应用教程
             'Model Configuration': 模型配置
             'Add Tools': 添加工具
+            'Web Search': 联网搜索
             Quickstart: 快速开始
             'Technical Reference': 技术参考
             Recipe: 开发指南
@@ -119,6 +120,7 @@ nav:
   - 'App Tutorial':
       - 'Model Configuration': app_tutorial/model_configuration.md
       - 'Add Tools': app_tutorial/add_tools.md
+      - 'Web Search': app_tutorial/web_search.md
   - 'Technical Reference':
       - 'Overall Architecture': technical_reference/system_design.md
       - 'Supported Models': technical_reference/supported_models.md
