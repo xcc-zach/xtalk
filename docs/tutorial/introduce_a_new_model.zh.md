@@ -5,7 +5,7 @@
 
 ## 1. 导入模型接口和注册装饰器
 
-`EchoAgent` 属于已有模型类型 `Agent`，因此需要继承 `xtalk.model_types.Agent`。同时用 `@model` 将实现类注册到模型 registry 中。模型接口细节参考[ASR设计](../docs/asr_design.zh.md)等文档。
+`EchoAgent` 属于已有模型类型 `Agent`，因此需要继承 `xtalk.model_types.Agent`。同时用 `@model` 将实现类注册到模型 registry 中。模型接口细节参考[ASR设计](../technical_reference/asr_design.zh.md)等文档。
 
 ```python
 import asyncio

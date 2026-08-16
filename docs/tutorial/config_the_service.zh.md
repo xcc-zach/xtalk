@@ -79,7 +79,7 @@ class DefaultAgent(Agent):
 
 像 `voice_names`、`emotions` 和 `tools`（目前尚不支持在配置中使用）这样的可选键可以省略。
 
-完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../docs/supported_models.zh.md)。
+完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../technical_reference/supported_models.zh.md)。
 
 > **Note**
 > 大多数模型实现都是客户端适配器。您可能还需要按照相应说明启动模型实例本身。
@@ -120,7 +120,7 @@ xtalk_instance = (
     }
 ```
 
-完整的服务配置项列表，请参阅[所有服务配置项](../docs/service_config.zh.md)。
+完整的服务配置项列表，请参阅[所有服务配置项](service_config.zh.md)。
 
 
 ## 前端配置

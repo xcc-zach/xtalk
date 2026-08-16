@@ -5,7 +5,7 @@ You may want to introduce a new model for an existing model type, such as a new 
 
 ## 1. Import the Model Interface and Registration Decorator
 
-`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For model interface details, see [ASR Design](../docs/asr_design.md) and related documents.
+`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For model interface details, see [ASR Design](../technical_reference/asr_design.md) and related documents.
 
 ```python
 import asyncio
