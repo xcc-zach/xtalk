@@ -126,6 +126,7 @@ sidecar 再通过 XTalk 普通公开模型配置加载它。桌面端回退配�
 `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` 的 encoder、decoder、joiner、token
 表和英文词典由 `prepare_managed_runtime.py` 在构建时准备。唤醒监听产生的音频不会保存，
 也不会发送给 Python sidecar。
+声学触发阈值与唤醒词一同持久化，默认值为 `0.05`，并同时写入关键词定义和检测进程参数。
 
 关键词检测进程与 XTalk Session 不会同时占用麦克风。用户手动开始对话时，App 会先
 暂停关键词检测，再调用 `Session.open()`；对话结束后恢复检测。原生检测到唤醒词时，

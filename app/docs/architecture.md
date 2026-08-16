@@ -163,6 +163,8 @@ lexicon, then writes the active keyword file to AppData. The bilingual
 `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` encoder, decoder, joiner, token
 table, and English lexicon are staged by `prepare_managed_runtime.py`. No
 captured wake audio is stored or sent to the Python sidecar.
+The acoustic trigger threshold is persisted beside the phrase, defaults to
+`0.05`, and is written to both the keyword definition and detector arguments.
 
 The keyword spotter and an XTalk Session never own the microphone at the same
 time. Manual conversation start pauses the spotter before `Session.open()`;
