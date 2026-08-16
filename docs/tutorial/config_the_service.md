@@ -37,47 +37,34 @@ For example, the `DefaultAgent` for the `llm_agent` model type is defined in [`s
 ```python
 class DefaultAgent(Agent):
     def __init__(
-            self,
-            model: BaseChatModel | dict,
-            system_prompt: str = _BASE_PROMPT,
-            voice_names: Optional[List[str]] = None,
-            emotions: Optional[List[str]] = None,
-            tools: Optional[List[Union[BaseTool, Callable[[], BaseTool]]]] = None,
-        ):
-    ...
+        self,
+        model: BaseChatModel | dict[str, Any],
+        backchannel_model: BaseChatModel | dict[str, Any] | None = None,
+        backchannel_source_dir: str | Path | None = None,
+        tools: list[Tool | Callable[[], Tool]] | None = None,
+        system_prompt: str = "",
+        proactive: bool = False,
+    ) -> None:
+        ...
 ```
 
 To match those initialization arguments, the config item should look like:
-```
-"llm_agent": {
+```json
+{
+  "llm_agent": {
     "type": "DefaultAgent",
     "params": {
       "model": {
         "api_key": "none",
         "base_url": "http://127.0.0.1:8000/v1",
         "model": "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
-      },
-      "voice_names": [
-        "Man",
-        "Woman",
-        "Child"
-      ],
-      "emotions": [
-        "happy",
-        "angry",
-        "sad",
-        "fear",
-        "disgust",
-        "depressed",
-        "surprised",
-        "calm",
-        "normal"
-      ]
+      }
     }
-  },
+  }
+}
 ```
 
-Optional keys such as `voice_names`, `emotions`, and `tools` can be omitted. `tools` is not supported in config yet.
+Other optional keys can be ignored; only `model` is required.
 
 See [Supported Models](../technical_reference/supported_models.md) for the full list of model types, their optional dependencies, and where they are adapted in the source code.
 > **Note**
@@ -85,39 +72,42 @@ See [Supported Models](../technical_reference/supported_models.md) for the full 
 
 ## Staged configuration
 
-Use `Xtalk.from_config(...)` when the JSON file or configuration dictionary is
-already complete. Use `Xtalk.configure(...)` when Python code needs to modify
-the configuration before models are instantiated:
+Use `Xtalk.configure(...)` to add a Python tool to the Agent before models are
+instantiated:
 
 ```python
-def enable_recording(config: dict) -> dict:
-    updated_config = dict(config)
-    service_config = dict(updated_config.get("service_config", {}))
-    service_config["recording"] = True
-    updated_config["service_config"] = service_config
-    return updated_config
+from langchain_core.tools import tool
+from xtalk import Xtalk
+
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return a * b
+
+
+def add_multiply_tool(config: dict) -> dict:
+    agent_config = config["llm_agent"]
+    params = agent_config.setdefault("params", {})
+    params.setdefault("tools", []).append(multiply)
+    return config
 
 
 xtalk_instance = (
     Xtalk.configure("path/to/config.json")
-    .transform_config(enable_recording)
+    .transform_config(add_multiply_tool)
     .build()
 )
 ```
 
-`transform_config()` accepts a `dict -> dict` function. Transformations run in
-registration order and receive a structural copy of the source config.
-Prefer focused Builder methods such as `set_model()` and
-`add_agent_tools()` when they express the required change directly.
-
+Agent tools can also be added with the dedicated `.add_agent_tools([multiply])` method.
 
 ## Customize service behavior
 
-You can also customize service behavior, such as whether to save session audio under `logs/` and whether to send full session audio back to the client:
+You can also customize service behavior, such as whether to save session audio under `logs/`:
 ```json
     "service_config": {
-        "recording": true,
-        "send_full_audio_to_client": true
+        "recording": true
     }
 ```
 
@@ -141,6 +131,7 @@ const session = createSession(wsUrl, {
         enableVAD: true,
         enableEnhancer: true,
         vadRedemptionMs: 500,
+        frontendUtilitiesBaseUrl: "/xtalk/frontend-utilities",
     },
     outputConfig: {
         sampleRate: 48000,
@@ -166,6 +157,8 @@ const session = createSession(wsUrl, {
   Whether to enable frontend speech enhancement. The default is `true`.
 - `vadRedemptionMs`
   VAD redemption window in milliseconds. The default is `500`.
+- `frontendUtilitiesBaseUrl`
+  Base URL for browser-side ONNX Runtime, VAD, and FastEnhancer assets. The default is `/xtalk/frontend-utilities`. If ONNX Runtime or VAD assets are unavailable at the corresponding server path, the frontend loads them from public CDNs instead.
 
 ### outputConfig
 
