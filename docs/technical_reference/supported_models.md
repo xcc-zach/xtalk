@@ -254,6 +254,57 @@ Turn detector is used to determine whether the user has finished speaking and de
 
 </details>
 
+### Speaker Diarization
+
+**Name in config**: `speaker_diarization`
+
+<details markdown="1">
+<summary>CampPlusDiarization [Managed]</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/speaker_diarization/campplus.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/campplus.py)
+
+Extracts speaker embeddings through a CAM++ service, then clusters them and assigns speaker IDs within the current session.
+
+**[Managed] Inference backends:** supports `cpu`, `cuda`, and `coreml`. By default, it uses CUDA when available, otherwise Core ML when available, and CPU in all other cases.
+
+```json
+{
+  "type": "CampPlusDiarization",
+  "params": {
+    "base_url": "managed://campplus"
+  }
+}
+```
+
+</details>
+
+<details markdown="1">
+<summary>MossTranscribeDiarize [Managed]</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/speaker_diarization/moss_transcribe_diarize.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/moss_transcribe_diarize.py)
+
+Calls a MOSS Transcribe Diarize service and returns timestamped segments containing speaker IDs and transcribed text.
+
+**[Managed] Inference backends:** supports `cpu` and `metal`. By default, it uses Metal when available and CPU otherwise.
+
+```json
+{
+  "type": "MossTranscribeDiarize",
+  "params": {
+    "base_url": "managed://moss-transcribe-diarize",
+    "request_timeout_s": 30.0,
+    "temperature": 0.0,
+    "max_tokens": 2048
+  }
+}
+```
+
+</details>
+
 ### Speech Enhancement
 
 **Name in config**: `speech_enhancer`

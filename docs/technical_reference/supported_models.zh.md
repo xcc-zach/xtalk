@@ -250,6 +250,57 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 
 </details>
 
+### 说话人分离
+
+**配置中的名称**：`speaker_diarization`
+
+<details markdown="1">
+<summary>CampPlusDiarization [受管]</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/speaker_diarization/campplus.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/campplus.py)
+
+通过 CAM++ 服务提取说话人嵌入，并在当前会话中聚类和分配说话人编号。
+
+**[受管] 推理后端：** 支持 `cpu`、`cuda`、`coreml`。默认优先使用可用的 CUDA；否则使用可用的 Core ML；其他情况使用 CPU。
+
+```json
+{
+  "type": "CampPlusDiarization",
+  "params": {
+    "base_url": "managed://campplus"
+  }
+}
+```
+
+</details>
+
+<details markdown="1">
+<summary>MossTranscribeDiarize [受管]</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/speaker_diarization/moss_transcribe_diarize.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/moss_transcribe_diarize.py)
+
+调用 MOSS Transcribe Diarize 服务，返回带时间戳、说话人编号和文本的分段结果。
+
+**[受管] 推理后端：** 支持 `cpu`、`metal`。默认优先使用可用的 Metal，否则使用 CPU。
+
+```json
+{
+  "type": "MossTranscribeDiarize",
+  "params": {
+    "base_url": "managed://moss-transcribe-diarize",
+    "request_timeout_s": 30.0,
+    "temperature": 0.0,
+    "max_tokens": 2048
+  }
+}
+```
+
+</details>
+
 ### 语音增强
 
 **配置中的名称**：`speech_enhancer`
