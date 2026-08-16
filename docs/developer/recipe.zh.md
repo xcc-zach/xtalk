@@ -7,7 +7,7 @@
 假设要引入Qwen3ASRFlashRealtime，目前实现已经在[`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)。
 
 1. 在[`src/xtalk/models/asr`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/asr)下创建`qwen3_asr_flash_realtime.py`
-2. 准备骨架，并实现对应方法（各类模型接口参考[`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models)，模型接口细节参考[ASR设计](../docs/asr_design.zh.md)等文档）
+2. 准备骨架，并实现对应方法（各类模型接口参考[`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models)，模型接口细节参考[ASR设计](../technical_reference/asr_design.zh.md)等文档）
 ```python
 from xtalk import model
 

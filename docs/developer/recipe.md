@@ -7,7 +7,7 @@ The examples below show how to extend the framework by modifying it directly.
 Assume you want to add `Qwen3ASRFlashRealtime`, whose implementation currently lives in [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py).
 
 1. Create `qwen3_asr_flash_realtime.py` under [`src/xtalk/models/asr`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/asr).
-2. Prepare the class skeleton and implement the required methods. For model interfaces, refer to [`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models); for interface details, see docs such as [ASR Design](../docs/asr_design.md).
+2. Prepare the class skeleton and implement the required methods. For model interfaces, refer to [`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models); for interface details, see docs such as [ASR Design](../technical_reference/asr_design.md).
 
 ```python
 from xtalk import model

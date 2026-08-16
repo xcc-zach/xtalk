@@ -72,7 +72,7 @@ logs/test_templates/smoke/
 }
 ```
 
-其中 `type` 应与 TTS 模型的 Python 类名一致，`params` 应与该类的初始化参数一致。可用的 TTS 后端及其可选依赖请参阅 [Supported Models](../docs/supported_models.zh.md)。
+其中 `type` 应与 TTS 模型的 Python 类名一致，`params` 应与该类的初始化参数一致。可用的 TTS 后端及其可选依赖请参阅 [Supported Models](../technical_reference/supported_models.zh.md)。
 
 对于 `IndexTTS`，`voices` 中的每一项都需要：
 
