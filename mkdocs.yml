@@ -59,6 +59,7 @@ plugins:
             Tutorial: 教程
             'App Tutorial': 桌面应用教程
             'Model Configuration': 模型配置
+            'Add Tools': 添加工具
             Quickstart: 快速开始
             'Technical Reference': 技术参考
             Recipe: 开发指南
@@ -117,6 +118,7 @@ nav:
       - 'Tool Design': tutorial/tool_design.md
   - 'App Tutorial':
       - 'Model Configuration': app_tutorial/model_configuration.md
+      - 'Add Tools': app_tutorial/add_tools.md
   - 'Technical Reference':
       - 'Overall Architecture': technical_reference/system_design.md
       - 'Supported Models': technical_reference/supported_models.md
