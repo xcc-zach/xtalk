@@ -497,7 +497,7 @@ server speech boundaries before the configured ASR. This lets
 `server_configs/sample.json` work unchanged while preserving any explicit
 user-provided `vad` configuration.
 
-Background voice wake is opt-in. When enabled, closing the main window hides it
+Voice wake is opt-in. When enabled, closing the main window hides it
 to the system tray instead of exiting. Tauri supervises the packaged
 `sherpa-onnx-keyword-spotter-microphone` process and listens locally for the
 user-editable wake phrase, which defaults to `你好小克`; no wake audio is stored

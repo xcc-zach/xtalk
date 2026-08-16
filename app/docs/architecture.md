@@ -152,9 +152,9 @@ The model is pinned by upstream commit and SHA-256 in
 missing or changed file, and the installed application never downloads this
 base runtime asset.
 
-## Background voice wake
+## Voice wake
 
-Background voice wake is an explicit persisted user selection. Tauri owns a
+Voice wake is an explicit persisted user selection. Tauri owns a
 packaged `sherpa-onnx-keyword-spotter-microphone` process independently of the
 WebView audio pipeline and reads only its local keyword detections. The wake
 phrase is user-editable and defaults to `你好小克`. Tauri converts Chinese text
