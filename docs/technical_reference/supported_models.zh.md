@@ -1,17 +1,24 @@
 模型的*快速开始*仓库为开发中的便捷适配；如遇任何问题可直接在X-Talk仓库提Issue，并采用*原始仓库*启动服务。
 
+标题中的 `[受管]` 表示 X-Talk 桌面应用可以自动下载并启用该模型。条目中同时列出了可用的推理后端和自动选择后端时的默认规则。
+
 ### 语音识别
 
 **配置中的名称**：`asr`
 
 <details markdown="1">
-<summary>SherpaOnnx [推荐]</summary>
+<summary>SherpaOnnx [推荐] [受管]</summary>
 
 **依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
 **实现路径：** [`src/xtalk/models/asr/sherpa_onnx_asr.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/sherpa_onnx_asr.py)
 
 一个高性能的语音识别框架，并且不仅限于此。可运行多种语音识别模型。
+
+**[受管] 模型与推理后端：**
+
+- `sensevoice-small`：支持 `cpu`、`cuda`、`mlx`。默认优先使用可用的 CUDA；否则在受支持的 Apple Silicon 设备上使用 MLX；其他情况使用 CPU。
+- `qwen3-asr-0.6b-int8`：支持 `cpu`、`cuda`、`coreml`。默认优先使用可用的 CUDA；否则使用可用的 Core ML；其他情况使用 CPU。
 
 [快速开始](https://github.com/xcc-zach/xtalk-sherpa-onnx-asr)
 
@@ -31,7 +38,7 @@
 </details>
 
 <details markdown="1">
-<summary>AgenticASR</summary>
+<summary>AgenticASR [受管]</summary>
 
 **依赖：** `pip install "xtalk[agentic-asr] @ git+https://github.com/xcc-zach/xtalk.git@main"`
 
@@ -40,10 +47,11 @@
 结合 sherpa-onnx WebSocket ASR 与 AgenticASR K=3 滑窗精修的语音识别封装。
 `streaming` 模式使用 sherpa-onnx 在线 WebSocket 服务；`offline` 模式通过
 `MockStreamRecognizer` 包装离线 WebSocket 服务来模拟流式。Refiner 为
-OpenAI 兼容的 chat-completions 服务。XTalk Desktop 可通过
+OpenAI 兼容的 chat-completions 服务。X-Talk Desktop 可通过
 `managed://sensevoice-small` 和 `managed://agentic-asr-refiner` 自动下载并
-托管两个本地服务。不指定 `backend` 查询参数时，Apple Silicon 使用 MLX，
-受支持的 Windows/Linux CUDA 设备使用 CUDA，其他平台使用 ONNX CPU。
+托管两个本地服务。
+
+**[受管] 推理后端：** 支持 `cpu`、`cuda`、`mlx`。默认优先使用可用的 CUDA；否则在受支持的 Apple Silicon 设备上使用 MLX；其他情况使用 CPU。
 
 **配置参数：** `asr_base_url`（sherpa-onnx WebSocket 服务地址）、
 `refiner_base_url`（OpenAI 兼容的 Refiner 服务地址）、`asr_mode`
@@ -98,7 +106,7 @@ Desktop 托管配置：
 </details>
 
 <details markdown="1">
-<summary>MossTTSNano</summary>
+<summary>MossTTSNano [受管]</summary>
 
 **依赖：** 无
 
@@ -108,6 +116,8 @@ Desktop 托管配置：
 HTTP 客户端。各端统一使用 multipart `POST /api/generate`，字段为 `text` 和 `prompt_audio`，
 返回 base64 PCM16 WAV；客户端输出固定为 48 kHz 单声道 PCM16。`voices` 与
 IndexTTS 一样使用 `{name, path}` 配置。
+
+**[受管] 推理后端：** 支持 `cpu`、`cuda`、`mlx`。默认优先使用可用的 CUDA；否则在受支持的 Apple Silicon 设备上使用 MLX；其他情况使用 CPU。
 
 ```json
 {
@@ -151,13 +161,15 @@ PCM 音频。
 </details>
 
 <details markdown="1">
-<summary>SherpaOnnxTTS</summary>
+<summary>SherpaOnnxTTS [受管]</summary>
 
 **依赖：** 无
 
 **路径：** [`src/xtalk/models/tts/sherpa_onnx_tts.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/sherpa_onnx_tts.py)
 
 本地 sherpa-onnx Matcha 中英 TTS 服务的 HTTP 客户端。向 `/v1/audio/speech` 提交文本，输出固定为 48 kHz 单声道 PCM16。
+
+**[受管] 推理后端：** 支持 `cpu`、`cuda`。默认优先使用可用的 CUDA，否则使用 CPU。
 
 **配置参数：** 仅 `base_url`。
 
