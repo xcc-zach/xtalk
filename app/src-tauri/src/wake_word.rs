@@ -33,10 +33,12 @@ const TOKENS_FILE: &str = "tokens.txt";
 const ENGLISH_LEXICON_FILE: &str = "en.phone";
 const GENERATED_KEYWORDS_FILE: &str = "wake-word-keywords.txt";
 const DEFAULT_WAKE_PHRASE: &str = "你好小克";
+const DEFAULT_WAKE_THRESHOLD: f32 = 0.05;
 const MAX_WAKE_PHRASE_CHARS: usize = 32;
 const STATUS_EVENT: &str = "wake-word-status-changed";
 const DETECTED_EVENT: &str = "wake-word-detected";
 const STARTUP_SETTLE_TIME: Duration = Duration::from_millis(300);
+const MAX_KEYWORD_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// Runtime state exposed to the trusted desktop WebView.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -62,6 +64,8 @@ pub(crate) struct NativeWakeWordSettings {
     pub(crate) enabled: bool,
     /// User-selected phrase recognized by the generated keyword file.
     pub(crate) phrase: String,
+    /// Minimum acoustic probability required to trigger the wake phrase.
+    pub(crate) threshold: f32,
     /// Current detector lifecycle state.
     pub(crate) state: WakeWordState,
     /// Last startup or runtime failure, when one exists.
@@ -82,6 +86,8 @@ struct PersistedWakeWordSettings {
     enabled: bool,
     #[serde(default = "default_wake_phrase")]
     phrase: String,
+    #[serde(default = "default_wake_threshold")]
+    threshold: f32,
 }
 
 struct WakeWordRuntimeState {
@@ -95,6 +101,7 @@ struct WakeWordRuntimeState {
 pub(crate) struct WakeWordSupervisor {
     enabled: AtomicBool,
     phrase: Mutex<String>,
+    threshold: Mutex<f32>,
     operation_gate: Mutex<()>,
     runtime: Mutex<WakeWordRuntimeState>,
 }
@@ -107,6 +114,7 @@ impl WakeWordSupervisor {
         let supervisor = Arc::new(Self {
             enabled: AtomicBool::new(enabled),
             phrase: Mutex::new(settings.phrase),
+            threshold: Mutex::new(settings.threshold),
             operation_gate: Mutex::new(()),
             runtime: Mutex::new(WakeWordRuntimeState {
                 child: None,
@@ -135,10 +143,12 @@ impl WakeWordSupervisor {
     /// Returns the persisted selection and current detector state.
     pub(crate) async fn settings(&self) -> NativeWakeWordSettings {
         let phrase = self.phrase.lock().await.clone();
+        let threshold = *self.threshold.lock().await;
         let runtime = self.runtime.lock().await;
         NativeWakeWordSettings {
             enabled: self.is_enabled(),
             phrase,
+            threshold,
             state: runtime.state,
             last_error: runtime.last_error.clone(),
         }
@@ -163,7 +173,8 @@ impl WakeWordSupervisor {
         if enabled {
             if !listen_immediately {
                 let phrase = self.phrase.lock().await.clone();
-                WakeWordResources::resolve(app, &phrase)?;
+                let threshold = *self.threshold.lock().await;
+                WakeWordResources::resolve(app, &phrase, threshold)?;
             }
             self.enabled.store(true, Ordering::Release);
             if listen_immediately {
@@ -180,12 +191,14 @@ impl WakeWordSupervisor {
                 self.emit_status(app).await;
             }
             let phrase = self.phrase.lock().await.clone();
-            persist_settings(app, true, &phrase)?;
+            let threshold = *self.threshold.lock().await;
+            persist_settings(app, true, &phrase, threshold)?;
         } else {
             self.enabled.store(false, Ordering::Release);
             self.stop(WakeWordState::Disabled).await;
             let phrase = self.phrase.lock().await.clone();
-            persist_settings(app, false, &phrase)?;
+            let threshold = *self.threshold.lock().await;
+            persist_settings(app, false, &phrase, threshold)?;
             self.emit_status(app).await;
         }
         Ok(self.settings().await)
@@ -199,17 +212,50 @@ impl WakeWordSupervisor {
         listen_immediately: bool,
     ) -> Result<NativeWakeWordSettings, WakeWordError> {
         let phrase = normalize_wake_phrase(&phrase)?;
-        WakeWordResources::resolve(app, &phrase)?;
+        let threshold = *self.threshold.lock().await;
+        WakeWordResources::resolve(app, &phrase, threshold)?;
         if phrase == *self.phrase.lock().await {
             return Ok(self.settings().await);
         }
 
         let enabled = self.is_enabled();
-        persist_settings(app, enabled, &phrase)?;
+        persist_settings(app, enabled, &phrase, threshold)?;
         if enabled {
             self.stop(WakeWordState::Paused).await;
         }
         *self.phrase.lock().await = phrase;
+
+        if enabled && listen_immediately {
+            if let Err(error) = self.start(app).await {
+                self.set_error(app, error.to_string()).await;
+                return Err(error);
+            }
+        } else {
+            self.emit_status(app).await;
+        }
+        Ok(self.settings().await)
+    }
+
+    /// Updates the acoustic trigger threshold and restarts listening when appropriate.
+    pub(crate) async fn set_threshold(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        threshold: f32,
+        listen_immediately: bool,
+    ) -> Result<NativeWakeWordSettings, WakeWordError> {
+        let threshold = normalize_wake_threshold(threshold)?;
+        let phrase = self.phrase.lock().await.clone();
+        WakeWordResources::resolve(app, &phrase, threshold)?;
+        if threshold == *self.threshold.lock().await {
+            return Ok(self.settings().await);
+        }
+
+        let enabled = self.is_enabled();
+        persist_settings(app, enabled, &phrase, threshold)?;
+        if enabled {
+            self.stop(WakeWordState::Paused).await;
+        }
+        *self.threshold.lock().await = threshold;
 
         if enabled && listen_immediately {
             if let Err(error) = self.start(app).await {
@@ -256,7 +302,8 @@ impl WakeWordSupervisor {
         }
 
         let phrase = self.phrase.lock().await.clone();
-        let resources = WakeWordResources::resolve(app, &phrase)?;
+        let threshold = *self.threshold.lock().await;
+        let resources = WakeWordResources::resolve(app, &phrase, threshold)?;
         let runtime_dir = app
             .path()
             .resolve(SHERPA_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
@@ -271,7 +318,8 @@ impl WakeWordSupervisor {
 
         let args = resources.command_args();
         let command = app.shell().sidecar(SIDECAR_NAME)?.args(args);
-        let command = crate::managed::configure_library_path(command, &runtime_dir);
+        let command =
+            crate::managed::configure_library_path(command, &runtime_dir).set_raw_out(true);
         let (events, child) = command.spawn()?;
         {
             let mut runtime = self.runtime.lock().await;
@@ -317,10 +365,18 @@ impl WakeWordSupervisor {
         mut events: tauri::async_runtime::Receiver<CommandEvent>,
         generation: u64,
     ) {
+        let mut stdout = KeywordOutputBuffer::default();
+        let mut stderr = KeywordOutputBuffer::default();
         while let Some(event) = events.recv().await {
             match event {
-                CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                    if extract_keyword(&line).is_some() {
+                CommandEvent::Stdout(chunk) => {
+                    if stdout.push(&chunk).is_some() {
+                        self.handle_detection(&app, generation).await;
+                        return;
+                    }
+                }
+                CommandEvent::Stderr(chunk) => {
+                    if stderr.push(&chunk).is_some() {
                         self.handle_detection(&app, generation).await;
                         return;
                     }
@@ -407,10 +463,11 @@ struct WakeWordResources {
     joiner: PathBuf,
     tokens: PathBuf,
     keywords: PathBuf,
+    threshold: f32,
 }
 
 impl WakeWordResources {
-    fn resolve(app: &AppHandle, phrase: &str) -> Result<Self, WakeWordError> {
+    fn resolve(app: &AppHandle, phrase: &str, threshold: f32) -> Result<Self, WakeWordError> {
         let root = app
             .path()
             .resolve(MODEL_RESOURCE, BaseDirectory::Resource)?;
@@ -425,6 +482,7 @@ impl WakeWordResources {
             &keywords,
             build_keyword_definition(
                 phrase,
+                threshold,
                 &fs::read_to_string(&tokens)?,
                 &fs::read_to_string(english_lexicon)?,
             )?,
@@ -435,6 +493,7 @@ impl WakeWordResources {
             joiner: require_resource(&root, JOINER_FILE)?,
             tokens,
             keywords,
+            threshold,
         })
     }
 
@@ -448,7 +507,7 @@ impl WakeWordResources {
             "--provider=cpu".to_owned(),
             "--num-threads=1".to_owned(),
             "--keywords-score=3.0".to_owned(),
-            "--keywords-threshold=0.25".to_owned(),
+            format!("--keywords-threshold={}", self.threshold),
         ]
     }
 }
@@ -488,6 +547,7 @@ fn normalize_wake_phrase(phrase: &str) -> Result<String, WakeWordError> {
 
 fn build_keyword_definition(
     phrase: &str,
+    threshold: f32,
     tokens_content: &str,
     english_lexicon_content: &str,
 ) -> Result<String, WakeWordError> {
@@ -541,7 +601,7 @@ fn build_keyword_definition(
         }
     }
     let label = phrase.replace(' ', "_");
-    Ok(format!("{} :3.0 #0.25 @{label}\n", tokens.join(" ")))
+    Ok(format!("{} :3.0 #{threshold} @{label}\n", tokens.join(" ")))
 }
 
 const PINYIN_INITIALS: [&str; 23] = [
@@ -597,8 +657,49 @@ fn extract_keyword(line: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
+#[derive(Default)]
+struct KeywordOutputBuffer {
+    bytes: Vec<u8>,
+}
+
+impl KeywordOutputBuffer {
+    fn push(&mut self, chunk: &[u8]) -> Option<String> {
+        self.bytes.extend_from_slice(chunk);
+        loop {
+            let Some(start) = self.bytes.iter().position(|byte| *byte == b'{') else {
+                self.bytes.clear();
+                return None;
+            };
+            if start > 0 {
+                self.bytes.drain(..start);
+            }
+            let Some(end) = self.bytes.iter().position(|byte| *byte == b'}') else {
+                if self.bytes.len() > MAX_KEYWORD_OUTPUT_BYTES {
+                    self.bytes.clear();
+                }
+                return None;
+            };
+            let payload = self.bytes.drain(..=end).collect::<Vec<_>>();
+            if let Some(keyword) = extract_keyword(&payload) {
+                return Some(keyword);
+            }
+        }
+    }
+}
+
 fn default_wake_phrase() -> String {
     DEFAULT_WAKE_PHRASE.to_owned()
+}
+
+fn default_wake_threshold() -> f32 {
+    DEFAULT_WAKE_THRESHOLD
+}
+
+fn normalize_wake_threshold(threshold: f32) -> Result<f32, WakeWordError> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(WakeWordError::InvalidThreshold);
+    }
+    Ok(threshold)
 }
 
 fn default_settings() -> PersistedWakeWordSettings {
@@ -606,6 +707,7 @@ fn default_settings() -> PersistedWakeWordSettings {
         version: SETTINGS_VERSION,
         enabled: false,
         phrase: default_wake_phrase(),
+        threshold: default_wake_threshold(),
     }
 }
 
@@ -621,7 +723,12 @@ fn load_settings(app: &AppHandle) -> Result<PersistedWakeWordSettings, WakeWordE
     Ok(settings)
 }
 
-fn persist_settings(app: &AppHandle, enabled: bool, phrase: &str) -> Result<(), WakeWordError> {
+fn persist_settings(
+    app: &AppHandle,
+    enabled: bool,
+    phrase: &str,
+    threshold: f32,
+) -> Result<(), WakeWordError> {
     let path = settings_path(app)?;
     let parent = path.parent().ok_or(WakeWordError::InvalidSettingsPath)?;
     fs::create_dir_all(parent)?;
@@ -631,6 +738,7 @@ fn persist_settings(app: &AppHandle, enabled: bool, phrase: &str) -> Result<(), 
             version: SETTINGS_VERSION,
             enabled,
             phrase: phrase.to_owned(),
+            threshold,
         })?,
     )?;
     Ok(())
@@ -649,6 +757,9 @@ pub(crate) enum WakeWordError {
     /// The requested phrase cannot be represented safely.
     #[error("invalid wake phrase: {0}")]
     InvalidPhrase(String),
+    /// The acoustic trigger threshold is outside the supported probability range.
+    #[error("the wake-word threshold must be a finite number between 0 and 1")]
+    InvalidThreshold,
     /// An English word is absent from the packaged pronunciation lexicon.
     #[error("unsupported English word in wake phrase: {0}")]
     UnsupportedEnglishWord(String),
@@ -680,7 +791,9 @@ pub(crate) enum WakeWordError {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_keyword_definition, extract_keyword, PersistedWakeWordSettings};
+    use super::{
+        build_keyword_definition, extract_keyword, KeywordOutputBuffer, PersistedWakeWordSettings,
+    };
 
     #[test]
     fn extracts_keyword_from_sherpa_display_output() {
@@ -696,12 +809,27 @@ mod tests {
     }
 
     #[test]
+    fn extracts_first_keyword_without_waiting_for_a_newline() {
+        let mut output = KeywordOutputBuffer::default();
+
+        assert_eq!(output.push(b"\r0:{\"key"), None);
+        assert_eq!(
+            output.push(b"word\":\"\xe4\xbd\xa0\xe5\xa5\xbd\xe5\xb0\x8f\xe5\x85\x8b\","),
+            None
+        );
+        assert_eq!(
+            output.push(b"\"tokens\":[\"n\"]}").as_deref(),
+            Some("你好小克")
+        );
+    }
+
+    #[test]
     fn converts_chinese_wake_phrase_to_toned_pinyin_tokens() {
         let tokens = "n 1\nǐ 2\nh 3\nǎo 4\nx 5\niǎo 6\nk 7\nè 8\n";
 
         assert_eq!(
-            build_keyword_definition("你好小克", tokens, "").unwrap(),
-            "n ǐ h ǎo x iǎo k è :3.0 #0.25 @你好小克\n"
+            build_keyword_definition("你好小克", 0.1, tokens, "").unwrap(),
+            "n ǐ h ǎo x iǎo k è :3.0 #0.1 @你好小克\n"
         );
     }
 
@@ -710,8 +838,8 @@ mod tests {
         let tokens = "ń 1\nh 2\nēng 3\n";
 
         assert_eq!(
-            build_keyword_definition("嗯哼", tokens, "").unwrap(),
-            "ń h ēng :3.0 #0.25 @嗯哼\n"
+            build_keyword_definition("嗯哼", 0.1, tokens, "").unwrap(),
+            "ń h ēng :3.0 #0.1 @嗯哼\n"
         );
     }
 
@@ -721,8 +849,8 @@ mod tests {
         let lexicon = "HELLO HH AH0 L OW1\nWORLD W ER1 L D\n";
 
         assert_eq!(
-            build_keyword_definition("hello world", tokens, lexicon).unwrap(),
-            "HH AH0 L OW1 W ER1 L D :3.0 #0.25 @hello_world\n"
+            build_keyword_definition("hello world", 0.1, tokens, lexicon).unwrap(),
+            "HH AH0 L OW1 W ER1 L D :3.0 #0.1 @hello_world\n"
         );
     }
 
@@ -732,5 +860,6 @@ mod tests {
             serde_json::from_str(r#"{"version":1,"enabled":true}"#).unwrap();
 
         assert_eq!(settings.phrase, "你好小克");
+        assert_eq!(settings.threshold, 0.05);
     }
 }

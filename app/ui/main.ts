@@ -27,6 +27,7 @@ import {
   setNativeToolEnabled,
   setNativeWakeWordEnabled,
   setNativeWakeWordPhrase,
+  setNativeWakeWordThreshold,
   type NativeBackendConnection,
   type NativeManagedModelProgress,
   type NativeCredentialDefinition,
@@ -166,6 +167,9 @@ const elements = {
   ),
   wakeWordPhraseInput: requireElement<HTMLInputElement>(
     "wake-word-phrase-input",
+  ),
+  wakeWordThresholdInput: requireElement<HTMLInputElement>(
+    "wake-word-threshold-input",
   ),
   wakeWordSummary: requireElement<HTMLElement>("wake-word-summary"),
   developerToolsList: requireElement<HTMLElement>("developer-tools-list"),
@@ -2396,11 +2400,13 @@ function renderWakeWordSettings(settings: NativeWakeWordSettings): void {
   wakeWordSettings = settings;
   elements.wakeWordEnabledToggle.checked = settings.enabled;
   elements.wakeWordPhraseInput.value = settings.phrase;
+  elements.wakeWordThresholdInput.value = String(settings.threshold);
   elements.wakeWordSummary.textContent = t(
     WAKE_WORD_SUMMARY_KEYS[settings.state],
   );
   elements.wakeWordEnabledToggle.disabled = wakeWordOperation;
   elements.wakeWordPhraseInput.disabled = wakeWordOperation;
+  elements.wakeWordThresholdInput.disabled = wakeWordOperation;
 }
 
 function renderCredentials(items: NativeCredentialDefinition[]): void {
@@ -2485,6 +2491,8 @@ function updateToolControls(): void {
   elements.wakeWordEnabledToggle.disabled =
     wakeWordOperation || wakeWordSettings === null;
   elements.wakeWordPhraseInput.disabled =
+    wakeWordOperation || wakeWordSettings === null;
+  elements.wakeWordThresholdInput.disabled =
     wakeWordOperation || wakeWordSettings === null;
   for (const control of elements.developerToolsList.querySelectorAll<
     HTMLInputElement | HTMLButtonElement
@@ -2598,6 +2606,49 @@ async function updateWakeWordPhrase(phrase: string): Promise<void> {
       latestSnapshot.connectionState === "reconnecting";
     renderWakeWordSettings(
       await setNativeWakeWordPhrase(phrase, !conversationActive),
+    );
+  } catch (error) {
+    await refreshWakeWordSettings().catch(() => undefined);
+    showError("wakeWord.updateFailed", { error });
+  } finally {
+    wakeWordOperation = false;
+    if (wakeWordSettings !== null) {
+      renderWakeWordSettings(wakeWordSettings);
+    }
+  }
+}
+
+async function updateWakeWordThreshold(rawThreshold: string): Promise<void> {
+  if (wakeWordOperation || wakeWordSettings === null) {
+    return;
+  }
+  if (!rawThreshold.trim()) {
+    elements.wakeWordThresholdInput.value = String(wakeWordSettings.threshold);
+    return;
+  }
+  const threshold = Number(rawThreshold);
+  if (
+    !Number.isFinite(threshold) ||
+    threshold < 0 ||
+    threshold > 1
+  ) {
+    elements.wakeWordThresholdInput.value = String(wakeWordSettings.threshold);
+    return;
+  }
+  if (threshold === wakeWordSettings.threshold) {
+    elements.wakeWordThresholdInput.value = String(wakeWordSettings.threshold);
+    return;
+  }
+  wakeWordOperation = true;
+  elements.wakeWordEnabledToggle.disabled = true;
+  elements.wakeWordPhraseInput.disabled = true;
+  elements.wakeWordThresholdInput.disabled = true;
+  try {
+    const conversationActive =
+      latestSnapshot.connectionState === "connected" ||
+      latestSnapshot.connectionState === "reconnecting";
+    renderWakeWordSettings(
+      await setNativeWakeWordThreshold(threshold, !conversationActive),
     );
   } catch (error) {
     await refreshWakeWordSettings().catch(() => undefined);
@@ -3443,6 +3494,15 @@ elements.wakeWordPhraseInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     elements.wakeWordPhraseInput.blur();
+  }
+});
+elements.wakeWordThresholdInput.addEventListener("change", () => {
+  void updateWakeWordThreshold(elements.wakeWordThresholdInput.value);
+});
+elements.wakeWordThresholdInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    elements.wakeWordThresholdInput.blur();
   }
 });
 elements.credentialForm.addEventListener("submit", (event) => {
