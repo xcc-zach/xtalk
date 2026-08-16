@@ -46,6 +46,7 @@ pub fn run() {
             resume_wake_word,
             set_wake_word_enabled,
             set_wake_word_phrase,
+            set_wake_word_threshold,
             shutdown_backend,
             show_whiteboard_window,
             hide_whiteboard_window,
@@ -239,6 +240,20 @@ async fn set_wake_word_phrase(
     supervisor
         .inner()
         .set_phrase(&app, phrase, listen_immediately)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn set_wake_word_threshold(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<WakeWordSupervisor>>,
+    threshold: f32,
+    listen_immediately: bool,
+) -> Result<NativeWakeWordSettings, String> {
+    supervisor
+        .inner()
+        .set_threshold(&app, threshold, listen_immediately)
         .await
         .map_err(|error| error.to_string())
 }

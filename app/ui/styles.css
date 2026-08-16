@@ -1729,7 +1729,8 @@ summary,
   -webkit-user-select: text;
 }
 
-.wake-word-phrase-field input {
+.wake-word-phrase-field input,
+.wake-word-value-field input {
   width: 100%;
   min-height: 36px;
   padding: 7px 9px;
@@ -1741,7 +1742,8 @@ summary,
   font-size: 13px;
 }
 
-.wake-word-phrase-field input:focus {
+.wake-word-phrase-field input:focus,
+.wake-word-value-field input:focus {
   border-color: var(--primary);
   outline: none;
 }

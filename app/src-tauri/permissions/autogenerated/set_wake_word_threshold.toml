@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-wake-word-threshold"
+description = "Enables the set_wake_word_threshold command without any pre-configured scope."
+commands.allow = ["set_wake_word_threshold"]
+
+[[permission]]
+identifier = "deny-set-wake-word-threshold"
+description = "Denies the set_wake_word_threshold command without any pre-configured scope."
+commands.deny = ["set_wake_word_threshold"]

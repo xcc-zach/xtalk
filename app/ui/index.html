@@ -140,16 +140,11 @@
             </summary>
             <div class="settings-accordion-content settings-section">
               <label class="wake-word-setting">
-                <span>
-                  <strong data-i18n="wakeWord.enable">启用后台语音唤醒</strong>
-                  <small data-i18n="wakeWord.description">
-                    关闭窗口后继续在本机监听唤醒词。
-                  </small>
-                </span>
+                <strong data-i18n="wakeWord.enable">语音唤醒</strong>
                 <input
                   id="wake-word-enabled-toggle"
                   type="checkbox"
-                  aria-label="启用后台语音唤醒"
+                  aria-label="语音唤醒"
                   data-i18n-aria-label="wakeWord.enableLabel"
                 />
               </label>
@@ -166,6 +161,20 @@
                   data-i18n-aria-label="wakeWord.phrase"
                   placeholder="输入中文或英文唤醒词"
                   data-i18n-placeholder="wakeWord.phrasePlaceholder"
+                />
+              </label>
+              <label class="settings-path wake-word-value-field">
+                <span data-i18n="wakeWord.threshold">阈值</span>
+                <input
+                  id="wake-word-threshold-input"
+                  type="number"
+                  value="0.05"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  inputmode="decimal"
+                  aria-label="阈值"
+                  data-i18n-aria-label="wakeWord.threshold"
                 />
               </label>
             </div>

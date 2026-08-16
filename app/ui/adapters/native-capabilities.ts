@@ -50,6 +50,8 @@ export interface NativeWakeWordSettings {
   enabled: boolean;
   /** User-selected phrase recognized by the generated keyword file. */
   phrase: string;
+  /** Minimum acoustic probability required to trigger the wake phrase. */
+  threshold: number;
   /** Current native detector lifecycle state. */
   state: NativeWakeWordState;
   /** Latest detector failure, or `null` while healthy. */
@@ -134,6 +136,7 @@ const DELETE_CREDENTIAL_COMMAND = "delete_credential";
 const WAKE_WORD_SETTINGS_COMMAND = "get_wake_word_settings";
 const SET_WAKE_WORD_ENABLED_COMMAND = "set_wake_word_enabled";
 const SET_WAKE_WORD_PHRASE_COMMAND = "set_wake_word_phrase";
+const SET_WAKE_WORD_THRESHOLD_COMMAND = "set_wake_word_threshold";
 const PAUSE_WAKE_WORD_COMMAND = "pause_wake_word";
 const RESUME_WAKE_WORD_COMMAND = "resume_wake_word";
 const WAKE_WORD_DETECTED_EVENT = "wake-word-detected";
@@ -295,6 +298,26 @@ export async function setNativeWakeWordPhrase(
   return parseNativeWakeWordSettings(
     await invoke<unknown>(SET_WAKE_WORD_PHRASE_COMMAND, {
       phrase,
+      listenImmediately,
+    }),
+  );
+}
+
+/**
+ * Updates the persisted acoustic trigger threshold for wake-word detection.
+ *
+ * @param threshold Probability between zero and one required for detection.
+ * @param listenImmediately Whether the updated detector should claim the microphone now.
+ * @returns Updated native detector state.
+ */
+export async function setNativeWakeWordThreshold(
+  threshold: number,
+  listenImmediately: boolean,
+): Promise<NativeWakeWordSettings> {
+  requireTauriRuntime();
+  return parseNativeWakeWordSettings(
+    await invoke<unknown>(SET_WAKE_WORD_THRESHOLD_COMMAND, {
+      threshold,
       listenImmediately,
     }),
   );
@@ -597,10 +620,15 @@ function parseNativeWakeWordSettings(payload: unknown): NativeWakeWordSettings {
   }
   const state = payload.state;
   const lastError = payload.lastError;
+  const threshold = payload.threshold;
   if (
     typeof payload.enabled !== "boolean" ||
     typeof payload.phrase !== "string" ||
     !payload.phrase.trim() ||
+    typeof threshold !== "number" ||
+    !Number.isFinite(threshold) ||
+    threshold < 0 ||
+    threshold > 1 ||
     !["disabled", "starting", "listening", "paused", "error"].includes(
       String(state),
     ) ||
@@ -611,6 +639,7 @@ function parseNativeWakeWordSettings(payload: unknown): NativeWakeWordSettings {
   return {
     enabled: payload.enabled,
     phrase: payload.phrase,
+    threshold,
     state: state as NativeWakeWordState,
     lastError,
   };
