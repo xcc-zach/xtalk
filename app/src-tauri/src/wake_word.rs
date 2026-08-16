@@ -32,7 +32,7 @@ const JOINER_FILE: &str = "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx";
 const TOKENS_FILE: &str = "tokens.txt";
 const ENGLISH_LEXICON_FILE: &str = "en.phone";
 const GENERATED_KEYWORDS_FILE: &str = "wake-word-keywords.txt";
-const DEFAULT_WAKE_PHRASE: &str = "你好小克";
+const DEFAULT_WAKE_PHRASE: &str = "";
 const DEFAULT_WAKE_THRESHOLD: f32 = 0.05;
 const MAX_WAKE_PHRASE_CHARS: usize = 32;
 const STATUS_EVENT: &str = "wake-word-status-changed";
@@ -110,7 +110,10 @@ impl WakeWordSupervisor {
     /// Loads the user's persisted selection and starts listening when enabled.
     pub(crate) async fn initialize(app: &AppHandle) -> Arc<Self> {
         let settings = load_settings(app).unwrap_or_else(|_| default_settings());
-        let enabled = settings.enabled;
+        let enabled = wake_word_is_effectively_enabled(settings.enabled, &settings.phrase);
+        if settings.enabled != enabled {
+            let _ = persist_settings(app, enabled, &settings.phrase, settings.threshold);
+        }
         let supervisor = Arc::new(Self {
             enabled: AtomicBool::new(enabled),
             phrase: Mutex::new(settings.phrase),
@@ -161,6 +164,8 @@ impl WakeWordSupervisor {
         enabled: bool,
         listen_immediately: bool,
     ) -> Result<NativeWakeWordSettings, WakeWordError> {
+        let phrase = self.phrase.lock().await.clone();
+        let enabled = wake_word_is_effectively_enabled(enabled, &phrase);
         if enabled == self.is_enabled() {
             if enabled && listen_immediately {
                 self.resume(app).await?;
@@ -211,6 +216,15 @@ impl WakeWordSupervisor {
         phrase: String,
         listen_immediately: bool,
     ) -> Result<NativeWakeWordSettings, WakeWordError> {
+        if phrase.trim().is_empty() {
+            let threshold = *self.threshold.lock().await;
+            self.enabled.store(false, Ordering::Release);
+            self.stop(WakeWordState::Disabled).await;
+            *self.phrase.lock().await = String::new();
+            persist_settings(app, false, "", threshold)?;
+            self.emit_status(app).await;
+            return Ok(self.settings().await);
+        }
         let phrase = normalize_wake_phrase(&phrase)?;
         let threshold = *self.threshold.lock().await;
         WakeWordResources::resolve(app, &phrase, threshold)?;
@@ -245,7 +259,9 @@ impl WakeWordSupervisor {
     ) -> Result<NativeWakeWordSettings, WakeWordError> {
         let threshold = normalize_wake_threshold(threshold)?;
         let phrase = self.phrase.lock().await.clone();
-        WakeWordResources::resolve(app, &phrase, threshold)?;
+        if !phrase.trim().is_empty() {
+            WakeWordResources::resolve(app, &phrase, threshold)?;
+        }
         if threshold == *self.threshold.lock().await {
             return Ok(self.settings().await);
         }
@@ -691,6 +707,10 @@ fn default_wake_phrase() -> String {
     DEFAULT_WAKE_PHRASE.to_owned()
 }
 
+fn wake_word_is_effectively_enabled(enabled: bool, phrase: &str) -> bool {
+    enabled && !phrase.trim().is_empty()
+}
+
 fn default_wake_threshold() -> f32 {
     DEFAULT_WAKE_THRESHOLD
 }
@@ -792,7 +812,8 @@ pub(crate) enum WakeWordError {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_keyword_definition, extract_keyword, KeywordOutputBuffer, PersistedWakeWordSettings,
+        build_keyword_definition, extract_keyword, wake_word_is_effectively_enabled,
+        KeywordOutputBuffer, PersistedWakeWordSettings,
     };
 
     #[test]
@@ -855,11 +876,19 @@ mod tests {
     }
 
     #[test]
-    fn loads_default_phrase_from_legacy_settings() {
+    fn loads_empty_default_phrase_from_legacy_settings() {
         let settings: PersistedWakeWordSettings =
             serde_json::from_str(r#"{"version":1,"enabled":true}"#).unwrap();
 
-        assert_eq!(settings.phrase, "你好小克");
+        assert_eq!(settings.phrase, "");
         assert_eq!(settings.threshold, 0.05);
+    }
+
+    #[test]
+    fn treats_an_empty_wake_phrase_as_disabled() {
+        assert!(!wake_word_is_effectively_enabled(true, ""));
+        assert!(!wake_word_is_effectively_enabled(true, "   "));
+        assert!(wake_word_is_effectively_enabled(true, "hello"));
+        assert!(!wake_word_is_effectively_enabled(false, "hello"));
     }
 }
