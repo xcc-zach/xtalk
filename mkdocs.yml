@@ -61,6 +61,7 @@ plugins:
             'Model Configuration': 模型配置
             'Add Tools': 添加工具
             'Web Search': 联网搜索
+            'Voice Wake': 语音唤醒
             Quickstart: 快速开始
             'Technical Reference': 技术参考
             Recipe: 开发指南
@@ -121,6 +122,7 @@ nav:
       - 'Model Configuration': app_tutorial/model_configuration.md
       - 'Add Tools': app_tutorial/add_tools.md
       - 'Web Search': app_tutorial/web_search.md
+      - 'Voice Wake': app_tutorial/voice_wake.md
   - 'Technical Reference':
       - 'Overall Architecture': technical_reference/system_design.md
       - 'Supported Models': technical_reference/supported_models.md
