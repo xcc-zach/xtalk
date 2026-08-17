@@ -154,10 +154,11 @@ base runtime asset.
 
 ## Voice wake
 
-Voice wake is an explicit persisted user selection. Tauri owns a
+Voice wake is enabled by default with the phrase `你好小克`; subsequent user
+changes to the phrase or enabled state are persisted. Tauri owns a
 packaged `sherpa-onnx-keyword-spotter-microphone` process independently of the
 WebView audio pipeline and reads only its local keyword detections. The wake
-phrase is user-editable and defaults to `你好小克`. Tauri converts Chinese text
+phrase is user-editable. Tauri converts Chinese text
 to tone-marked pinyin tokens and English words through the packaged `en.phone`
 lexicon, then writes the active keyword file to AppData. The bilingual
 `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` encoder, decoder, joiner, token

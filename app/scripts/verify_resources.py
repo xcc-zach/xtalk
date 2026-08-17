@@ -53,7 +53,7 @@ REQUIRED_NATIVE_RUNTIME_TARGETS = {
     "aarch64-pc-windows-msvc",
     "x86_64-pc-windows-msvc",
 }
-REQUIRED_BUILTIN_TOOL_IDS = {"current_time", "web_search"}
+REQUIRED_BUILTIN_TOOL_IDS = {"current_time", "sleep", "web_search"}
 BUILTIN_TOOLS_PATH = APP_ROOT / "resources" / "tools"
 CREDENTIALS_PATH = APP_ROOT / "resources" / "credentials.json"
 
@@ -621,11 +621,14 @@ def verify_builtin_tools_and_credentials() -> None:
         raise ValueError(
             f"missing required built-in tools: {', '.join(sorted(missing_tools))}"
         )
-    current_time = next(
-        entry for entry in catalog["tools"] if entry["id"] == "current_time"
-    )
-    if current_time.get("can_disable", True):
-        raise ValueError("the current-time built-in must remain enabled")
+    for required_tool in ("current_time", "sleep"):
+        entry = next(
+            item for item in catalog["tools"] if item["id"] == required_tool
+        )
+        if entry.get("can_disable", True):
+            raise ValueError(
+                f"the {required_tool} built-in must remain enabled"
+            )
 
     credentials = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
     if (
