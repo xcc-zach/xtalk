@@ -47,7 +47,7 @@ models.set(LLMOutputRefactorModel, LLMOutputRefactorModel())
 
 # Define custom events and manager
 LLMOutputRefactoredFinal = create_event_class(
-    name="LLMOutputRefactoredFinal", fields={"text": ""}
+    name="LLMOutputRefactoredFinal", fields={"response_id": "", "text": ""}
 )
 
 
@@ -63,13 +63,14 @@ class LLMOutputRefactorManager(Manager):
         self.event_bus = event_bus
         self.models = models
 
-    @Manager.event_handler(LLMAgentResponseFinish)
-    async def handle_llm_response_finish(self, event: LLMAgentResponseFinish):
+    @Manager.event_handler(ResponseFinish)
+    async def handle_response_finish(self, event: ResponseFinish):
         refactor_model = self.models.get(LLMOutputRefactorModel)
         if refactor_model:
             refactored_output = refactor_model.refactor(event.text)
             new_event = LLMOutputRefactoredFinal(
                 session_id=event.session_id,
+                response_id=event.response_id,
                 text=refactored_output,
             )
             await self.event_bus.publish(new_event)
@@ -84,10 +85,10 @@ custom_service = DefaultService(models=models)
 custom_service.register_manager(LLMOutputRefactorManager)
 
 # Rewire event listeners of existing managers if needed
-# Here we replace the OutputGateway's handler for LLMAgentResponseFinish
+# Here we replace the OutputGateway's handler for ResponseFinish
 # to handle LLMOutputRefactoredFinal instead.
 custom_service.unsubscribe_event(
-    event_listener_cls=OutputGateway, event_type=LLMAgentResponseFinish
+    event_listener_cls=OutputGateway, event_type=ResponseFinish
 )
 
 
@@ -98,7 +99,7 @@ async def output_gateway_llm_output_refactored_final_handler(
     await self.send_signal(
         {
             "action": "finish_resp",
-            "data": {"text": event.text},
+            "data": {"response_id": event.response_id, "text": event.text},
         }
     )
 
