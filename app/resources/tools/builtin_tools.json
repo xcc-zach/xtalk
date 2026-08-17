@@ -8,6 +8,12 @@
       "can_disable": false
     },
     {
+      "id": "sleep",
+      "path": "sleep",
+      "enabled_by_default": true,
+      "can_disable": false
+    },
+    {
       "id": "web_search",
       "path": "web_search",
       "enabled_by_default": false

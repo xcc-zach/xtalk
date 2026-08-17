@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-background-main-window"
+description = "Enables the background_main_window command without any pre-configured scope."
+commands.allow = ["background_main_window"]
+
+[[permission]]
+identifier = "deny-background-main-window"
+description = "Denies the background_main_window command without any pre-configured scope."
+commands.deny = ["background_main_window"]

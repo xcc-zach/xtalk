@@ -119,9 +119,10 @@ sidecar 再通过 XTalk 普通公开模型配置加载它。桌面端回退配�
 
 ## 语音唤醒
 
-语音唤醒必须由用户明确开启，并保存这一开关。Tauri 在 WebView 音频管线之外监管
+语音唤醒默认开启，默认唤醒词是“你好小克”；用户后续修改的开关和唤醒词都会持久化。
+Tauri 在 WebView 音频管线之外监管
 随包的 `sherpa-onnx-keyword-spotter-microphone` 进程，只读取其本地关键词检测结果。
-唤醒词可由用户编辑，默认是“你好小克”。Tauri 将中文转换成带声调的拼音 token，并使用
+唤醒词可由用户编辑。Tauri 将中文转换成带声调的拼音 token，并使用
 随包的 `en.phone` 词典转换英文，然后把当前关键词文件写入 AppData。中英双语
 `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` 的 encoder、decoder、joiner、token
 表和英文词典由 `prepare_managed_runtime.py` 在构建时准备。唤醒监听产生的音频不会保存，

@@ -1,6 +1,7 @@
 const APP_COMMANDS: &[&str] = &[
     "apply_tool_changes",
     "apply_model_config",
+    "background_main_window",
     "delete_credential",
     "ensure_backend_started",
     "get_backend_connection",

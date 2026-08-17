@@ -8,6 +8,7 @@
   "permissions": [
     "allow-apply-tool-changes",
     "allow-apply-model-config",
+    "allow-background-main-window",
     "allow-delete-credential",
     "allow-ensure-backend-started",
     "allow-get-backend-connection",

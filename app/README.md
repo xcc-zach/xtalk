@@ -497,10 +497,11 @@ server speech boundaries before the configured ASR. This lets
 `server_configs/sample.json` work unchanged while preserving any explicit
 user-provided `vad` configuration.
 
-Voice wake is opt-in. When enabled, closing the main window hides it
-to the system tray instead of exiting. Tauri supervises the packaged
+Voice wake starts enabled by default with the phrase `你好小克`. Users can edit
+the phrase or disable voice wake in settings. While enabled, closing the main
+window hides it to the system tray instead of exiting. Tauri supervises the packaged
 `sherpa-onnx-keyword-spotter-microphone` process and listens locally for the
-user-editable wake phrase, which defaults to `你好小克`; no wake audio is stored
+user-editable wake phrase; no wake audio is stored
 or uploaded. Its persisted acoustic trigger threshold defaults to `0.05` and is
 editable in the same settings section. Chinese phrases are converted to
 tone-marked pinyin tokens and English phrases use the packaged `en.phone`

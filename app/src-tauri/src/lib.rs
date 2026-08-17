@@ -28,6 +28,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apply_tool_changes,
             apply_model_config,
+            background_main_window,
             ensure_backend_started,
             get_backend_connection,
             get_credentials,
@@ -299,6 +300,30 @@ fn is_whiteboard_window_visible(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(whiteboard::is_whiteboard_window_visible(&app))
 }
 
+#[tauri::command]
+fn background_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
+    if !wake_word.is_enabled() {
+        return Err("voice wake must be enabled before entering sleep mode".to_owned());
+    }
+    hide_main_window_for_wake(&app)
+}
+
+fn hide_main_window_for_wake(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is missing".to_owned())?;
+    app.emit("app-backgrounding", ())
+        .map_err(|error| format!("failed to request app backgrounding: {error}"))?;
+    window
+        .hide()
+        .map_err(|error| format!("failed to hide the main window: {error}"))?;
+    if let Err(error) = whiteboard::hide_whiteboard_window(app) {
+        eprintln!("failed to hide the whiteboard window: {error}");
+    }
+    Ok(())
+}
+
 fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     whiteboard::handle_whiteboard_window_event(window, event);
 
@@ -314,9 +339,8 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     let app = window.app_handle().clone();
     let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
     if wake_word.is_enabled() {
-        let _ = app.emit("app-backgrounding", ());
-        if let Err(error) = window.hide() {
-            eprintln!("failed to hide the main window: {error}");
+        if let Err(error) = hide_main_window_for_wake(&app) {
+            eprintln!("failed to background the app: {error}");
         }
         return;
     }

@@ -3,6 +3,7 @@ import "./styles.css";
 import {
   applyNativeModelConfig,
   applyNativeToolChanges,
+  backgroundNativeMainWindow,
   chooseNativeModelConfigFile,
   chooseNativeToolDirectory,
   deleteNativeCredential,
@@ -40,6 +41,7 @@ import {
   type DesktopMessage,
   type DesktopSessionSnapshot,
   type DesktopSessionSummary,
+  type DesktopToolCall,
 } from "./adapters/xtalk-client-adapter";
 import {
   ToolUIAdapter,
@@ -99,6 +101,7 @@ const WAKE_WORD_SUMMARY_KEYS: Record<
 };
 const WAKE_WORD_PHRASE_DEBOUNCE_MS = 500;
 const WHITEBOARD_TOOL_ID = "builtin:whiteboard";
+const SLEEP_MODE_TOOL_NAME = "enter_sleep_mode";
 
 const elements = {
   app: requireElement<HTMLElement>("app"),
@@ -290,6 +293,7 @@ window.addEventListener("error", (event) => {
 
 let adapter: XtalkClientAdapter | null = null;
 let unsubscribe: (() => void) | null = null;
+let unsubscribeToolCalls: (() => void) | null = null;
 let toolUIAdapter: ToolUIAdapter | null = null;
 let unsubscribeToolUI: (() => void) | null = null;
 let discoveringBackend = false;
@@ -315,7 +319,10 @@ let wakeWordOperation = false;
 let wakeWordPhraseComposing = false;
 let wakeWordPhraseUpdateTimer: number | null = null;
 let pendingWakeWordActivation = false;
+let wakeWordBackendRecovery = false;
 let backgroundingRequested = false;
+let pendingSleepRequest = false;
+let sleepOperation = false;
 let recommendedConfigPath: string | null = null;
 let credentials: NativeCredentialDefinition[] = [];
 let selectedCredentialId: string | null = null;
@@ -1840,7 +1847,9 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
     nextSessionActivityKey !== sessionActivityKey;
   sessionActivityKey = nextSessionActivityKey;
   latestSnapshot = snapshot;
+  maybeCompleteSleepRequest(snapshot);
   if (
+    !pendingWakeWordActivation &&
     snapshot.connectionState === "disconnected" &&
     (previousConnectionState === "connected" ||
       previousConnectionState === "reconnecting")
@@ -2684,6 +2693,9 @@ function submitWakeWordPhraseUpdate(): void {
 
 async function detachCurrentAdapter(): Promise<void> {
   const previousAdapter = adapter;
+  pendingSleepRequest = false;
+  unsubscribeToolCalls?.();
+  unsubscribeToolCalls = null;
   unsubscribeToolUI?.();
   unsubscribeToolUI = null;
   toolUIAdapter?.close();
@@ -2694,7 +2706,9 @@ async function detachCurrentAdapter(): Promise<void> {
   renderSnapshot(EMPTY_SNAPSHOT);
   if (previousAdapter) {
     await previousAdapter.disconnect().catch(() => undefined);
-    await resumeWakeWordAfterConversation();
+    if (!pendingWakeWordActivation) {
+      await resumeWakeWordAfterConversation();
+    }
   }
 }
 
@@ -2731,6 +2745,7 @@ async function discoverBackend(
     nextToolUIAdapter.connect();
     adapter = nextAdapter;
     unsubscribe = nextAdapter.subscribe(renderSnapshot);
+    unsubscribeToolCalls = nextAdapter.subscribeToolCalls(handleDesktopToolCall);
 
     let restoredSessionId = sessionIdToRestore;
     if (restoredSessionId === undefined) {
@@ -3244,6 +3259,7 @@ async function initializeNativeWakeWord(): Promise<void> {
   await listenNativeAppBackgrounding(() => {
     backgroundingRequested = true;
     pendingWakeWordActivation = false;
+    pendingSleepRequest = false;
     void disconnectSession();
   });
   await refreshWakeWordSettings();
@@ -3253,12 +3269,35 @@ async function activatePendingWakeWordConversation(): Promise<void> {
   if (!pendingWakeWordActivation) {
     return;
   }
-  if (discoveringBackend || backendState === "loading" || sessionOperation) {
+  if (
+    discoveringBackend ||
+    wakeWordBackendRecovery ||
+    backendState === "loading" ||
+    sessionOperation
+  ) {
     return;
   }
   if (adapter === null || backendState !== "ready") {
-    pendingWakeWordActivation = false;
-    await resumeWakeWordAfterConversation();
+    if (modelConfigPath === null) {
+      pendingWakeWordActivation = false;
+      await resumeWakeWordAfterConversation();
+      return;
+    }
+    wakeWordBackendRecovery = true;
+    try {
+      await ensureNativeBackendStarted();
+      await discoverBackend(null);
+    } catch (error) {
+      showError("voice.connectFailed", { error });
+    } finally {
+      wakeWordBackendRecovery = false;
+    }
+    if (adapter !== null && backendState === "ready") {
+      await activatePendingWakeWordConversation();
+    } else {
+      pendingWakeWordActivation = false;
+      await resumeWakeWordAfterConversation();
+    }
     return;
   }
   pendingWakeWordActivation = false;
@@ -3307,6 +3346,7 @@ async function connectSession(startNewConversation = false): Promise<void> {
 }
 
 async function disconnectSession(): Promise<void> {
+  pendingSleepRequest = false;
   const activeAdapter = adapter;
   if (sessionOperation) {
     return;
@@ -3335,6 +3375,61 @@ async function disconnectSession(): Promise<void> {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
     await resumeWakeWordAfterConversation();
+  }
+}
+
+function handleDesktopToolCall(toolCall: DesktopToolCall): void {
+  if (toolCall.name !== SLEEP_MODE_TOOL_NAME) {
+    return;
+  }
+  if (!wakeWordSettings?.enabled) {
+    showError("sleep.wakeDisabled");
+    return;
+  }
+  pendingSleepRequest = true;
+  maybeCompleteSleepRequest(adapter?.snapshot ?? latestSnapshot);
+}
+
+function maybeCompleteSleepRequest(snapshot: DesktopSessionSnapshot): void {
+  if (
+    !pendingSleepRequest ||
+    sleepOperation ||
+    snapshot.streamState !== "idle"
+  ) {
+    return;
+  }
+  let lastUserIndex = -1;
+  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+    if (snapshot.messages[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const farewellComplete = snapshot.messages.some(
+    (message, index) =>
+      index > lastUserIndex &&
+      message.role === "assistant" &&
+      message.final &&
+      Boolean(message.content.trim()),
+  );
+  if (lastUserIndex < 0 || !farewellComplete) {
+    return;
+  }
+  pendingSleepRequest = false;
+  void enterSleepMode();
+}
+
+async function enterSleepMode(): Promise<void> {
+  if (sleepOperation) {
+    return;
+  }
+  sleepOperation = true;
+  try {
+    await backgroundNativeMainWindow();
+  } catch (error) {
+    showError("sleep.backgroundFailed", { error });
+  } finally {
+    sleepOperation = false;
   }
 }
 

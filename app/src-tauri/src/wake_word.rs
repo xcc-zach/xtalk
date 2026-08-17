@@ -23,7 +23,8 @@ use tokio::{sync::Mutex, time::sleep};
 
 const SIDECAR_NAME: &str = "sherpa-onnx-keyword-spotter-microphone";
 const SETTINGS_FILE: &str = "wake-word-settings.json";
-const SETTINGS_VERSION: u16 = 1;
+const LEGACY_SETTINGS_VERSION: u16 = 1;
+const SETTINGS_VERSION: u16 = 2;
 const MODEL_RESOURCE: &str = "models/wake-word";
 const SHERPA_RUNTIME_RESOURCE: &str = "managed-runtime/ort";
 const ENCODER_FILE: &str = "encoder-epoch-13-avg-2-chunk-16-left-64.int8.onnx";
@@ -32,7 +33,7 @@ const JOINER_FILE: &str = "joiner-epoch-13-avg-2-chunk-16-left-64.int8.onnx";
 const TOKENS_FILE: &str = "tokens.txt";
 const ENGLISH_LEXICON_FILE: &str = "en.phone";
 const GENERATED_KEYWORDS_FILE: &str = "wake-word-keywords.txt";
-const DEFAULT_WAKE_PHRASE: &str = "";
+const DEFAULT_WAKE_PHRASE: &str = "你好小克";
 const DEFAULT_WAKE_THRESHOLD: f32 = 0.05;
 const MAX_WAKE_PHRASE_CHARS: usize = 32;
 const STATUS_EVENT: &str = "wake-word-status-changed";
@@ -725,10 +726,28 @@ fn normalize_wake_threshold(threshold: f32) -> Result<f32, WakeWordError> {
 fn default_settings() -> PersistedWakeWordSettings {
     PersistedWakeWordSettings {
         version: SETTINGS_VERSION,
-        enabled: false,
+        enabled: true,
         phrase: default_wake_phrase(),
         threshold: default_wake_threshold(),
     }
+}
+
+fn migrate_settings(
+    mut settings: PersistedWakeWordSettings,
+) -> Result<(PersistedWakeWordSettings, bool), WakeWordError> {
+    if settings.version == SETTINGS_VERSION {
+        return Ok((settings, false));
+    }
+    if settings.version != LEGACY_SETTINGS_VERSION {
+        return Err(WakeWordError::SettingsVersion);
+    }
+
+    if settings.phrase.trim().is_empty() {
+        settings = default_settings();
+    } else {
+        settings.version = SETTINGS_VERSION;
+    }
+    Ok((settings, true))
 }
 
 fn load_settings(app: &AppHandle) -> Result<PersistedWakeWordSettings, WakeWordError> {
@@ -737,8 +756,9 @@ fn load_settings(app: &AppHandle) -> Result<PersistedWakeWordSettings, WakeWordE
         return Ok(default_settings());
     }
     let settings: PersistedWakeWordSettings = serde_json::from_slice(&fs::read(path)?)?;
-    if settings.version != SETTINGS_VERSION {
-        return Err(WakeWordError::SettingsVersion);
+    let (settings, migrated) = migrate_settings(settings)?;
+    if migrated {
+        persist_settings(app, settings.enabled, &settings.phrase, settings.threshold)?;
     }
     Ok(settings)
 }
@@ -812,8 +832,8 @@ pub(crate) enum WakeWordError {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_keyword_definition, extract_keyword, wake_word_is_effectively_enabled,
-        KeywordOutputBuffer, PersistedWakeWordSettings,
+        build_keyword_definition, default_settings, extract_keyword, migrate_settings,
+        wake_word_is_effectively_enabled, KeywordOutputBuffer, PersistedWakeWordSettings,
     };
 
     #[test]
@@ -876,12 +896,50 @@ mod tests {
     }
 
     #[test]
-    fn loads_empty_default_phrase_from_legacy_settings() {
+    fn legacy_settings_without_a_phrase_use_the_default_phrase() {
         let settings: PersistedWakeWordSettings =
             serde_json::from_str(r#"{"version":1,"enabled":true}"#).unwrap();
 
-        assert_eq!(settings.phrase, "");
+        assert_eq!(settings.phrase, "你好小克");
         assert_eq!(settings.threshold, 0.05);
+    }
+
+    #[test]
+    fn defaults_enable_voice_wake_with_the_default_phrase() {
+        let settings = default_settings();
+
+        assert!(settings.enabled);
+        assert_eq!(settings.phrase, "你好小克");
+    }
+
+    #[test]
+    fn migrates_the_legacy_empty_default_once() {
+        let settings: PersistedWakeWordSettings =
+            serde_json::from_str(r#"{"version":1,"enabled":false,"phrase":"","threshold":0.05}"#)
+                .unwrap();
+
+        let (settings, migrated) = migrate_settings(settings).unwrap();
+
+        assert!(migrated);
+        assert_eq!(settings.version, 2);
+        assert!(settings.enabled);
+        assert_eq!(settings.phrase, "你好小克");
+    }
+
+    #[test]
+    fn preserves_an_explicit_legacy_selection() {
+        let settings: PersistedWakeWordSettings = serde_json::from_str(
+            r#"{"version":1,"enabled":false,"phrase":"hello","threshold":0.2}"#,
+        )
+        .unwrap();
+
+        let (settings, migrated) = migrate_settings(settings).unwrap();
+
+        assert!(migrated);
+        assert_eq!(settings.version, 2);
+        assert!(!settings.enabled);
+        assert_eq!(settings.phrase, "hello");
+        assert_eq!(settings.threshold, 0.2);
     }
 
     #[test]
