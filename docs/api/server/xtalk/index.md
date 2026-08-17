@@ -610,7 +610,7 @@ register or override managers for custom behavior.
 
 ### Class Fields
 
-- `MANAGER_CLASSES: list[Type[Manager]]` = `[ASRManager, LLMAgentContextManager, LLMAgentConsumptionManager, DirectAudioManager, TTSManager, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, EmbeddingsManager, RecordingManager, TurnDetectorManager]`
+- `MANAGER_CLASSES: list[Type[Manager]]` = `[ASRManager, MultiSpeakerTurnContextManager, LLMAgentContextManager, LLMAgentConsumptionManager, TTSManager, TTSResponseCoordinator, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, EmbeddingsManager, RecordingManager, TurnDetectorManager]`
 
 ### Methods
 
@@ -827,11 +827,7 @@ Unsubscribe a handler from an event type.
 _Defined in [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)._
 
 ```python
-async def publish(
-    self,
-    event: Event,
-    mode: EventDispatchMode | str = EventDispatchMode.RETURN_AFTER_DISPATCH,
-) -> bool
+async def publish(self, event: Event, mode: Union[EventDispatchMode, str] = EventDispatchMode.RETURN_AFTER_DISPATCH) -> bool
 ```
 
 Publish an event to all matching handlers.
@@ -841,8 +837,9 @@ Publish an event to all matching handlers.
 - `event` (`Event`)
   Event instance to dispatch.
 - `mode` (`EventDispatchMode | str, optional`)
-  Controls return and propagation behavior. Canonical values and the short
-  aliases `dispatch`, `wait`, and `wait_stoppable` are accepted.
+  Return and propagation behavior. Long canonical strings and the
+  short aliases ``dispatch``, ``wait``, and ``wait_stoppable`` are
+  accepted.
 
 ##### Returns
 

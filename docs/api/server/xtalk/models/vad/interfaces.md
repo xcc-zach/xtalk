@@ -48,6 +48,14 @@ Asynchronously determine whether an audio frame contains speech.
 - `bool`
   ``True`` if speech is detected, otherwise ``False``.
 
+#### reset
+
+```python
+def reset(self) -> None
+```
+
+Reset session-local VAD state and release external resources.
+
 #### clone
 
 ```python

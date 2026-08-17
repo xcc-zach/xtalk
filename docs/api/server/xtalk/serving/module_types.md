@@ -21,6 +21,9 @@ Forward backend events to the frontend WebSocket.
   Live WebSocket connection used for outbound messages.
 - `config` (`dict[str, Any] | None, optional`)
   Service configuration relevant to output behavior.
+- `models` (`Models | None, optional`)
+  Session models used to place ASR previews before the speaker-history
+  barrier when the focus-only gate is active.
 
 ### Methods
 
@@ -29,7 +32,7 @@ Forward backend events to the frontend WebSocket.
 _Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, websocket: WebSocket, config: dict[str, Any] | None = None)
+def __init__(self, event_bus: EventBus, session_id: str, websocket: WebSocket, config: dict[str, Any] | None = None, models: Models | None = None)
 ```
 
 #### send_signal
@@ -276,9 +279,9 @@ Consume one or more agent streams and forward their output downstream.
 
 ### Notes
 
-Multiple agent streams may be active concurrently. Their text output is
-merged into one shared turn response and appended to the shared TTS queue in
-arrival order.
+Multiple agent streams may be active concurrently. Each stream owns an
+independent response so asynchronous tool reports cannot reset or append to
+a response that is already playing.
 
 ### Methods
 
@@ -364,7 +367,7 @@ Project confirmed TTS playback progress back onto response text.
 _Defined in [`xtalk.serving.modules.tts_playback_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_playback_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] | None = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models | None = None, config: dict[str, Any] | None = None) -> None
 ```
 
 #### shutdown
@@ -428,6 +431,47 @@ async def shutdown(self) -> None
 
 Shut down TTS manager and reset state.
 
+## TTSResponseCoordinator
+
+_Defined in [`xtalk.serving.modules.tts_response_coordinator`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_response_coordinator.py)._
+
+```python
+class TTSResponseCoordinator(Manager)
+```
+
+Gate all response delivery through one session-scoped state machine.
+
+### Methods
+
+#### __init__
+
+_Defined in [`xtalk.serving.modules.tts_response_coordinator`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_response_coordinator.py)._
+
+```python
+def __init__(self, event_bus: EventBus, session_id: str, config: dict[str, Any] | None = None) -> None
+```
+
+Initialize response-delivery state for one session.
+
+##### Parameters
+
+- `event_bus` (`EventBus`)
+  Session event bus.
+- `session_id` (`str`)
+  Session identifier.
+- `config` (`dict[str, Any] | None, optional`)
+  Shared service configuration.
+
+#### shutdown
+
+_Defined in [`xtalk.serving.modules.tts_response_coordinator`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/tts_response_coordinator.py)._
+
+```python
+async def shutdown(self) -> None
+```
+
+Clear coordinator state during session shutdown.
+
 ## TurnTakingManager
 
 _Defined in [`xtalk.serving.modules.turn_taking_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/turn_taking_manager.py)._
@@ -435,6 +479,8 @@ _Defined in [`xtalk.serving.modules.turn_taking_manager`](https://github.com/xcc
 ```python
 class TurnTakingManager(Manager)
 ```
+
+Coordinate VAD boundaries with ASR and response interruption.
 
 ### Methods
 
@@ -482,4 +528,39 @@ _Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xt
 async def shutdown(self) -> None
 ```
 
-No-op shutdown hook (kept for extension).
+Reset VAD state and release any remote session resources.
+
+## MultiSpeakerTurnContextManager
+
+_Defined in [`xtalk.serving.modules.multi_speaker_turn_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/multi_speaker_turn_context_manager.py)._
+
+```python
+class MultiSpeakerTurnContextManager(Manager)
+```
+
+Schedule generic diarization and join its turn results with ASR.
+
+### Class Fields
+
+- `BYTES_PER_SAMPLE` = `2`
+- `SAMPLE_RATE` = `16000`
+
+### Methods
+
+#### __init__
+
+_Defined in [`xtalk.serving.modules.multi_speaker_turn_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/multi_speaker_turn_context_manager.py)._
+
+```python
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
+```
+
+#### shutdown
+
+_Defined in [`xtalk.serving.modules.multi_speaker_turn_context_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/multi_speaker_turn_context_manager.py)._
+
+```python
+async def shutdown(self) -> None
+```
+
+Cancel session tasks and release the diarization model clone.

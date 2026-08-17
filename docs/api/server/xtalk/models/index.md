@@ -146,21 +146,6 @@ Return the serialized conversation history when available.
 - `str | None`
   Conversation history or ``None``.
 
-#### add_tools
-
-_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
-
-```python
-def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
-```
-
-Attach tools to the agent.
-
-##### Parameters
-
-- `tools` (`list[BaseTool | Callable[[], BaseTool]]`)
-  Tool instances or factories that produce tool instances.
-
 ## AgentContext
 
 _Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
@@ -189,7 +174,7 @@ _Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk
 AgentOutput
 ```
 
-**Value:** `Union[str, ToolCall, ToolCallResult]`
+**Value:** `Union[str, ToolCall, ToolCallResult, AgentTurnBoundary]`
 
 ## ASR
 
@@ -448,6 +433,77 @@ class Embeddings(_LangChainEmbeddings)
 ```
 
 Interface marker for embedding models.
+
+## ForcedAligner
+
+_Defined in [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)._
+
+```python
+@model_type
+class ForcedAligner(ABC)
+```
+
+Abstract interface for forced alignment models.
+
+### Methods
+
+#### align
+
+_Defined in [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)._
+
+```python
+def align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Align text units against 48 kHz PCM audio.
+
+##### Parameters
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 48 kHz.
+- `text` (`str`)
+  Original text that the audio speaks.
+- `language` (`str | None, optional`)
+  Optional model-specific language hint.
+
+#### async_align
+
+_Defined in [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)._
+
+```python
+async def async_align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Asynchronously align text units against 48 kHz PCM audio.
+
+#### clone
+
+_Defined in [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)._
+
+```python
+def clone(self) -> 'ForcedAligner'
+```
+
+Clone the aligner for a new service session.
+
+## ForcedAlignmentUnit
+
+_Defined in [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)._
+
+```python
+@dataclass(frozen=True)
+class ForcedAlignmentUnit
+```
+
+One text unit aligned onto a synthesized audio timeline.
+
+### Class Fields
+
+- `text: str`
+- `start_ms: float`
+- `end_ms: float`
+- `char_start: int` = `-1`
+- `char_end: int` = `-1`
 
 ## Models
 
@@ -729,6 +785,70 @@ Compute similarity between two speaker embeddings.
 - `float`
   Cosine similarity score.
 
+## SpeakerDiarization
+
+_Defined in [`xtalk.models.speaker_diarization.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/interfaces.py)._
+
+```python
+@model_type
+class SpeakerDiarization(ABC)
+```
+
+Decode timestamped speaker labels for complete PCM snapshots.
+
+### Methods
+
+#### decode_snapshot
+
+_Defined in [`xtalk.models.speaker_diarization.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/interfaces.py)._
+
+```python
+async def decode_snapshot(self, *, request_id: str, pcm16: bytes, sample_rate: int, is_final: bool) -> DiarizationResult
+```
+
+Decode one immutable audio snapshot.
+
+##### Parameters
+
+- `request_id` (`str`)
+  Unique request identifier used for cancellation and tracing.
+- `pcm16` (`bytes`)
+  Mono little-endian signed PCM16 for the current audio snapshot.
+- `sample_rate` (`int`)
+  PCM sampling rate in hertz.
+- `is_final` (`bool`)
+  Whether the snapshot closes its VAD segment.
+
+##### Returns
+
+- `DiarizationResult`
+  Parsed snapshot-local diarization output.
+
+#### cancel
+
+_Defined in [`xtalk.models.speaker_diarization.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/interfaces.py)._
+
+```python
+async def cancel(self, request_id: str) -> None
+```
+
+Best-effort cancel an in-flight request.
+
+##### Parameters
+
+- `request_id` (`str`)
+  Identifier previously passed to :meth:`decode_snapshot`.
+
+#### close
+
+_Defined in [`xtalk.models.speaker_diarization.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_diarization/interfaces.py)._
+
+```python
+async def close(self) -> None
+```
+
+Release client-side resources owned by this model instance.
+
 ## SpeechEnhancer
 
 _Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
@@ -751,7 +871,7 @@ Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
 _Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
-def enhance(self, audio: bytes) -> bytes
+def enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Enhance an audio frame.
@@ -760,6 +880,10 @@ Enhance an audio frame.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### Returns
 
@@ -786,7 +910,7 @@ Flush any internally buffered audio.
 _Defined in [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)._
 
 ```python
-async def async_enhance(self, audio: bytes) -> bytes
+async def async_enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Asynchronously enhance audio.
@@ -795,6 +919,10 @@ Asynchronously enhance audio.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### Returns
 
@@ -897,6 +1025,109 @@ Asynchronously apply a speed adjustment to audio.
 
 - `bytes`
   Processed audio bytes.
+
+## StreamingTextTTS
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+class StreamingTextTTS(ABC)
+```
+
+Abstract base class for live text-streaming TTS engines.
+
+### Notes
+
+This interface models engines that accept text incrementally and emit audio
+concurrently from the same session. Implementations may also inherit
+``TTS`` when they support the regular full-text synthesis API.
+
+### Methods
+
+#### start
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+async def start(self) -> None
+```
+
+Start a live text-streaming synthesis session.
+
+##### Notes
+
+Implementations typically open an upstream WebSocket connection and
+send the provider-specific start event here.
+
+#### append_text
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+async def append_text(self, text: str) -> None
+```
+
+Append incremental text to the active synthesis session.
+
+##### Parameters
+
+- `text` (`str`)
+  Text fragment produced by the upstream LLM or agent.
+
+#### flush
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+async def flush(self) -> None
+```
+
+Request synthesis of currently buffered upstream text.
+
+##### Notes
+
+``TTSManager`` calls this when it receives ``TurnTTSFlushRequested``.
+Implementations should not rely on sentence-boundary flushes.
+
+#### stop
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+async def stop(self) -> None
+```
+
+Stop the active synthesis session and release connection resources.
+
+#### audio_stream
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+def audio_stream(self) -> AsyncIterator[bytes]
+```
+
+Stream generated PCM audio chunks from the active session.
+
+##### Yields
+
+- `bytes`
+  PCM 16-bit mono audio bytes, preferably at 48 kHz.
+
+#### clone
+
+_Defined in [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)._
+
+```python
+def clone(self) -> 'StreamingTextTTS'
+```
+
+Clone the streaming TTS engine for a new session.
+
+##### Returns
+
+- `StreamingTextTTS`
+  Session-safe clone with independent live connection state.
 
 ## TTS
 
@@ -1272,6 +1503,16 @@ Asynchronously determine whether an audio frame contains speech.
 
 - `bool`
   ``True`` if speech is detected, otherwise ``False``.
+
+#### reset
+
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
+
+```python
+def reset(self) -> None
+```
+
+Reset session-local VAD state and release external resources.
 
 #### clone
 

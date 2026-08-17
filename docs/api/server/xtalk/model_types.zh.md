@@ -12,6 +12,58 @@ class Embeddings(_LangChainEmbeddings)
 
 Interface marker for embedding models.
 
+## ForcedAligner
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+@model_type
+class ForcedAligner(ABC)
+```
+
+Abstract interface for forced alignment models.
+
+### 方法
+
+#### align
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+def align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Align text units against 48 kHz PCM audio.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 48 kHz.
+- `text` (`str`)
+  Original text that the audio speaks.
+- `language` (`str | None, optional`)
+  Optional model-specific language hint.
+
+#### async_align
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+async def async_align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Asynchronously align text units against 48 kHz PCM audio.
+
+#### clone
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+def clone(self) -> 'ForcedAligner'
+```
+
+Clone the aligner for a new service session.
+
 ## BaseChatModel
 
 _定义于 `langchain_core.language_models.chat_models`。_
@@ -166,21 +218,6 @@ Return the serialized conversation history when available.
 
 - `str | None`
   Conversation history or ``None``.
-
-#### add_tools
-
-_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
-
-```python
-def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
-```
-
-Attach tools to the agent.
-
-##### 参数
-
-- `tools` (`list[BaseTool | Callable[[], BaseTool]]`)
-  Tool instances or factories that produce tool instances.
 
 ## Rewriter
 
@@ -763,6 +800,16 @@ Asynchronously determine whether an audio frame contains speech.
 - `bool`
   ``True`` if speech is detected, otherwise ``False``.
 
+#### reset
+
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
+
+```python
+def reset(self) -> None
+```
+
+Reset session-local VAD state and release external resources.
+
 #### clone
 
 _定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
@@ -800,7 +847,7 @@ Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
 _定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
 
 ```python
-def enhance(self, audio: bytes) -> bytes
+def enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Enhance an audio frame.
@@ -809,6 +856,10 @@ Enhance an audio frame.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### 返回
 
@@ -835,7 +886,7 @@ Flush any internally buffered audio.
 _定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
 
 ```python
-async def async_enhance(self, audio: bytes) -> bytes
+async def async_enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Asynchronously enhance audio.
@@ -844,6 +895,10 @@ Asynchronously enhance audio.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### 返回
 
