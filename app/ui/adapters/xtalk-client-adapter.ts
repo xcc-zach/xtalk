@@ -39,6 +39,14 @@ export interface DesktopMessage {
   final: boolean;
 }
 
+/** One agent tool invocation forwarded by the realtime session. */
+export interface DesktopToolCall {
+  /** Registered tool name selected by the agent. */
+  name: string;
+  /** Validated structured arguments supplied to the tool. */
+  args: Readonly<Record<string, unknown>>;
+}
+
 /**
  * Minimal XTalk state consumed by the Phase 0 desktop UI.
  */
@@ -83,6 +91,9 @@ export interface XtalkEndpointDiagnostics {
  * Listener invoked whenever the desktop session snapshot changes.
  */
 export type DesktopSessionListener = (snapshot: DesktopSessionSnapshot) => void;
+
+/** Listener invoked once for every agent tool call. */
+export type DesktopToolCallListener = (toolCall: DesktopToolCall) => void;
 
 const APP_TOKEN_QUERY_PARAMETER = "app_token";
 let desktopAudioConstraintsInstalled = false;
@@ -154,7 +165,9 @@ export class XtalkClientAdapter {
   readonly #session: Session;
   readonly #diagnostics: XtalkEndpointDiagnostics;
   readonly #listeners = new Set<DesktopSessionListener>();
+  readonly #toolCallListeners = new Set<DesktopToolCallListener>();
   #snapshot: DesktopSessionSnapshot;
+  #lastToolCall: Session["state"]["tool_call"] | null = null;
 
   /**
    * Creates a desktop session around one validated Tauri bootstrap payload.
@@ -193,6 +206,15 @@ export class XtalkClientAdapter {
     };
 
     this.#session.onStateChange((state) => {
+      const toolCall = state.tool_call;
+      const forwardedToolCall =
+        toolCall !== this.#lastToolCall && toolCall.name
+          ? {
+              name: toolCall.name,
+              args: { ...toolCall.args } as Readonly<Record<string, unknown>>,
+            }
+          : null;
+      this.#lastToolCall = toolCall;
       this.#snapshot = {
         connectionState: state.connectionState,
         streamState: state.streamState,
@@ -205,6 +227,9 @@ export class XtalkClientAdapter {
         ),
       };
       this.#notify();
+      if (forwardedToolCall !== null) {
+        this.#notifyToolCall(forwardedToolCall);
+      }
     });
   }
 
@@ -233,6 +258,19 @@ export class XtalkClientAdapter {
     listener(this.#snapshot);
     return () => {
       this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribes to one-shot agent tool-call events.
+   *
+   * @param listener Tool-call listener.
+   * @returns A function that removes the listener from this adapter.
+   */
+  subscribeToolCalls(listener: DesktopToolCallListener): () => void {
+    this.#toolCallListeners.add(listener);
+    return () => {
+      this.#toolCallListeners.delete(listener);
     };
   }
 
@@ -304,6 +342,12 @@ export class XtalkClientAdapter {
   #notify(): void {
     for (const listener of this.#listeners) {
       listener(this.#snapshot);
+    }
+  }
+
+  #notifyToolCall(toolCall: DesktopToolCall): void {
+    for (const listener of this.#toolCallListeners) {
+      listener(toolCall);
     }
   }
 }
