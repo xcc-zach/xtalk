@@ -1,10 +1,9 @@
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterable, TypedDict, AsyncIterator, Callable, Any, Union, TypeVar
+from typing import Iterable, TypedDict, AsyncIterator, Any, Union, TypeVar
 
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolCall
-from langchain_core.tools import BaseTool
 
 from .tools.utils import ToolCallResult
 from ..registry import model_type
@@ -356,13 +355,3 @@ class Agent(ABC):
             Conversation history or ``None``.
         """
         return None
-
-    def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None:
-        """Attach tools to the agent.
-
-        Parameters
-        ----------
-        tools : list[BaseTool | Callable[[], BaseTool]]
-            Tool instances or factories that produce tool instances.
-        """
-        pass
