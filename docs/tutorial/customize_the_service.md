@@ -1,4 +1,4 @@
-*Experimental API*
+*Experimental feature*
 
 > **Note**
 > See [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) for the complete example. It adds a dummy `LLMOutputRefactorModel` to X-Talk and prepends `Assistant response: ` before the final LLM response text is sent to the frontend.

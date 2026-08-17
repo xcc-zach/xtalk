@@ -71,7 +71,7 @@ plugins:
             'Start the Service': 启动服务
             'Config the Service': 配置服务
             'Sample Config for Fully Local Deployment': 完全本地部署示例配置
-            'Tool Use': 使用工具
+            'Introduce Tools': 引入工具
             Bot2Bot: Bot2Bot
             'Introduce a New Model': 引入新模型
             'Introduce an LLM Agent': 引入LLM Agent
@@ -81,7 +81,6 @@ plugins:
             'Service Configuration': 服务配置项
             Logging: 日志
             'Text Input': 文本输入
-            'Tool Design': 工具调用设计
             # Tabs under Technical Reference
             'Overall Architecture': 整体架构
             'Supported Models': 支持的模型
@@ -116,14 +115,13 @@ nav:
       - Other:
           - 'Introduce an LLM Agent': tutorial/introduce_an_llm_agent.md
           - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
-          - 'Tool Use': tutorial/tool_use.md
+          - 'Introduce Tools': tutorial/tool_design.md
           - Testing: tutorial/testing.md
           - Bot2Bot: tutorial/bot2bot.md
           - 'MTD Multi-Speaker Quickstart': tutorial/mtd_multi_speaker_quickstart.md
           - 'Service Configuration': tutorial/service_config.md
           - Logging: tutorial/logging.md
           - 'Text Input': tutorial/text_input.md
-          - 'Tool Design': tutorial/tool_design.md
   - 'App Tutorial':
       - 'Model Configuration': app_tutorial/model_configuration.md
       - 'Add Tools': app_tutorial/add_tools.md
