@@ -1,108 +1,136 @@
 # Introduce Tools
 
-## Attach Custom Tools
+## Attach Tools
 
-X-Talk attaches Python-only tools during staged configuration, before the configured Agent is instantiated:
+First define a LangChain tool, then attach it to the configured Agent with `XtalkBuilder.add_agent_tools()`:
 
 ```python
+from langchain_core.tools import tool
+
 from xtalk import Xtalk
 
-from my_tools import TimerTool
+
+@tool
+def text_length(text: str) -> int:
+    """Return the number of characters in text."""
+
+    return len(text)
 
 
 xtalk_instance = (
-    Xtalk.configure("path/to/config.json")
-    .add_agent_tools([TimerTool])
+    Xtalk.configure("config.json")
+    .add_agent_tools([text_length])
     .build()
 )
 ```
 
-`add_agent_tools` is an `XtalkBuilder` method. It accepts LangChain tool instances, native X-Talk `SyncTool` or `AsyncTool` classes, and zero-argument tool factories. Repeated calls append tools in order without modifying the source configuration dictionary.
+`add_agent_tools()` accepts LangChain tool instances, native X-Talk `SyncTool` or `AsyncTool` classes, and zero-argument factories that return those tools. Repeated calls append tools in order without modifying the source configuration dictionary. Tools are ultimately passed to the Agent constructor through `llm_agent.params.tools`, so a custom Agent must accept and use its `tools` parameter.
 
-Use a factory when every session needs an independent tool instance. Native asynchronous tools keep their mutable state in each tool call. See [`examples/sample_app/custom_async_tool.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_async_tool.py) for a complete timer example.
+For example, a custom Agent can create a `ToolEngine` in its constructor and bind the tools to its chat model:
+
+```python
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from xtalk.model_types import Agent
+from xtalk.models.agents.tools import Tool, ToolEngine
+
+
+class ToolAgent(Agent):
+    def __init__(
+        self,
+        model: BaseChatModel,
+        tools: list[Tool] | None = None,
+    ) -> None:
+        self.model = model
+        self.tools = list(tools or [])
+        self.tool_engine = ToolEngine(tools=self.tools, state={})
+        self.model_with_tools = self.tool_engine.bind(model)
+```
+
+Calls to `self.model_with_tools` can then produce tool calls, which the Agent executes through `self.tool_engine`. See [ToolEngine](#toolengine) below for the complete flow.
+
+Pass a tool factory when each session needs an independent tool instance:
+
+```python
+from langchain_core.tools import tool
+
+
+def create_counter_tool():
+    count = 0
+
+    @tool
+    def increment_counter() -> int:
+        """Increment and return this session's counter."""
+
+        nonlocal count
+        count += 1
+        return count
+
+    return increment_counter
+
+
+xtalk_instance = (
+    Xtalk.configure("config.json")
+    .add_agent_tools([create_counter_tool])
+    .build()
+)
+```
+
+`create_counter_tool()` is called whenever a session Agent is created, so sessions do not share `count`. A tool factory must be a zero-argument callable.
 
 ## Built-in Tools
 
 > **Note**
-> See source code under [`src/xtalk/models/agents/tools`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/agents/tools) for all built-in tools.
+> See [`src/xtalk/models/agents/tools`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/agents/tools) for all built-in tools.
 
-Built-in tools include agent-scope ones like `web_search` and `get_time`, and pipeline-control ones such as silence, speech speed, and, when configured, voice and emotion switching. `DefaultAgent` registers `web_search`, `get_time`, `set_speed`, and `silence` by default. `set_voice` and `set_emotion` are only registered when the corresponding configuration is available.
+Built-in tools include `web_search`, `get_time`, and pipeline controls for silence, speech speed, voice, and emotion. `DefaultAgent` registers `web_search`, `get_time`, `set_speed`, and `silence` by default. `set_voice` and `set_emotion` are registered only when their corresponding configuration is available.
 
-> **Note**
-> To enable the `web_search` tool, set `SERPER_API_KEY` or `GOOGLE_SERPER_API_KEY`. See [SerperDev](https://serper.dev/).
+To enable `web_search`, set `SERPER_API_KEY` or `GOOGLE_SERPER_API_KEY`. See [SerperDev](https://serper.dev/).
 
-## Tool Types and Invocation Flow
+## Tool Types
 
-X-Talk supports three kinds of agent tools: LangChain `BaseTool` instances,
-native synchronous `SyncTool` classes, and `AsyncTool` classes that can keep
-producing updates in the background. `ToolEngine` binds and invokes all three
-kinds while maintaining asynchronous lifecycles and valid message history.
+X-Talk supports three tool types:
 
-## Goals
+- LangChain `BaseTool`: suitable for existing LangChain integrations or simple function tools. The concrete tool supplies its input schema and sync or async invocation behavior.
+- `SyncTool`: a native synchronous X-Talk tool that validates `ToolInput`, returns structured `ToolOutput`, and receives a non-blocking async bridge from the framework.
+- `AsyncTool`: a native long-running X-Talk tool that immediately returns `Running`, emits progress in the background, and ends with `Finished`. It supports status, stop, subscribe, and unsubscribe hooks.
+    - For example, a timer immediately reports that it has started, continues reporting progress in the background, and returns a final result when time expires; while it is running, the user can query, subscribe to, or stop it.
 
-- A synchronous tool returns one final result.
-- An asynchronous tool immediately returns `Running`, so the agent is not
-  blocked and models that require a matching `ToolMessage` directly after
-  `AIMessage(tool_calls=...)` remain protocol compliant.
-- An asynchronous tool may emit progress updates and must end with `Finished`.
-- The LLM can query, subscribe to, unsubscribe from, or stop an asynchronous
-  call.
-- Every call ID is unique within one `ToolEngine`.
-- Tool results are inserted into history as valid ToolCall/ToolMessage pairs.
+### LangChain Tools
 
-The implementation lives in
-[`src/xtalk/models/agents/tools/core.py`](../../src/xtalk/models/agents/tools/core.py).
-Public types are exported from `xtalk.models.agents.tools`.
-
-## Core data types
+Define a LangChain tool with `@tool`. Its complete function signature and docstring become the name, description, and input schema shown to the model:
 
 ```python
-from dataclasses import dataclass, field
-from typing import Any
-
-from pydantic import BaseModel
+from langchain_core.tools import tool
 
 
-class ToolInput(BaseModel):
-    pass
+@tool
+def convert_temperature(value: float, to_unit: str) -> str:
+    """Convert a temperature between Celsius and Fahrenheit.
+
+    Args:
+        value: Temperature to convert.
+        to_unit: Target unit, either celsius or fahrenheit.
+    """
+
+    if to_unit == "celsius":
+        return str((value - 32) * 5 / 9)
+    if to_unit == "fahrenheit":
+        return str(value * 9 / 5 + 32)
+    raise ValueError("to_unit must be celsius or fahrenheit")
 
 
-class ToolOutput(BaseModel):
-    def to_content(self) -> str:
-        return self.model_dump_json()
-
-
-@dataclass
-class ToolState:
-    call_id: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class Running:
-    content: str
-
-
-@dataclass(frozen=True)
-class Finished:
-    content: ToolOutput
+sync_result = convert_temperature.invoke(
+    {"value": 32, "to_unit": "celsius"}
+)
+async_result = await convert_temperature.ainvoke(
+    {"value": 0, "to_unit": "fahrenheit"}
+)
 ```
 
-Their responsibilities are:
+### SyncTool
 
-- `ToolInput`: structured LLM-generated input validated by Pydantic.
-- `ToolOutput`: structured final output, serialized to JSON by default.
-- `ToolState`: mutable state owned by one asynchronous call.
-- `Running`: textual state emitted before the asynchronous call finishes.
-- `Finished`: the final structured result.
-
-`ToolEngineState` is the session-level shared object passed to native tools. It
-currently has type `Any`. `ToolEngine` retains the supplied object by reference;
-it does not make a shallow or deep copy.
-
-## Creating a synchronous tool
-
-Inherit from `SyncTool` and implement a fully annotated `invoke()` method:
+`SyncTool` infers its input and output types from the annotations on `invoke()`. `ToolOutput.to_content()` serializes results as JSON by default and may be overridden:
 
 ```python
 from xtalk.models.agents.tools import (
@@ -123,6 +151,8 @@ class AddOutput(ToolOutput):
 
 
 class AddTool(SyncTool):
+    """Add two integers."""
+
     name = "add"
 
     @classmethod
@@ -133,19 +163,18 @@ class AddTool(SyncTool):
     ) -> AddOutput:
         del global_state
         return AddOutput(value=tool_input.left + tool_input.right)
+
+
+output = AddTool.invoke(AddInput(left=2, right=3), {})
+async_output = await AddTool.ainvoke(AddInput(left=2, right=3), {})
+content = output.to_content()
 ```
 
-The framework infers `input_type` and `output_type` from the annotations.
-`ainvoke()` uses `asyncio.to_thread()` by default so the synchronous
-implementation does not block the event loop.
+The class name is used when `name` is omitted. Tool authors must implement `invoke()`; inherited `ainvoke()` calls it in a worker thread to avoid blocking the event loop. `global_state` is a session-level object shared by tools in one `ToolEngine`.
 
-When `name` is omitted, the class name is exposed to the LLM.
+### AsyncTool
 
-## Creating an asynchronous tool
-
-Inherit from `AsyncTool` and implement at least `emit_initial()` and
-`emit_updates()`. Their annotations determine the input, state, and output
-types.
+`AsyncTool` stores per-call state in `ToolState` and manages background work through lifecycle hooks. This timer covers the synchronous lifecycle API; the base class bridges each corresponding `a*` method through a worker thread:
 
 ```python
 from collections.abc import Iterator
@@ -164,69 +193,73 @@ from xtalk.models.agents.tools import (
 )
 
 
-class SearchInput(ToolInput):
-    query: str
+class TimerInput(ToolInput):
+    seconds: int
+
+
+class TimerOutput(ToolOutput):
+    elapsed_seconds: int
 
 
 @dataclass
-class SearchState(ToolState):
-    pages_done: int = 0
+class TimerState(ToolState):
+    elapsed_seconds: int = 0
     subscribed: bool = False
     stopped: bool = False
 
 
-class SearchOutput(ToolOutput):
-    content: str
+class TimerTool(AsyncTool):
+    """Count time in the background and report progress."""
 
-
-class SearchTool(AsyncTool):
-    name = "search"
+    name = "timer"
     subscribe_by_default = False
 
     @classmethod
     def emit_initial(
         cls,
         tool_call_id: str,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
     ) -> Running:
         del tool_input, global_state
         tool_state.call_id = tool_call_id
-        return Running(content=f"Search started; call ID: {tool_call_id}")
+        return Running(content=f"Timer started, call ID: {tool_call_id}")
 
     @classmethod
     def emit_updates(
         cls,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
-    ) -> Iterator[ToolResult[SearchOutput]]:
+    ) -> Iterator[ToolResult[TimerOutput]]:
         del global_state
-        time.sleep(2)  # Simulate slow retrieval; the async bridge runs this in a thread.
-        tool_state.pages_done = 1
-        yield Running(content="Searching the first page")
-        time.sleep(2)
+        for elapsed in range(1, tool_input.seconds + 1):
+            if tool_state.stopped:
+                return
+            time.sleep(1)
+            tool_state.elapsed_seconds = elapsed
+            if elapsed < tool_input.seconds:
+                yield Running(content=f"Elapsed: {elapsed} seconds")
         yield Finished(
-            content=SearchOutput(content=f"Search complete: {tool_input.query}")
+            content=TimerOutput(elapsed_seconds=tool_state.elapsed_seconds)
         )
 
-    # Optional hooks for status, stopping, and subscription state.
     @classmethod
     def status(
         cls,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
     ) -> str:
         del tool_input, global_state
-        return f"Retrieved {tool_state.pages_done} pages"
+        return f"Elapsed: {tool_state.elapsed_seconds} seconds"
 
     @classmethod
     def stop(
         cls,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
     ) -> None:
         del tool_input, global_state
@@ -235,8 +268,8 @@ class SearchTool(AsyncTool):
     @classmethod
     def subscribe(
         cls,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
     ) -> None:
         del tool_input, global_state
@@ -245,204 +278,124 @@ class SearchTool(AsyncTool):
     @classmethod
     def unsubscribe(
         cls,
-        tool_input: SearchInput,
-        tool_state: SearchState,
+        tool_input: TimerInput,
+        tool_state: TimerState,
         global_state: ToolEngineState,
     ) -> None:
         del tool_input, global_state
         tool_state.subscribed = False
 ```
 
-`emit_initial()` must return `Running` quickly. The current protocol requires
-its `content` to contain `tool_call_id`. `emit_updates()` may emit multiple
-`Running` values, but it must end with one `Finished`; ending without
-`Finished` is a runtime error.
+Implement `emit_initial()` and `emit_updates()`. The initial `Running.content` must include `tool_call_id`. The update stream may emit multiple `Running` values and must emit one `Finished` on normal completion. Optional hooks are `status()`, `stop()`, `subscribe()`, and `unsubscribe()`.
 
-Default `aemit_initial()` and `aemit_updates()` methods bridge synchronous
-implementations through worker threads. A tool backed by an async SDK may
-override the corresponding `a*` methods.
-
-### Optional lifecycle hooks
-
-`AsyncTool` also provides synchronous and asynchronous hook pairs:
-
-- `status()` / `astatus()`: return the current human-readable status.
-- `stop()` / `astop()`: stop external work and release resources.
-- `subscribe()` / `asubscribe()`: run extra work when progress is subscribed.
-- `unsubscribe()` / `aunsubscribe()`: run extra work when it is unsubscribed.
-
-## State and concurrency
-
-`ToolState` belongs to one call. Store progress, external task handles, and
-call-level locks there whenever possible. Different calls do not share a
-`ToolState` instance.
-
-`ToolEngineState` is shared at session scope. ToolEngine coordinates
-synchronous calls and short lifecycle hooks, but it does **not** hold a global
-lock for the entire `aemit_updates()` wait. An asynchronous update may wait on
-network I/O, a queue, or an external event; holding the lock would prevent
-`status` and `stop` from running.
-
-If `aemit_updates()` mutates shared state, the tool must use short critical
-sections, its own `asyncio.Lock`, or a thread-safe data structure. Do not keep a
-shared-state lock across a network request or a complete update stream.
+Default `aemit_initial()`, `aemit_updates()`, `astatus()`, `astop()`, `asubscribe()`, and `aunsubscribe()` bridge the synchronous implementations above. Override these `a*` methods when the underlying SDK is natively asynchronous. `subscribe_by_default=True` subscribes before the background update task starts.
 
 ## ToolEngine
 
-The supported union is:
+`ToolEngine` binds all three tool types to a model, executes model-produced `ToolCall` values, preserves valid `AIMessage`/`ToolMessage` history, and manages the `AsyncTool` lifecycle. This example uses it inside a custom Agent:
 
 ```python
-Tool = BaseTool | type[SyncTool] | type[AsyncTool]
+import asyncio
+from typing import Any, AsyncIterator, Iterable
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage, ToolCall, ToolMessage
+
+from xtalk.model_types import Agent
+from xtalk.models.agents import AgentContext, AgentOutput
+from xtalk.models.agents.tools import Tool, ToolEngine
+
+
+class ToolAgent(Agent):
+    def __init__(self, model: BaseChatModel, tools: list[Tool]) -> None:
+        self.model = model
+        self.tools = tools
+        self.messages: list[BaseMessage] = []
+        self.engine = ToolEngine(tools=tools, state={})
+        self.model_with_tools = self.engine.bind(model)
+        self.model_without_calls = self.engine.bind_without_tool_calls(model)
+        self._async_update_queue: asyncio.Queue[None] = asyncio.Queue()
+        self._model_lock = asyncio.Lock()
+        self.engine.on_async_tool_update(self._on_async_tool_update)
+
+    def _on_async_tool_update(
+        self,
+        tool_call: ToolCall,
+        tool_message: ToolMessage,
+    ) -> None:
+        ToolEngine.append_tool_message(tool_call, tool_message, self.messages)
+        self._async_update_queue.put_nowait(None)
+
+    def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
+        yield from self.sync_iter_from_async(self.async_accept(context))
+
+    async def _invoke_model(self, *, allow_tools: bool):
+        model = (
+            self.model_with_tools
+            if allow_tools
+            else self.model_without_calls
+        )
+        async with self._model_lock:
+            response = await model.ainvoke(list(self.messages))
+            self.messages.append(response)
+            return response
+
+    async def _report_async_tool_updates(
+        self,
+    ) -> AsyncIterator[AgentOutput]:
+        while True:
+            await self._async_update_queue.get()
+            response = await self._invoke_model(allow_tools=False)
+            yield str(response.content)
+
+    async def async_accept(
+        self,
+        context: AgentContext,
+    ) -> AsyncIterator[AgentOutput]:
+        if context["type"] == "loop":
+            async for output in self._report_async_tool_updates():
+                yield output
+            return
+
+        if context["type"] != "asr_final":
+            return
+
+        self.messages.append(HumanMessage(content=context["data"]["text"]))
+        response = await self._invoke_model(allow_tools=True)
+
+        for tool_call in response.tool_calls:
+            yield tool_call
+            tool_message = await self.engine.ainvoke_and_append(
+                tool_call,
+                self.messages,
+            )
+            yield str(tool_message.content)
+
+    def clone(self) -> "ToolAgent":
+        return ToolAgent(self.model, self.tools)
+
+    def restore_history(self, messages: list[dict[str, Any]]) -> None:
+        del messages
+
+    async def shutdown(self) -> None:
+        await self.engine.shutdown()
 ```
 
-Create an engine and bind its schemas:
+The example covers every public `ToolEngine` interface:
 
-```python
-from langchain_core.messages import ToolCall
-from xtalk.models.agents.tools import ToolEngine
+- `ToolEngine(tools, state)`: create an engine; tool names must be unique within it.
+- `bind(model)`: expose schemas and allow model-initiated calls.
+- `bind_without_tool_calls(model)`: keep schemas available with `tool_choice="none"`.
+- `on_async_tool_update(callback)`: receive subscribed `Running` updates and every `Finished` update. See [AsyncTool](#asynctool).
+- `ainvoke(tool_call)` / `invoke(tool_call)`: execute a tool and return `ToolMessage` without changing history.
+- `ainvoke_and_append(tool_call, messages)` / `invoke_and_append(...)`: execute a tool and append a matching call/result pair to history.
+- `append_tool_message(tool_call, tool_message, messages)`: append an existing call/result pair without executing the tool.
+- `shutdown()`: reject new calls, run async-tool stop hooks, and cancel background tasks; repeated calls are safe.
 
-engine = ToolEngine(
-    tools=[AddTool, SearchTool],
-    state={},
-)
-model_with_tools = engine.bind(model)
+The asynchronous-update callback first appends a valid call/result pair to history, then puts a notification in `_async_update_queue`. The long-lived `loop` context waits on that queue and calls `_report_async_tool_updates()` for each notification. The generated text is yielded as `AgentOutput`, which passes the proactive report back to the service output pipeline.
 
-message = await engine.ainvoke(
-    ToolCall(
-        id="call-add-1",
-        name="add",
-        args={"left": 2, "right": 3},
-    )
-)
-```
+`async_accept()` passes `allow_tools=True` for user requests, selecting the model returned by `bind()` so it may produce new tool calls. `_report_async_tool_updates()` passes `allow_tools=False` and selects the model returned by `bind_without_tool_calls()`; the model can still interpret tool schemas in history but cannot call another tool during that response. `_model_lock` serializes generation and history insertion for normal replies and proactive reports, while `list(self.messages)` gives each invocation a stable history snapshot.
 
-`bind()` exposes schemas to the model. A native tool must still execute through
-ToolEngine and cannot invoke the schema wrapper directly.
+Use `await ainvoke()` or `await ainvoke_and_append()` in asynchronous contexts. `invoke()` and `invoke_and_append()` are only for synchronous contexts without a running event loop and cannot invoke `AsyncTool`.
 
-### Invocation semantics
-
-- `BaseTool`: call LangChain `ainvoke()` and store a textual result.
-- `SyncTool`: validate input, await the final output, and return ToolMessage.
-- `AsyncTool`: validate input, call `aemit_initial()`, store `AsyncToolRun`,
-  start a background update task, and immediately return the initial
-  ToolMessage.
-
-`invoke()` is limited to `BaseTool` and `SyncTool` in synchronous contexts. Use
-`await ainvoke()` when an event loop is already running. `AsyncTool` always
-requires `await ainvoke()` on a persistent event loop so its updates can
-continue after the initial result.
-
-Each call ID is reserved before execution. Concurrent reuse or reuse after a
-call has completed raises `ValueError`.
-
-### Asynchronous run records
-
-`AsyncToolRun` stores:
-
-- the latest `Running` or `Finished`;
-- the tool class, validated input, and call state;
-- `subscribed` and `running` flags;
-- the background `task`;
-- a lifecycle lock and any background exception.
-
-Background exceptions are stored on the run and retrieved to avoid unhandled
-Task warnings.
-
-## Assistant tools
-
-When at least one `AsyncTool` exists, ToolEngine registers five assistant
-tools:
-
-- `async_tool_updated`: system-only update; its callable schema is hidden from
-  the LLM.
-- `id_to_async_tool_status`: query running state, tool status, and errors.
-- `subscribe_async_tool`: subscribe and return the latest known result.
-- `unsubscribe_async_tool`: suppress progress; the final result is still sent.
-- `stop_async_tool`: call `astop()` and cancel the background task.
-
-The latter four control tools are bound to the model. `async_tool_updated`
-remains a ToolCall/ToolMessage protocol name only, preventing the model from
-mistaking an internal notification for a callable tool.
-Status queries are only for explicit user requests and must not be polled.
-After subscribing, the model should stop calling tools and wait for proactive
-system updates.
-
-With `subscribe_by_default=True`, the subscription hook runs before the update
-task starts. Unsubscribed calls proactively report only `Finished`; subscribed
-calls report both `Running` and `Finished`.
-
-## Message history protocol
-
-Every ToolMessage requires a preceding AI ToolCall with the same ID.
-`append_tool_message()` and `ainvoke_and_append()` preserve this constraint and
-reject:
-
-- empty call IDs;
-- mismatched ToolCall and ToolMessage IDs;
-- duplicate ToolMessages for one ID;
-- one ID reused with a different name or arguments.
-
-An asynchronous update uses a new `async_tool_updated` ToolCall whose arguments
-contain the original `source_call_id`. Its message content has this form:
-
-```json
-{
-  "running": true,
-  "tool_output": "Searching the first page"
-}
-```
-
-The final update sets `running` to `false` and stores the result of
-`ToolOutput.to_content()` in `tool_output`.
-
-## DefaultAgent integration
-
-`DefaultAgent` creates one ToolEngine per session, binds the model, and
-registers an asynchronous update callback. When no model generation is active,
-the callback appends a valid ToolCall/ToolMessage pair and wakes the session
-loop. Updates arriving during generation are deferred until it finishes, so
-the current tool-call chain and a later loop cannot consume the same result.
-
-When several updates arrive before generation starts, every downstream update
-event is preserved while the model generations are coalesced into one. An
-update arriving during generation triggers another generation afterward.
-User requests use a model that may call tools. Proactive reports triggered by
-background updates still bind every tool schema so the model can interpret
-system ToolCalls in history, but set `tool_choice="none"` to prevent tool calls
-during that generation.
-
-### Concurrent ASR partials
-
-ASR partials are stored as HumanMessages. If a tool update interrupts an
-unfinished user message, later partials behave as follows:
-
-- if the previous partial is a prefix, append only the new suffix;
-- otherwise append the complete replacement text;
-- if final ASR equals the latest partial, do not append an empty HumanMessage;
-- always clear the final-generation flag after completion, failure, or
-  cancellation.
-
-While the user is still speaking, an asynchronous update is written to history
-without immediately starting model generation. After final ASR, the model sees
-both the tool update and the complete user input.
-
-## Shutdown
-
-Session shutdown must call:
-
-```python
-await engine.shutdown()
-```
-
-`shutdown()` rejects new calls, invokes `astop()` for active asynchronous
-tools, cancels their background tasks, and waits for task completion. Repeated
-shutdown calls are safe.
-
-## Current limitations
-
-- The LLM cannot yet provide a second input to a running tool.
-- Applications and tools must agree on the concurrency policy of
-  `ToolEngineState`.
-- Real models may interpret tool descriptions and proactive updates
-  differently, so optional end-to-end integration tests should complement unit
-  tests.
+When an engine contains an `AsyncTool`, it also binds tools for status, subscribe, unsubscribe, and stop operations. Asynchronous updates return proactively through the callback registered by `on_async_tool_update()`. Unsubscribed calls proactively emit only the final `Finished`; subscribed calls emit intermediate `Running` values and the final `Finished`.
