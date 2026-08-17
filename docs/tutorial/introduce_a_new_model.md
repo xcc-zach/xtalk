@@ -1,14 +1,13 @@
 > **Note**
 > See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the configured `llm_agent` during staged configuration.
 
-You may want to introduce a new model for an existing model type, such as a new text-to-speech model. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
+You may want to introduce a new model for an existing model type, such as a new LLM Agent. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
 
 ## 1. Import the Model Interface and Registration Decorator
 
-`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For model interface details, see [ASR Design](../technical_reference/asr_design.md) and related documents.
+`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For interface details, see the [Agent API](../api/server/xtalk/models/agents/interfaces.md).
 
 ```python
-import asyncio
 from typing import Any, AsyncIterator, Iterable
 
 from xtalk import Xtalk, model
@@ -18,8 +17,6 @@ from xtalk.models.agents import AgentContext, AgentOutput
 
 ## 2. Define and Register the Model Implementation
 
-The key step is adding `@model` to the class. By default, the config `type` can use the class name directly: `EchoAgent`.
-
 ```python
 @model
 class EchoAgent(Agent):
@@ -28,58 +25,42 @@ class EchoAgent(Agent):
     def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
         """Synchronously bridge ``async_accept()`` for compatibility."""
 
-        yield from self._sync_iter_from_async(self.async_accept(context))
+        yield from self.sync_iter_from_async(self.async_accept(context))
 
     async def async_accept(
         self,
         context: AgentContext,
     ) -> AsyncIterator[AgentOutput]:
-        if str(context.get("type", "") or "") != "asr_final":
+        """Emit finalized ASR text."""
+
+        if context["type"] != "asr_final":
             return
-        payload = context.get("data") or {}
-        if not isinstance(payload, dict):
-            return
-        text = str(payload.get("text", ""))
+        text = context["data"]["text"]
         if text:
             yield text
 
     def restore_history(self, messages: list[dict[str, Any]]) -> None:
+        """Ignore persisted history."""
+
         del messages
 
     def clone(self) -> "EchoAgent":
+        """Create a fresh stateless agent."""
+
         return EchoAgent()
 
-    def _sync_iter_from_async(
-        self,
-        async_iter: AsyncIterator[AgentOutput],
-    ) -> Iterable[AgentOutput]:
-        loop = asyncio.new_event_loop()
-        try:
-            while True:
-                try:
-                    item = loop.run_until_complete(async_iter.__anext__())
-                except StopAsyncIteration:
-                    break
-                yield item
-        finally:
-            loop.close()
 ```
 
 Notes:
 
-- `@model` must run before `Xtalk.configure(...).set_model(...)`, which means the module defining the class must be imported first.
 - `async_accept` is the main async runtime entrypoint.
-- `accept` bridges to `async_accept` for synchronous compatibility.
 - `clone()` should return a model instance suitable for a new session, avoiding shared mutable state across sessions.
-- Finite output streams finish the current response when their iterator ends.
-  A long-lived stream started by `loop` should also yield
-  `AgentTurnBoundary()` after each response. This triggers TTS flush and
-  response finish without ending the stream itself.
+- For a complete development guide, see [Introduce an LLM Agent](introduce_an_llm_agent.md).
 
 ## 3. Select the New Model
 
-When the model choice belongs in the JSON file, set the `llm_agent` type to
-`EchoAgent` and continue using `Xtalk.from_config(...)`:
+Change the `llm_agent` `type` to `EchoAgent` and continue using
+`Xtalk.from_config(...)`:
 
 ```json
 {
@@ -94,16 +75,20 @@ When the base config should remain reusable, select the registered Python class
 during staged configuration instead:
 
 ```python
+def clear_agent_params(config: dict[str, Any]) -> dict[str, Any]:
+    agent_config = config.get("llm_agent")
+    if isinstance(agent_config, dict):
+        agent_config["params"] = {}
+    return config
+
+
 xtalk_instance = (
     Xtalk.configure("path/to/config.json")
+    .transform_config(clear_agent_params)
     .set_model(EchoAgent)
     .build()
 )
 ```
-
-`set_model()` infers the model slot and registered config name from
-`EchoAgent`. It preserves the configured model parameters and supports
-registered names that differ from the Python class name.
 
 ## 4. Register Before Creating Xtalk
 
@@ -113,6 +98,7 @@ class definition and `@model` registration before reaching `set_model(...)`.
 ```python
 xtalk_instance = (
     Xtalk.configure(args.config)
+    .transform_config(clear_agent_params)
     .set_model(EchoAgent)
     .build()
 )
@@ -126,6 +112,7 @@ from my_app.echo_agent import EchoAgent
 
 xtalk_instance = (
     Xtalk.configure("path/to/config.json")
+    .transform_config(clear_agent_params)
     .set_model(EchoAgent)
     .build()
 )
