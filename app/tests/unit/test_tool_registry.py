@@ -163,6 +163,7 @@ def test_repository_builtin_catalog_loads_without_backend_imports(
     )
 
     assert {tool.name for tool in tools} == {
+        "enter_sleep_mode",
         "get_time",
         "timer",
         "fetch_text",
@@ -172,6 +173,9 @@ def test_repository_builtin_catalog_loads_without_backend_imports(
     }
     timer = next(tool for tool in tools if tool.name == "timer")
     assert timer.__module__.startswith("_xtalk_desktop_tool_builtin_timer")
+    sleep = next(tool for tool in tools if tool.name == "enter_sleep_mode")
+    result = sleep.invoke(sleep.input_type(), {})
+    assert "brief farewell" in result.to_content()
 
 
 def test_load_enabled_tools_applies_builtin_disable_preference(

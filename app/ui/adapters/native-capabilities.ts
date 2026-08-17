@@ -130,6 +130,7 @@ export interface NativeToolUiSource {
 
 const APPLY_MODEL_CONFIG_COMMAND = "apply_model_config";
 const APPLY_TOOL_CHANGES_COMMAND = "apply_tool_changes";
+const BACKGROUND_MAIN_WINDOW_COMMAND = "background_main_window";
 const BACKEND_CONNECTION_COMMAND = "get_backend_connection";
 const CREDENTIALS_COMMAND = "get_credentials";
 const DELETE_CREDENTIAL_COMMAND = "delete_credential";
@@ -179,6 +180,14 @@ export async function ensureNativeBackendStarted(): Promise<NativeBackendConnect
   requireTauriRuntime();
   const payload = await invoke<unknown>(ENSURE_BACKEND_STARTED_COMMAND);
   return parseNativeBackendConnection(payload);
+}
+
+/**
+ * Hides the main window while leaving the backend and wake detector running.
+ */
+export async function backgroundNativeMainWindow(): Promise<void> {
+  requireTauriRuntime();
+  await invoke(BACKGROUND_MAIN_WINDOW_COMMAND);
 }
 
 /**
@@ -624,7 +633,6 @@ function parseNativeWakeWordSettings(payload: unknown): NativeWakeWordSettings {
   if (
     typeof payload.enabled !== "boolean" ||
     typeof payload.phrase !== "string" ||
-    !payload.phrase.trim() ||
     typeof threshold !== "number" ||
     !Number.isFinite(threshold) ||
     threshold < 0 ||
