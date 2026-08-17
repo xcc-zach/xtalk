@@ -77,7 +77,6 @@ plugins:
             'Introduce an LLM Agent': 引入LLM Agent
             'Model Types and Control Logic Customization': 模型类型与控制逻辑定制
             Testing: 测试
-            'MTD Multi-Speaker Quickstart': MTD多说话人快速开始
             'Service Configuration': 服务配置项
             Logging: 日志
             'Text Input': 文本输入
@@ -114,14 +113,13 @@ nav:
           - 'Model Types and Control Logic Customization': tutorial/customize_the_service.md
       - Other:
           - 'Introduce an LLM Agent': tutorial/introduce_an_llm_agent.md
-          - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
           - 'Introduce Tools': tutorial/tool_design.md
-          - Testing: tutorial/testing.md
-          - Bot2Bot: tutorial/bot2bot.md
-          - 'MTD Multi-Speaker Quickstart': tutorial/mtd_multi_speaker_quickstart.md
+          - 'Text Input': tutorial/text_input.md
+          - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
           - 'Service Configuration': tutorial/service_config.md
           - Logging: tutorial/logging.md
-          - 'Text Input': tutorial/text_input.md
+          - Testing: tutorial/testing.md
+          - Bot2Bot: tutorial/bot2bot.md
   - 'App Tutorial':
       - 'Model Configuration': app_tutorial/model_configuration.md
       - 'Add Tools': app_tutorial/add_tools.md
