@@ -274,8 +274,15 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 }
 ```
 
+**服务端参考实现：**
+
+- [CAM++ 服务实现](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/src/campplus.rs)
+- [运行时入口](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/src/main.rs)
+- [启动说明](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/README.md#run-cam)
+
 </details>
 
+<a id="moss-transcribediarize-受管"></a>
 <details markdown="1">
 <summary>MossTranscribeDiarize [受管]</summary>
 
@@ -298,6 +305,8 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
   }
 }
 ```
+
+[快速开始](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize/blob/main/README_zh.md#快速开始)
 
 </details>
 

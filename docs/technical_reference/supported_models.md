@@ -278,8 +278,15 @@ Extracts speaker embeddings through a CAM++ service, then clusters them and assi
 }
 ```
 
+**Server reference implementation:**
+
+- [CAM++ service implementation](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/src/campplus.rs)
+- [Runtime entry point](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/src/main.rs)
+- [Startup instructions](https://github.com/xcc-zach/xtalk/blob/main/app/local-model-runtime/README.md#run-cam)
+
 </details>
 
+<a id="moss-transcribediarize-managed"></a>
 <details markdown="1">
 <summary>MossTranscribeDiarize [Managed]</summary>
 
@@ -302,6 +309,8 @@ Calls a MOSS Transcribe Diarize service and returns timestamped segments contain
   }
 }
 ```
+
+[Quick Start](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize#quickstart)
 
 </details>
 
