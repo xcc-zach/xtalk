@@ -159,3 +159,92 @@ Update the active synthesis emotion.
 
 - `emotion` (`str | list[float]`)
   Emotion label or model-specific emotion vector.
+
+## StreamingTextTTS
+
+```python
+class StreamingTextTTS(ABC)
+```
+
+Abstract base class for live text-streaming TTS engines.
+
+### Notes
+
+This interface models engines that accept text incrementally and emit audio
+concurrently from the same session. Implementations may also inherit
+``TTS`` when they support the regular full-text synthesis API.
+
+### Methods
+
+#### start
+
+```python
+async def start(self) -> None
+```
+
+Start a live text-streaming synthesis session.
+
+##### Notes
+
+Implementations typically open an upstream WebSocket connection and
+send the provider-specific start event here.
+
+#### append_text
+
+```python
+async def append_text(self, text: str) -> None
+```
+
+Append incremental text to the active synthesis session.
+
+##### Parameters
+
+- `text` (`str`)
+  Text fragment produced by the upstream LLM or agent.
+
+#### flush
+
+```python
+async def flush(self) -> None
+```
+
+Request synthesis of currently buffered upstream text.
+
+##### Notes
+
+``TTSManager`` calls this when it receives ``TurnTTSFlushRequested``.
+Implementations should not rely on sentence-boundary flushes.
+
+#### stop
+
+```python
+async def stop(self) -> None
+```
+
+Stop the active synthesis session and release connection resources.
+
+#### audio_stream
+
+```python
+def audio_stream(self) -> AsyncIterator[bytes]
+```
+
+Stream generated PCM audio chunks from the active session.
+
+##### Yields
+
+- `bytes`
+  PCM 16-bit mono audio bytes, preferably at 48 kHz.
+
+#### clone
+
+```python
+def clone(self) -> 'StreamingTextTTS'
+```
+
+Clone the streaming TTS engine for a new session.
+
+##### Returns
+
+- `StreamingTextTTS`
+  Session-safe clone with independent live connection state.

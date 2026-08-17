@@ -150,6 +150,21 @@ class VADSpeechEnd(Event)
 - `TYPE: ClassVar[str]` = `'vad.speech_end'`
 - `origin: str` = `'client'`
 
+## ASRGateState
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+class ASRGateState(str, Enum)
+```
+
+Mark whether a speaker-aware gate accepted an ASR event.
+
+### Class Fields
+
+- `UNCHECKED` = `'unchecked'`
+- `ACCEPTED` = `'accepted'`
+
 ## ASRResultPartial
 
 _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
@@ -159,12 +174,18 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class ASRResultPartial(Event)
 ```
 
+Incremental user transcript produced by audio ASR or text input.
+
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'asr.result_partial'`
 - `text: str` = `''`
 - `display_text: str` = `''`
 - `speech_pause: bool` = `False`
+- `origin: str` = `'asr'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+- `gate_state: ASRGateState` = `ASRGateState.UNCHECKED`
 
 ## ASRResultFinal
 
@@ -175,11 +196,17 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class ASRResultFinal(Event)
 ```
 
+Final user transcript that is ready for response generation.
+
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'asr.result_final'`
 - `text: str` = `''`
 - `display_text: str` = `''`
+- `origin: str` = `'asr'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+- `gate_state: ASRGateState` = `ASRGateState.UNCHECKED`
 
 ## LLMFirstChunk
 
@@ -223,6 +250,7 @@ class TTSStarted(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.started'`
+- `response_id: str` = `''`
 
 ## TTSStopped
 
@@ -236,6 +264,7 @@ class TTSStopped(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.stopped'`
+- `response_id: str` = `''`
 
 ## TTSPaused
 
@@ -275,6 +304,7 @@ class TTSFinished(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.finished'`
+- `response_id: str` = `''`
 
 ## LLMAgentResponseUpdate
 
@@ -288,6 +318,7 @@ class LLMAgentResponseUpdate(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'llm_agent.response_update'`
+- `response_id: str` = `''`
 - `text: str` = `''`
 
 ## LLMAgentResponseFinish
@@ -303,12 +334,15 @@ Final text emitted by the agent for one response.
 
 ### Attributes
 
+- `response_id` (`str`)
+  Stable identifier shared by generation, TTS, playback, and display.
 - `text` (`str`)
   Final response text.
 
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'llm_agent.response_finish'`
+- `response_id: str` = `''`
 - `text: str` = `''`
 
 ## ResponseUpdate
@@ -324,12 +358,15 @@ Text prefix whose corresponding TTS playback progress has been confirmed.
 
 ### Attributes
 
+- `response_id` (`str`)
+  Response whose cumulative playback-confirmed text is being updated.
 - `text` (`str`)
   Text prefix that has been played to the user.
 
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'response.update'`
+- `response_id: str` = `''`
 - `text: str` = `''`
 
 ## ResponseFinish
@@ -341,17 +378,68 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class ResponseFinish(Event)
 ```
 
-Final text whose corresponding TTS playback has finished.
+Final playback-confirmed text for a completed or interrupted TTS turn.
 
 ### Attributes
 
+- `response_id` (`str`)
+  Response whose playback settlement is complete.
 - `text` (`str`)
-  Final response text whose playback completed.
+  Final response prefix that was actually played to the user.
 
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'response.finish'`
+- `response_id: str` = `''`
 - `text: str` = `''`
+
+## TTSTextSynthesisStarted
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TTSTextSynthesisStarted(Event)
+```
+
+Mark the start of one FIFO-ordered TTS text segment.
+
+### Attributes
+
+- `text` (`str`)
+  Complete text of the segment about to be synthesized.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'tts.text_synthesis_started'`
+- `response_id: str` = `''`
+- `text: str` = `''`
+
+## TTSStreamingTextAccepted
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TTSStreamingTextAccepted(Event)
+```
+
+Report text accepted by the active streaming TTS session.
+
+### Attributes
+
+- `text` (`str`)
+  Incremental text successfully accepted by ``StreamingTextTTS``.
+- `prepared_audio_ms` (`float`)
+  Duration of speed-processed PCM already prepared before the text was
+  forwarded. The value is a lower-bound timeline anchor for this text.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'tts.streaming_text_accepted'`
+- `response_id: str` = `''`
+- `text: str` = `''`
+- `prepared_audio_ms: float` = `0.0`
 
 ## TTSTextSynthesized
 
@@ -369,13 +457,45 @@ Text marker emitted after one synthesized text segment is fully produced.
 - `text` (`str`)
   Text segment that was synthesized.
 - `audio_duration` (`float`)
-  Estimated playback duration of the synthesized audio in milliseconds.
+  Duration of the final emitted PCM audio in milliseconds.
+- `audio_chunk` (`bytes`)
+  Optional complete PCM 16-bit mono audio accepted for compatibility.
+- `sample_rate` (`int`)
+  Sample rate of ``audio_chunk``. Zero when no audio is attached.
 
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.text_synthesized'`
+- `response_id: str` = `''`
 - `text: str` = `''`
 - `audio_duration: float` = `0.0`
+- `audio_chunk: bytes` = `b''`
+- `sample_rate: int` = `0`
+
+## TTSTextDeliveryFinished
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TTSTextDeliveryFinished(Event)
+```
+
+Mark completion of FIFO audio delivery for one TTS text segment.
+
+### Attributes
+
+- `text` (`str`)
+  Text associated with the delivered audio segment.
+- `succeeded` (`bool`)
+  Whether synthesis produced a complete deliverable segment.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'tts.text_delivery_finished'`
+- `response_id: str` = `''`
+- `text: str` = `''`
+- `succeeded: bool` = `True`
 
 ## TTSVoiceChange
 
@@ -434,6 +554,7 @@ Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk i
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.chunk_ready'`
+- `response_id: str` = `''`
 - `audio_chunk: bytes` = `b''`
 - `sample_rate: int` = `48000`
 
@@ -454,6 +575,27 @@ listeners can observe frontend playback completion in FIFO order.
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.chunk_played_confirm'`
+- `response_id: str` = `''`
+
+## TTSPlaybackStopped
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TTSPlaybackStopped(Event)
+```
+
+Frontend confirmed how much active audio played before an early stop.
+
+``played_audio_ms`` contains only playback time not already represented by
+preceding ``TTSChunkPlayed`` events.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'tts.playback_stopped'`
+- `response_id: str` = `''`
+- `played_audio_ms: float` = `0.0`
 
 ## TTSPlaybackFinished
 
@@ -467,6 +609,7 @@ class TTSPlaybackFinished(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.playback_finished'`
+- `response_id: str` = `''`
 
 ## FullAudioFrameReady
 
@@ -627,6 +770,26 @@ class TurnTTSStartRequested(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.tts_start_requested'`
+- `response_id: str` = `''`
+
+## TurnTTSDeliveryStartRequested
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TurnTTSDeliveryStartRequested(Event)
+```
+
+Allow one prepared TTS response to begin client delivery.
+
+``response_id`` selects the prepared response whose text and audio may now
+cross the client-delivery boundary.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'turn.tts_delivery_start_requested'`
+- `response_id: str` = `''`
 
 ## TurnTTSPauseRequested
 
@@ -666,6 +829,7 @@ class TurnTTSStopRequested(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.tts_stop_requested'`
+- `response_id: str | None` = `None`
 - `reason: str` = `''`
 
 ## TurnTTSFlushRequested
@@ -680,6 +844,7 @@ class TurnTTSFlushRequested(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.tts_flush_requested'`
+- `response_id: str` = `''`
 
 ## ConsumeLLMAgentGenerationRequested
 
@@ -692,10 +857,18 @@ class ConsumeLLMAgentGenerationRequested(Event)
 
 Request consumption of one LLM-agent output stream.
 
+### Attributes
+
+- `stream` (`AsyncIterator[AgentOutput]`)
+  Agent output stream to consume.
+- `persistent` (`bool`)
+  Whether turn-stop events must preserve the stream.
+
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'llm_agent.consume_generation_requested'`
 - `stream: AsyncIterator[AgentOutput]`
+- `persistent: bool` = `False`
 
 ## TurnLLMAgentResumeRequested
 
@@ -737,6 +910,27 @@ class TurnLLMAgentStopRequested(Event)
 - `TYPE: ClassVar[str]` = `'turn.llm_agent_stop_requested'`
 - `reason: str` = `''`
 
+## TurnInputAbortRequested
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TurnInputAbortRequested(Event)
+```
+
+Request cancellation of an unfinished input turn.
+
+### Attributes
+
+- `origin` (`str`)
+  Origin of the replacement turn requesting cancellation.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'turn.input_abort_requested'`
+- `origin: str` = `''`
+
 ## TurnASRStartRequested
 
 _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
@@ -749,6 +943,8 @@ class TurnASRStartRequested(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.asr_start_requested'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
 
 ## TurnASREndRequested
 
@@ -764,6 +960,8 @@ Indicates hard turn end. ASR model state is reset. Turn moves to next.
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.asr_end_requested'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
 
 ## TurnASRPauseRequested
 
@@ -779,6 +977,125 @@ Used when user indicates a wait, or pauses in the speech. Triggers recognition o
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.asr_pause_requested'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+
+## SpeakerDiarizationPartial
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class SpeakerDiarizationPartial(Event)
+```
+
+Replaceable diarization result for the current VAD-segment snapshot.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'speaker_diarization.partial'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+- `revision: int` = `0`
+- `source_start_sample: int` = `0`
+- `source_end_sample: int` = `0`
+- `sample_rate: int` = `16000`
+- `raw_text: str` = `''`
+- `diarization_text: str` = `''`
+- `segments: list[dict[str, Any]]` = `field(default_factory=list)`
+- `latency_ms: float` = `0.0`
+
+## SpeakerInterruptionDecision
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class SpeakerInterruptionDecision(Event)
+```
+
+Resolve a paused barge-in after identifying its active speaker.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'speaker_diarization.interruption_decision'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+- `speaker_id: str | None` = `None`
+- `should_interrupt: bool` = `False`
+- `reason: str` = `''`
+
+## SpeakerDiarizationSegmentFinal
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class SpeakerDiarizationSegmentFinal(Event)
+```
+
+Terminal diarization result for one VAD segment.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'speaker_diarization.segment_final'`
+- `turn_id: int` = `0`
+- `segment_id: int` = `0`
+- `source_start_sample: int` = `0`
+- `source_end_sample: int` = `0`
+- `sample_rate: int` = `16000`
+- `raw_text: str` = `''`
+- `diarization_text: str` = `''`
+- `segments: list[dict[str, Any]]` = `field(default_factory=list)`
+- `metrics: dict[str, Any]` = `field(default_factory=dict)`
+- `degraded: bool` = `False`
+- `degraded_reason: str` = `''`
+- `latency_ms: float` = `0.0`
+
+## SpeakerDiarizationTurnFinal
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class SpeakerDiarizationTurnFinal(Event)
+```
+
+Terminal diarization timeline after every segment in a hard turn ends.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'speaker_diarization.turn_final'`
+- `turn_id: int` = `0`
+- `segment_ids: list[int]` = `field(default_factory=list)`
+- `segments: list[dict[str, Any]]` = `field(default_factory=list)`
+- `diarization_text: str` = `''`
+- `active_speaker_id: str | None` = `None`
+- `degraded: bool` = `False`
+- `degraded_reason: str` = `''`
+
+## MultiSpeakerTurnReady
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class MultiSpeakerTurnReady(Event)
+```
+
+ASR transcript joined with its turn-level speaker timeline.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'multi_speaker.turn_ready'`
+- `turn_id: int` = `0`
+- `asr_text: str` = `''`
+- `diarization_text: str` = `''`
+- `diarization_segments: list[dict[str, Any]]` = `field(default_factory=list)`
+- `active_speaker_id: str | None` = `None`
+- `should_respond: bool` = `True`
+- `degraded: bool` = `False`
+- `degraded_reason: str` = `''`
 
 ## TurnTTSTextAppendRequested
 
@@ -794,7 +1111,26 @@ Request to append text into ongoing TTS stream (sim-trans).
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'turn.tts_text_append_requested'`
+- `response_id: str` = `''`
 - `text: str` = `''`
+
+## TTSResponseClosed
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class TTSResponseClosed(Event)
+```
+
+Signal that one response has completed playback settlement and cleanup.
+
+``response_id`` releases only the matching coordinator delivery slot.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'tts.response_closed'`
+- `response_id: str` = `''`
 
 ## SpeakerRecognized
 
