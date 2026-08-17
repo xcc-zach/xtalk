@@ -1,4 +1,4 @@
-*测试中的功能*
+*实验中的功能*
 
 X-Talk 提供了统一的 [`scripts/test.py`](https://github.com/xcc-zach/xtalk/blob/main/scripts/test.py) 脚本，用于测试集生成和后端自动化评测。
 

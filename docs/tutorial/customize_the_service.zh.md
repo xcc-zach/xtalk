@@ -1,4 +1,4 @@
-*实验中的API*
+*实验中的功能*
 
 > **Note**
 > 示例请参阅 [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py)。其中向 X-Talk 添加了一个哑的 `LLMOutputRefactorModel`，用于在发送到前端的最终 LLM 响应文本前附加 `Assistant response: `。
