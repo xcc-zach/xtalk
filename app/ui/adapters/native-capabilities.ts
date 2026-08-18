@@ -183,7 +183,7 @@ export async function ensureNativeBackendStarted(): Promise<NativeBackendConnect
 }
 
 /**
- * Hides the main window while leaving the backend and wake detector running.
+ * Hides the main window after native wake-word listening has been verified.
  */
 export async function backgroundNativeMainWindow(): Promise<void> {
   requireTauriRuntime();
@@ -384,7 +384,7 @@ export async function listenNativeWakeWordDetected(
 /**
  * Subscribes to native main-window backgrounding requests.
  *
- * @param listener Callback that releases the active conversation microphone.
+ * @param listener Callback that prepares and acknowledges background mode.
  * @returns Function that removes the native event subscription.
  */
 export async function listenNativeAppBackgrounding(
