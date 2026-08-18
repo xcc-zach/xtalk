@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-is-whiteboard-window-visible"
+description = "Enables the is_whiteboard_window_visible command without any pre-configured scope."
+commands.allow = ["is_whiteboard_window_visible"]
+
+[[permission]]
+identifier = "deny-is-whiteboard-window-visible"
+description = "Denies the is_whiteboard_window_visible command without any pre-configured scope."
+commands.deny = ["is_whiteboard_window_visible"]

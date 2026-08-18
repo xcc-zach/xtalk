@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import time
 from dataclasses import dataclass, field, make_dataclass
+from enum import Enum
 from typing import AsyncIterator, ClassVar, Dict, Any, Type
-from ..llm_agent.interfaces import AgentOutput
+from ..models.agents.interfaces import AgentOutput
 
 
 @dataclass
-class BaseEvent:
+class Event:
     """Base dataclass for all Xtalk events.
 
     Parameters
@@ -38,8 +39,8 @@ class BaseEvent:
 
 def create_event_class(
     *, name: str, fields: dict[str, Any] | None = None, type_name: str | None = None
-) -> Type[BaseEvent]:
-    """Create a ``BaseEvent`` subclass dynamically.
+) -> Type[Event]:
+    """Create an ``Event`` subclass dynamically.
 
     Parameters
     ----------
@@ -53,8 +54,8 @@ def create_event_class(
 
     Returns
     -------
-    Type[BaseEvent]
-        Generated dataclass type inheriting from ``BaseEvent``.
+    Type[Event]
+        Generated dataclass type inheriting from ``Event``.
 
     Examples
     --------
@@ -69,26 +70,26 @@ def create_event_class(
         dataclass_fields.append((key, type(default), field(default=default)))
     type_name = type_name or name.lower()
     return make_dataclass(
-        name, dataclass_fields, bases=(BaseEvent,), namespace={"TYPE": type_name}
+        name, dataclass_fields, bases=(Event,), namespace={"TYPE": type_name}
     )
 
 
 @dataclass
-class WebSocketMessageReceived(BaseEvent):
+class WebSocketMessageReceived(Event):
     TYPE: ClassVar[str] = "websocket.message_received"
     message: str = ""
 
 
 @dataclass
-class AudioFrameReceived(BaseEvent):
+class AudioFrameReceived(Event):
     TYPE: ClassVar[str] = "audio.frame_received"
     audio_data: bytes
     sample_rate: int = 16000
 
 
 @dataclass
-class EnhancedAudioFrameReceived(BaseEvent):
-    """Enhanced audio frame for downstream ASR/VAD."""
+class EnhancedAudioFrameReceived(Event):
+    """Enhanced audio frame for downstream VAD, speaker, and turn detection."""
 
     TYPE: ClassVar[str] = "audio.enhanced_frame_received"
     audio_data: bytes
@@ -96,122 +97,187 @@ class EnhancedAudioFrameReceived(BaseEvent):
 
 
 @dataclass
-class VADSpeechStart(BaseEvent):
+class VADSpeechStart(Event):
     TYPE: ClassVar[str] = "vad.speech_start"
     origin: str = "client"
 
 
 @dataclass
-class VADSpeechEnd(BaseEvent):
+class VADSpeechEnd(Event):
     TYPE: ClassVar[str] = "vad.speech_end"
     origin: str = "client"
 
 
+class ASRGateState(str, Enum):
+    """Mark whether a speaker-aware gate accepted an ASR event."""
+
+    UNCHECKED = "unchecked"
+    ACCEPTED = "accepted"
+
+
 @dataclass
-class ASRResultPartial(BaseEvent):
+class ASRResultPartial(Event):
+    """Incremental user transcript produced by audio ASR or text input."""
+
     TYPE: ClassVar[str] = "asr.result_partial"
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
     speech_pause: bool = False
+    origin: str = "asr"
+    turn_id: int = 0
+    segment_id: int = 0
+    gate_state: ASRGateState = ASRGateState.UNCHECKED
 
 
 @dataclass
-class ASRResultFinal(BaseEvent):
-    # Emit when ready for generation
+class ASRResultFinal(Event):
+    """Final user transcript that is ready for response generation."""
+
     TYPE: ClassVar[str] = "asr.result_final"
     text: str = ""
     display_text: str = ""  # Cleaned text for frontend display
+    origin: str = "asr"
+    turn_id: int = 0
+    segment_id: int = 0
+    gate_state: ASRGateState = ASRGateState.UNCHECKED
 
 
 @dataclass
-class LLMFirstChunk(BaseEvent):
+class LLMFirstChunk(Event):
     """Event for first LLM chunk/tool call (measure first token latency)."""
 
     TYPE: ClassVar[str] = "llm.first_chunk"
 
 
 @dataclass
-class LLMFirstSentence(BaseEvent):
+class LLMFirstSentence(Event):
     """Event for first synthesizable sentence (measure sentence latency)."""
 
     TYPE: ClassVar[str] = "llm.sentence_ready"
 
 
 @dataclass
-class TTSStarted(BaseEvent):
+class TTSStarted(Event):
     TYPE: ClassVar[str] = "tts.started"
+    response_id: str = ""
 
 
 @dataclass
-class TTSStopped(BaseEvent):
+class TTSStopped(Event):
     TYPE: ClassVar[str] = "tts.stopped"
+    response_id: str = ""
 
 
 @dataclass
-class TTSPaused(BaseEvent):
+class TTSPaused(Event):
     TYPE: ClassVar[str] = "tts.paused"
 
 
 @dataclass
-class TTSResumed(BaseEvent):
+class TTSResumed(Event):
     TYPE: ClassVar[str] = "tts.resumed"
 
 
 @dataclass
-class TTSFinished(BaseEvent):
+class TTSFinished(Event):
     TYPE: ClassVar[str] = "tts.finished"
+    response_id: str = ""
 
 
 @dataclass
-class LLMAgentResponseUpdate(BaseEvent):
+class LLMAgentResponseUpdate(Event):
     TYPE: ClassVar[str] = "llm_agent.response_update"
+    response_id: str = ""
     text: str = ""
 
 
 @dataclass
-class LLMAgentResponseFinish(BaseEvent):
+class LLMAgentResponseFinish(Event):
     """Final text emitted by the agent for one response.
 
     Attributes
     ----------
+    response_id : str
+        Stable identifier shared by generation, TTS, playback, and display.
     text : str
         Final response text.
     """
 
     TYPE: ClassVar[str] = "llm_agent.response_finish"
+    response_id: str = ""
     text: str = ""
 
 
 @dataclass
-class ResponseUpdate(BaseEvent):
+class ResponseUpdate(Event):
     """Text prefix whose corresponding TTS playback progress has been confirmed.
 
     Attributes
     ----------
+    response_id : str
+        Response whose cumulative playback-confirmed text is being updated.
     text : str
         Text prefix that has been played to the user.
     """
 
     TYPE: ClassVar[str] = "response.update"
+    response_id: str = ""
     text: str = ""
 
 
 @dataclass
-class ResponseFinish(BaseEvent):
-    """Final text whose corresponding TTS playback has finished.
+class ResponseFinish(Event):
+    """Final playback-confirmed text for a completed or interrupted TTS turn.
+
+    Attributes
+    ----------
+    response_id : str
+        Response whose playback settlement is complete.
+    text : str
+        Final response prefix that was actually played to the user.
+    """
+
+    TYPE: ClassVar[str] = "response.finish"
+    response_id: str = ""
+    text: str = ""
+
+
+@dataclass
+class TTSTextSynthesisStarted(Event):
+    """Mark the start of one FIFO-ordered TTS text segment.
 
     Attributes
     ----------
     text : str
-        Final response text whose playback completed.
+        Complete text of the segment about to be synthesized.
     """
 
-    TYPE: ClassVar[str] = "response.finish"
+    TYPE: ClassVar[str] = "tts.text_synthesis_started"
+    response_id: str = ""
     text: str = ""
 
 
 @dataclass
-class TTSTextSynthesized(BaseEvent):
+class TTSStreamingTextAccepted(Event):
+    """Report text accepted by the active streaming TTS session.
+
+    Attributes
+    ----------
+    text : str
+        Incremental text successfully accepted by ``StreamingTextTTS``.
+    prepared_audio_ms : float
+        Duration of speed-processed PCM already prepared before the text was
+        forwarded. The value is a lower-bound timeline anchor for this text.
+    """
+
+    TYPE: ClassVar[str] = "tts.streaming_text_accepted"
+    response_id: str = ""
+    text: str = ""
+    prepared_audio_ms: float = 0.0
+
+
+@dataclass
+class TTSTextSynthesized(Event):
     """Text marker emitted after one synthesized text segment is fully produced.
 
     Attributes
@@ -219,22 +285,47 @@ class TTSTextSynthesized(BaseEvent):
     text : str
         Text segment that was synthesized.
     audio_duration : float
-        Estimated playback duration of the synthesized audio in milliseconds.
+        Duration of the final emitted PCM audio in milliseconds.
+    audio_chunk : bytes
+        Optional complete PCM 16-bit mono audio accepted for compatibility.
+    sample_rate : int
+        Sample rate of ``audio_chunk``. Zero when no audio is attached.
     """
 
     TYPE: ClassVar[str] = "tts.text_synthesized"
+    response_id: str = ""
     text: str = ""
     audio_duration: float = 0.0
+    audio_chunk: bytes = b""
+    sample_rate: int = 0
 
 
 @dataclass
-class TTSVoiceChange(BaseEvent):
+class TTSTextDeliveryFinished(Event):
+    """Mark completion of FIFO audio delivery for one TTS text segment.
+
+    Attributes
+    ----------
+    text : str
+        Text associated with the delivered audio segment.
+    succeeded : bool
+        Whether synthesis produced a complete deliverable segment.
+    """
+
+    TYPE: ClassVar[str] = "tts.text_delivery_finished"
+    response_id: str = ""
+    text: str = ""
+    succeeded: bool = True
+
+
+@dataclass
+class TTSVoiceChange(Event):
     TYPE: ClassVar[str] = "tts.reference_audio_changed"
     voice_name: str = ""
 
 
 @dataclass
-class TTSEmotionChange(BaseEvent):
+class TTSEmotionChange(Event):
     TYPE: ClassVar[str] = "tts.emotion_changed"
     emotion_name: str = ""
     emotion_vector: list = None
@@ -246,21 +337,23 @@ class TTSEmotionChange(BaseEvent):
 
 
 @dataclass
-class TTSSpeedChange(BaseEvent):
+class TTSSpeedChange(Event):
     TYPE: ClassVar[str] = "tts.speed_changed"
     speed: float = 1.0  # 0.5 ~ 1.5
 
 
 @dataclass
-class TTSChunkReady(BaseEvent):
+class TTSChunkReady(Event):
     """Indicates one TTS audio chunk is ready for sending. Not emitted when the chunk is generated."""
+
     TYPE: ClassVar[str] = "tts.chunk_ready"
+    response_id: str = ""
     audio_chunk: bytes = b""
     sample_rate: int = 48000
 
 
 @dataclass
-class TTSChunkPlayed(BaseEvent):
+class TTSChunkPlayed(Event):
     """Frontend confirmed playback completion for a TTS audio chunk.
 
     InputGateway publishes this after receiving tts_chunk_played so downstream
@@ -268,15 +361,30 @@ class TTSChunkPlayed(BaseEvent):
     """
 
     TYPE: ClassVar[str] = "tts.chunk_played_confirm"
+    response_id: str = ""
 
 
 @dataclass
-class TTSPlaybackFinished(BaseEvent):
+class TTSPlaybackStopped(Event):
+    """Frontend confirmed how much active audio played before an early stop.
+
+    ``played_audio_ms`` contains only playback time not already represented by
+    preceding ``TTSChunkPlayed`` events.
+    """
+
+    TYPE: ClassVar[str] = "tts.playback_stopped"
+    response_id: str = ""
+    played_audio_ms: float = 0.0
+
+
+@dataclass
+class TTSPlaybackFinished(Event):
     TYPE: ClassVar[str] = "tts.playback_finished"
+    response_id: str = ""
 
 
 @dataclass
-class FullAudioFrameReady(BaseEvent):
+class FullAudioFrameReady(Event):
     TYPE: ClassVar[str] = "audio.full_frame_ready"
     audio_chunk: bytes = b""
     sample_rate: int = 48000
@@ -285,14 +393,14 @@ class FullAudioFrameReady(BaseEvent):
 
 
 @dataclass
-class ErrorOccurred(BaseEvent):
+class ErrorOccurred(Event):
     TYPE: ClassVar[str] = "error.occurred"
     error_type: str = ""
     error_message: str = ""
 
 
 @dataclass
-class CaptionUpdated(BaseEvent):
+class CaptionUpdated(Event):
     TYPE: ClassVar[str] = "caption.updated"
     text: str = ""
     is_final: bool = False
@@ -300,7 +408,7 @@ class CaptionUpdated(BaseEvent):
 
 
 @dataclass
-class ToolCallOccurred(BaseEvent):
+class ToolCallOccurred(Event):
     """LLM/Agent tool invocation notification."""
 
     TYPE: ClassVar[str] = "agent.tool_called"
@@ -309,14 +417,14 @@ class ToolCallOccurred(BaseEvent):
 
 
 @dataclass
-class RetrievalUpdated(BaseEvent):
+class RetrievalUpdated(Event):
     TYPE: ClassVar[str] = "retrieval.updated"
     text: str = ""
     is_final: bool = False
 
 
 @dataclass
-class EmbeddingStatusUpdated(BaseEvent):
+class EmbeddingStatusUpdated(Event):
     """Embedding lifecycle update consumed by the LLM agent context manager."""
 
     TYPE: ClassVar[str] = "embedding.status_updated"
@@ -326,14 +434,14 @@ class EmbeddingStatusUpdated(BaseEvent):
 
 
 @dataclass
-class LLMAgentLoop(BaseEvent):
+class LLMAgentLoop(Event):
     """Request one agent-context accept loop iteration for the session."""
 
     TYPE: ClassVar[str] = "llm.agent_loop"
 
 
 @dataclass
-class TextForEmbeddingReady(BaseEvent):
+class TextForEmbeddingReady(Event):
     TYPE: ClassVar[str] = "embeddings.text_ready"
     text: str = ""
 
@@ -342,7 +450,7 @@ class TextForEmbeddingReady(BaseEvent):
 
 
 @dataclass
-class LatencyMetricsUpdated(BaseEvent):
+class LatencyMetricsUpdated(Event):
     """Fine-grained backend latency metrics (milliseconds)."""
 
     TYPE: ClassVar[str] = "metrics.latency_updated"
@@ -357,91 +465,227 @@ class LatencyMetricsUpdated(BaseEvent):
 
 
 @dataclass
-class TurnTTSStartRequested(BaseEvent):
+class TurnTTSStartRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_start_requested"
+    response_id: str = ""
 
 
 @dataclass
-class TurnTTSPauseRequested(BaseEvent):
+class TurnTTSDeliveryStartRequested(Event):
+    """Allow one prepared TTS response to begin client delivery.
+
+    ``response_id`` selects the prepared response whose text and audio may now
+    cross the client-delivery boundary.
+    """
+
+    TYPE: ClassVar[str] = "turn.tts_delivery_start_requested"
+    response_id: str = ""
+
+
+@dataclass
+class TurnTTSPauseRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_pause_requested"
 
 
 @dataclass
-class TurnTTSResumeRequested(BaseEvent):
+class TurnTTSResumeRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_resume_requested"
 
 
 @dataclass
-class TurnTTSStopRequested(BaseEvent):
+class TurnTTSStopRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_stop_requested"
+    response_id: str | None = None
     reason: str = ""  # e.g., verification_valid|playback_finished
 
 
 @dataclass
-class TurnTTSFlushRequested(BaseEvent):
+class TurnTTSFlushRequested(Event):
     TYPE: ClassVar[str] = "turn.tts_flush_requested"
+    response_id: str = ""
 
 
 @dataclass
-class ConsumeLLMAgentGenerationRequested(BaseEvent):
-    """Request consumption of one LLM-agent output stream."""
+class ConsumeLLMAgentGenerationRequested(Event):
+    """Request consumption of one LLM-agent output stream.
+
+    Attributes
+    ----------
+    stream : AsyncIterator[AgentOutput]
+        Agent output stream to consume.
+    persistent : bool
+        Whether turn-stop events must preserve the stream.
+    """
 
     TYPE: ClassVar[str] = "llm_agent.consume_generation_requested"
     stream: AsyncIterator[AgentOutput]
+    persistent: bool = False
 
 
 @dataclass
-class TurnLLMAgentResumeRequested(BaseEvent):
+class TurnLLMAgentResumeRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_resume_requested"
 
 
 @dataclass
-class TurnLLMAgentPauseRequested(BaseEvent):
+class TurnLLMAgentPauseRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_pause_requested"
 
 
 @dataclass
-class TurnLLMAgentStopRequested(BaseEvent):
+class TurnLLMAgentStopRequested(Event):
     TYPE: ClassVar[str] = "turn.llm_agent_stop_requested"
     reason: str = ""  # e.g., vad_start|verification_valid
 
 
 @dataclass
-class TurnASRStartRequested(BaseEvent):
-    TYPE: ClassVar[str] = "turn.asr_start_requested"
+class TurnInputAbortRequested(Event):
+    """Request cancellation of an unfinished input turn.
+
+    Attributes
+    ----------
+    origin : str
+        Origin of the replacement turn requesting cancellation.
+    """
+
+    TYPE: ClassVar[str] = "turn.input_abort_requested"
+    origin: str = ""
 
 
 @dataclass
-class TurnASREndRequested(BaseEvent):
+class TurnASRStartRequested(Event):
+    TYPE: ClassVar[str] = "turn.asr_start_requested"
+    turn_id: int = 0
+    segment_id: int = 0
+
+
+@dataclass
+class TurnASREndRequested(Event):
     """
     Indicates hard turn end. ASR model state is reset. Turn moves to next.
     """
 
     TYPE: ClassVar[str] = "turn.asr_end_requested"
+    turn_id: int = 0
+    segment_id: int = 0
 
 
 @dataclass
-class TurnASRPauseRequested(BaseEvent):
+class TurnASRPauseRequested(Event):
     """
     Used when user indicates a wait, or pauses in the speech. Triggers recognition once. ASR model state is preserved; turn unchanged.
     """
 
     TYPE: ClassVar[str] = "turn.asr_pause_requested"
+    turn_id: int = 0
+    segment_id: int = 0
+
+
+# ==================== Multi-speaker Diarization Events ====================
 
 
 @dataclass
-class TurnTTSTextAppendRequested(BaseEvent):
+class SpeakerDiarizationPartial(Event):
+    """Replaceable diarization result for the current VAD-segment snapshot."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.partial"
+    turn_id: int = 0
+    segment_id: int = 0
+    revision: int = 0
+    source_start_sample: int = 0
+    source_end_sample: int = 0
+    sample_rate: int = 16000
+    raw_text: str = ""
+    diarization_text: str = ""
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    latency_ms: float = 0.0
+
+
+@dataclass
+class SpeakerInterruptionDecision(Event):
+    """Resolve a paused barge-in after identifying its active speaker."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.interruption_decision"
+    turn_id: int = 0
+    segment_id: int = 0
+    speaker_id: str | None = None
+    should_interrupt: bool = False
+    reason: str = ""
+
+
+@dataclass
+class SpeakerDiarizationSegmentFinal(Event):
+    """Terminal diarization result for one VAD segment."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.segment_final"
+    turn_id: int = 0
+    segment_id: int = 0
+    source_start_sample: int = 0
+    source_end_sample: int = 0
+    sample_rate: int = 16000
+    raw_text: str = ""
+    diarization_text: str = ""
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    degraded: bool = False
+    degraded_reason: str = ""
+    latency_ms: float = 0.0
+
+
+@dataclass
+class SpeakerDiarizationTurnFinal(Event):
+    """Terminal diarization timeline after every segment in a hard turn ends."""
+
+    TYPE: ClassVar[str] = "speaker_diarization.turn_final"
+    turn_id: int = 0
+    segment_ids: list[int] = field(default_factory=list)
+    segments: list[dict[str, Any]] = field(default_factory=list)
+    diarization_text: str = ""
+    active_speaker_id: str | None = None
+    degraded: bool = False
+    degraded_reason: str = ""
+
+
+@dataclass
+class MultiSpeakerTurnReady(Event):
+    """ASR transcript joined with its turn-level speaker timeline."""
+
+    TYPE: ClassVar[str] = "multi_speaker.turn_ready"
+    turn_id: int = 0
+    asr_text: str = ""
+    diarization_text: str = ""
+    diarization_segments: list[dict[str, Any]] = field(default_factory=list)
+    active_speaker_id: str | None = None
+    should_respond: bool = True
+    degraded: bool = False
+    degraded_reason: str = ""
+
+
+@dataclass
+class TurnTTSTextAppendRequested(Event):
     """Request to append text into ongoing TTS stream (sim-trans)."""
 
     TYPE: ClassVar[str] = "turn.tts_text_append_requested"
+    response_id: str = ""
     text: str = ""
+
+
+@dataclass
+class TTSResponseClosed(Event):
+    """Signal that one response has completed playback settlement and cleanup.
+
+    ``response_id`` releases only the matching coordinator delivery slot.
+    """
+
+    TYPE: ClassVar[str] = "tts.response_closed"
+    response_id: str = ""
 
 
 # ==================== Speaker Notification (Frontend) ====================
 
 
 @dataclass
-class SpeakerRecognized(BaseEvent):
+class SpeakerRecognized(Event):
     """Speaker-recognition result for frontend display."""
 
     TYPE: ClassVar[str] = "speaker.recognized"
@@ -453,8 +697,8 @@ class SpeakerRecognized(BaseEvent):
 
 
 @dataclass
-class TTSModelSwitchRequested(BaseEvent):
-    """Request to switch TTS model (IndexTTS / IndexTTS2)."""
+class TTSModelSwitchRequested(Event):
+    """Request to switch the IndexTTS protocol version."""
 
     TYPE: ClassVar[str] = "tts.model_switch_requested"
     model_type: str = ""
@@ -462,7 +706,7 @@ class TTSModelSwitchRequested(BaseEvent):
 
 
 @dataclass
-class LLMModelSwitchRequested(BaseEvent):
+class LLMModelSwitchRequested(Event):
     """Request to switch LLM configuration (ChatOpenAI model/base_url)."""
 
     TYPE: ClassVar[str] = "llm.model_switch_requested"
@@ -473,7 +717,7 @@ class LLMModelSwitchRequested(BaseEvent):
 
 
 @dataclass
-class ClockSyncReceived(BaseEvent):
+class ClockSyncReceived(Event):
     """Clock-sync event for offset calculation."""
 
     TYPE: ClassVar[str] = "clock.sync_received"
@@ -483,7 +727,7 @@ class ClockSyncReceived(BaseEvent):
 
 
 @dataclass
-class SessionConfigReceived(BaseEvent):
+class SessionConfigReceived(Event):
     """Client sent per-session configuration (e.g., recording path)."""
 
     TYPE: ClassVar[str] = "session.config_received"
@@ -494,14 +738,14 @@ class SessionConfigReceived(BaseEvent):
 
 
 @dataclass
-class TurnDetectorStopSpeaking(BaseEvent):
+class TurnDetectorStopSpeaking(Event):
     """Turn detector determined ai should stop speaking."""
 
     TYPE: ClassVar[str] = "turn_detector.stop_speaking"
 
 
 @dataclass
-class TurnDetectorStartGeneration(BaseEvent):
+class TurnDetectorStartGeneration(Event):
     """Turn detector determined ai should start generation."""
 
     TYPE: ClassVar[str] = "turn_detector.start_generation"

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-installed-tool"
+description = "Enables the remove_installed_tool command without any pre-configured scope."
+commands.allow = ["remove_installed_tool"]
+
+[[permission]]
+identifier = "deny-remove-installed-tool"
+description = "Denies the remove_installed_tool command without any pre-configured scope."
+commands.deny = ["remove_installed_tool"]

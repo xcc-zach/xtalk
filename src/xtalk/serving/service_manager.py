@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 import json
-from typing import Dict, Optional, Any
+import logging
+from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from ..log_utils import logger
+from ..models import Models
 from ..persistence import PersistenceStore
+from .service import DefaultService, Service
 
-from .service import Service, DefaultService
-from ..pipelines import Pipeline
+logger = logging.getLogger(__name__)
 
 
 class ServiceManager:
@@ -16,16 +17,16 @@ class ServiceManager:
 
     def __init__(
         self,
-        pipeline: Pipeline | None = None,
+        models: Models | None = None,
         service_config: dict[str, Any] | None = None,
         service_prototype: Service | None = None,
         persistence_store: PersistenceStore | None = None,
     ):
         self.active_services: Dict[str, Service] = {}
-        if pipeline is None and service_prototype is None:
-            raise ValueError("Must provide either a pipeline or a service prototype.")
+        if models is None and service_prototype is None:
+            raise ValueError("Must provide either models or a service prototype.")
         self._service_prototype = service_prototype
-        self._pipeline = pipeline
+        self._models = models
         self._service_config = service_config
         self._persistence = persistence_store
 
@@ -44,7 +45,7 @@ class ServiceManager:
 
         service = (
             DefaultService(
-                pipeline=self._pipeline,
+                models=self._models,
                 service_config=self._build_service_config(service_config_overrides),
                 _websocket=websocket,
                 _session_id=session_id,

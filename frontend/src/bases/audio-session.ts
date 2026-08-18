@@ -1,5 +1,5 @@
 export { BaseInputAudioSession, BaseOutputAudioSession };
-export type { InputAudioSessionConfig, OutputAudioSessionConfig };
+export type { InputAudioSessionConfig, OutputAudioSessionConfig, OutputAudioStopResult };
 
 interface InputAudioSessionConfig {
     /**
@@ -66,36 +66,43 @@ interface OutputAudioSessionConfig {
     sampleRate: number;
     [key: string]: any;
 }
+interface OutputAudioStopResult {
+    /** Playback time not yet confirmed by completed-chunk callbacks. */
+    unconfirmedPlayedMs: number;
+}
 abstract class BaseOutputAudioSession {
     abstract open(): Promise<void>;
     abstract close(): Promise<void>;
     abstract pause(): Promise<void>;
     abstract resume(): Promise<void>;
-    abstract stop(): Promise<void>;
+    /** Open local playback state for one server response. */
+    abstract startTTS(responseId: string): void;
+    /** Stop only the identified response, or all playback during shutdown. */
+    abstract stop(responseId?: string): Promise<OutputAudioStopResult>;
     abstract pushAudioChunk(pcmChunkInt16: ArrayBuffer): Promise<void>;
     /**
      * Marks that the server has finished producing TTS audio for the current turn.
      * Implementations should combine this signal with local playback state before
      * reporting that playback is fully finished.
      */
-    abstract notifyTTSFinished(): Promise<void> | void;
+    abstract notifyTTSFinished(responseId: string): Promise<void> | void;
 
-    onChunkStarted(callback: (pcmChunkInt16: ArrayBuffer) => void | Promise<void>) {
+    onChunkStarted(callback: (responseId: string, pcmChunkInt16: ArrayBuffer) => void | Promise<void>) {
         this.chunkStartedCallback = callback;
     }
-    onChunkPlayed(callback: (pcmChunkInt16: ArrayBuffer) => void | Promise<void>) {
+    onChunkPlayed(callback: (responseId: string, pcmChunkInt16: ArrayBuffer) => void | Promise<void>) {
         this.chunkPlayedCallback = callback;
     }
-    onAllChunksPlayed(callback: () => void | Promise<void>) {
+    onAllChunksPlayed(callback: (responseId: string) => void | Promise<void>) {
         this.allChunksPlayedCallback = callback;
     }
-    protected chunkStartedCallback(_pcmChunkInt16: ArrayBuffer): void | Promise<void> {
+    protected chunkStartedCallback(_responseId: string, _pcmChunkInt16: ArrayBuffer): void | Promise<void> {
 
     }
-    protected chunkPlayedCallback(_pcmChunkInt16: ArrayBuffer): void | Promise<void> {
+    protected chunkPlayedCallback(_responseId: string, _pcmChunkInt16: ArrayBuffer): void | Promise<void> {
 
     }
-    protected allChunksPlayedCallback(): void | Promise<void> {
+    protected allChunksPlayedCallback(_responseId: string): void | Promise<void> {
 
     }
 }

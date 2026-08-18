@@ -6,24 +6,27 @@ Maintains per-session speaker embeddings to recognize or register speakers based
 voiceprints provided by a SpeakerEncoder.
 """
 import asyncio
-import numpy as np
 import json
+import logging
 import os
-from datetime import datetime
-from typing import Optional, Any, List, Dict
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from ...log_utils import logger
-from ..event_bus import EventBus
+import numpy as np
+
+from ...models import Models, SpeakerEncoder
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     EnhancedAudioFrameReceived,
-    TurnASRStartRequested,
-    TurnASREndRequested,
     SpeakerRecognized,
+    TurnASREndRequested,
+    TurnASRStartRequested,
 )
 from ..interfaces import Manager
-from ...pipelines import Pipeline
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,7 +52,7 @@ class SpeakerManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         """Initialize the speaker manager.
@@ -57,7 +60,7 @@ class SpeakerManager(Manager):
         Args:
             event_bus: shared event bus
             session_id: unique session identifier
-            pipeline: pipeline providing a speaker encoder
+            models: model container providing a speaker encoder
             config: optional parameters
                 - similarity_threshold: cosine threshold (default 0.4)
                 - min_audio_length_sec: minimum audio length (default 0.5s)
@@ -65,11 +68,10 @@ class SpeakerManager(Manager):
         """
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config = config or {}
 
         # Obtain speaker encoder
-        self.speaker_encoder = self.pipeline.get_speaker_encoder()
+        self.speaker_encoder = models.get(SpeakerEncoder)
 
         self.similarity_threshold = self.config.get("similarity_threshold", 0.4)
         self.min_audio_length_sec = float(self.config.get("min_audio_length_sec", 0.5))
@@ -146,7 +148,7 @@ class SpeakerManager(Manager):
                             speaker_id=None,
                             reason="no_audio",
                         ),
-                        wait_for_completion=True,
+                        mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                     )
                     return
 
@@ -167,7 +169,7 @@ class SpeakerManager(Manager):
                         speaker_id=None,
                         reason="too_short",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
                 return
 
@@ -186,7 +188,7 @@ class SpeakerManager(Manager):
                     speaker_id=speaker_id,
                     reason="recognized",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
         except Exception as e:
@@ -203,7 +205,7 @@ class SpeakerManager(Manager):
                         speaker_id=None,
                         reason="error",
                     ),
-                    wait_for_completion=True,
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                 )
             except Exception:
                 pass

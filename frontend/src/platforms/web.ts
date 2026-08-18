@@ -9,7 +9,11 @@ import { BasePersistenceStore } from "../bases/persistence";
 import { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 
 import vadProcessorUrl from "../../worklets/vad-processor.worklet.js";
-import fastEnhancerOnnxUrl from "../../models/fastenhancer_s.onnx";
+
+const FRONTEND_UTILITIES_BASE_URL = "/xtalk/frontend-utilities";
+const ONNXRUNTIME_WEB_CDN_BASE_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web";
+const VAD_WEB_VERSION = "0.0.27";
+const VAD_WEB_CDN_BASE_URL = `https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@${VAD_WEB_VERSION}/dist`;
 export {
     WebDeferredTaskScheduler,
     WebWebSocket,
@@ -287,6 +291,8 @@ interface WebInputAudioSessionConfig extends InputAudioSessionConfig {
     enableVAD?: boolean;
     // Whether to enable enhancer on client. Defaults to true.
     enableEnhancer?: boolean;
+    // Base URL for locally hosted browser-side runtime and model assets.
+    frontendUtilitiesBaseUrl?: string;
     // VAD redemption window in milliseconds.
     vadRedemptionMs?: number;
 }
@@ -299,10 +305,9 @@ declare global {
 class WebInputAudioSession extends BaseInputAudioSession {
     readonly VAD_PARAMS = {
         vadFrameSamples: 512,
-        vadNegativeFramesBeforeEnd: 50,
         vadConfig: {
-            positiveSpeechThreshold: 0.8,
-            negativeSpeechThreshold: 0.2,
+            positiveSpeechThreshold: 0.1,
+            negativeSpeechThreshold: 0.02,
             preSpeechPadMs: 30,
             redemptionMs: 500,
             minSpeechMs: 250,
@@ -311,7 +316,7 @@ class WebInputAudioSession extends BaseInputAudioSession {
     }
     readonly MAX_VAD_QUEUE_FRAMES = 8;
     readonly ENHANCER_PARAMS = {
-        hopSize: 256,
+        hopSize: 512,
         nFFT: 512,
     }
     private config: WebInputAudioSessionConfig;
@@ -387,16 +392,14 @@ class WebInputAudioSession extends BaseInputAudioSession {
         enhanceFrame: (frame: Float32Array) => Promise<Float32Array>,
         resetEnhancer: () => void
     ): Promise<void> {
-        const vadURL = 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/silero_vad_v5.onnx';
-        const vadArrayBuffer = await fetch(vadURL).then(r => r.arrayBuffer());
+        const vadArrayBuffer = await this.fetchArrayBufferWithFallback(
+            this.frontendUtilityURL(`vad-web/${VAD_WEB_VERSION}/dist/silero_vad_v5.onnx`),
+            `${VAD_WEB_CDN_BASE_URL}/silero_vad_v5.onnx`
+        );
         const vadSession = await window.ort.InferenceSession.create(vadArrayBuffer);
         const vadStateZeros = Array(2 * 128).fill(0);
         let vadState = new window.ort.Tensor('float32', vadStateZeros, [2, 1, 128]);
         const vadSr = new window.ort.Tensor('int64', [BigInt(this.config.sampleRate)]);
-        const vadHelpers = {
-            negEndCounterEnabled: false,
-            negEndCounter: 0
-        };
 
         const frameProcessorProcess = async (frame: Float32Array) => {
             const enhancedFrame = await enhanceFrame(frame);
@@ -417,31 +420,32 @@ class WebInputAudioSession extends BaseInputAudioSession {
             this.VAD_PARAMS.vadConfig,
             this.VAD_PARAMS.vadFrameSamples / this.config.sampleRate * 1000
         );
-        const onFrameProcessorEvent = (ev: { msg: any; frame: Float32Array; probs: { notSpeech: number; }; }) => {
+        const onFrameProcessorEvent = (ev: {
+            msg: any;
+            frame: Float32Array;
+            probs: {
+                isSpeech: number;
+            };
+        }) => {
             switch (ev.msg) {
-                case window.vad.Message.FrameProcessed:
-                    if (vadHelpers.negEndCounterEnabled) {
-                        const ns = Number(ev?.probs?.notSpeech ?? 0);
-                        const nsHigh = ns > (1 - this.VAD_PARAMS.vadConfig.negativeSpeechThreshold);
-                        vadHelpers.negEndCounter = nsHigh ? (vadHelpers.negEndCounter + 1) : 0;
-                        if (vadHelpers.negEndCounter > this.VAD_PARAMS.vadNegativeFramesBeforeEnd) {
-                            this.speechEndCallback();
-                            vadHelpers.negEndCounterEnabled = false;
-                            vadHelpers.negEndCounter = 0;
-                        }
+                case window.vad.Message.FrameProcessed: {
+                    const speechProbability = Number(ev.probs.isSpeech);
+                    if (
+                        speechProbability
+                        >= this.VAD_PARAMS.vadConfig.negativeSpeechThreshold
+                    ) {
+                        // Only consecutive below-threshold frames may end speech.
+                        frameProcessor.redemptionCounter = 0;
                     }
                     break;
+                }
 
                 case window.vad.Message.SpeechStart:
                     this.speechStartCallback();
-                    vadHelpers.negEndCounterEnabled = true;
-                    vadHelpers.negEndCounter = 0;
                     break;
 
                 case window.vad.Message.SpeechEnd:
                     this.speechEndCallback();
-                    vadHelpers.negEndCounterEnabled = false;
-                    vadHelpers.negEndCounter = 0;
                     break;
             }
         };
@@ -514,50 +518,71 @@ class WebInputAudioSession extends BaseInputAudioSession {
         }
 
         try {
-            const enhancerArrayBuffer = await fetch(fastEnhancerOnnxUrl).then(r => r.arrayBuffer());
+            const enhancerURL = this.frontendUtilityURL('xtalk/models/fastenhancer_s.onnx');
+            const enhancerArrayBuffer = await this.fetchArrayBuffer(enhancerURL);
             const enhancerSession = await window.ort.InferenceSession.create(enhancerArrayBuffer);
             const enhancerCache: Record<string, any> = {
-                'cache_in_0': new window.ort.Tensor('float32', new Float32Array(1 * 256).fill(0), [1, 256]),
-                'cache_in_1': new window.ort.Tensor('float32', new Float32Array(1 * 256).fill(0), [1, 256]),
-                'cache_in_2': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48]),
-                'cache_in_3': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48]),
-                'cache_in_4': new window.ort.Tensor('float32', new Float32Array(1 * 36 * 48).fill(0), [1, 36, 48])
+                'cache_in_0': new window.ort.Tensor('float32', new Float32Array(1 * 512).fill(0), [1, 512]),
+                'cache_in_1': new window.ort.Tensor('float32', new Float32Array(1 * 512).fill(0), [1, 512]),
+                'cache_in_2': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48]),
+                'cache_in_3': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48]),
+                'cache_in_4': new window.ort.Tensor('float32', new Float32Array(1 * 48 * 48).fill(0), [1, 48, 48])
             };
             let enhancerInputBuffer: number[] = [];
             let enhancerOutputBuffer: number[] = [];
             let isFirstEnhancerFrame = true;
+            let enhancerRuntimeDisabled = false;
+
+            const disableEnhancerRuntime = (error: unknown) => {
+                enhancerRuntimeDisabled = true;
+                this.config.enableEnhancer = false;
+                enhancerInputBuffer = [];
+                enhancerOutputBuffer = [];
+                console.error(
+                    'FastEnhancer inference failed. FastEnhancer has been disabled.',
+                    error
+                );
+            };
 
             const enhanceFrame = async (frame: Float32Array) => {
-                for (let i = 0; i < frame.length; i++) {
-                    enhancerInputBuffer.push(frame[i]!);
+                if (enhancerRuntimeDisabled) {
+                    return frame;
                 }
-                while (enhancerInputBuffer.length >= this.ENHANCER_PARAMS.hopSize) {
-                    const chunk = enhancerInputBuffer.splice(0, this.ENHANCER_PARAMS.hopSize);
-                    const chunkArray = new Float32Array(chunk);
-                    const wavIn = new window.ort.Tensor('float32', chunkArray, [1, this.ENHANCER_PARAMS.hopSize]);
-                    const inputs: Record<string, any> = { wav_in: wavIn };
-                    for (const inputName of Object.keys(enhancerCache)) {
-                        inputs[inputName] = enhancerCache[inputName];
+                try {
+                    for (let i = 0; i < frame.length; i++) {
+                        enhancerInputBuffer.push(frame[i]!);
                     }
-                    const outputs = await enhancerSession.run(inputs);
-                    const outputNames = enhancerSession.outputNames;
-                    const enhancedChunk = outputs[outputNames[0]].data;
-                    for (let i = 1; i < outputNames.length; i++) {
-                        const cacheName = `cache_in_${i - 1}`;
-                        enhancerCache[cacheName] = outputs[outputNames[i]];
+                    while (enhancerInputBuffer.length >= this.ENHANCER_PARAMS.hopSize) {
+                        const chunk = enhancerInputBuffer.splice(0, this.ENHANCER_PARAMS.hopSize);
+                        const chunkArray = new Float32Array(chunk);
+                        const wavIn = new window.ort.Tensor('float32', chunkArray, [1, this.ENHANCER_PARAMS.hopSize]);
+                        const inputs: Record<string, any> = { wav_in: wavIn };
+                        for (const inputName of Object.keys(enhancerCache)) {
+                            inputs[inputName] = enhancerCache[inputName];
+                        }
+                        const outputs = await enhancerSession.run(inputs);
+                        const outputNames = enhancerSession.outputNames;
+                        const enhancedChunk = outputs[outputNames[0]].data;
+                        for (let i = 1; i < outputNames.length; i++) {
+                            const cacheName = `cache_in_${i - 1}`;
+                            enhancerCache[cacheName] = outputs[outputNames[i]];
+                        }
+                        for (let i = 0; i < enhancedChunk.length; i++) {
+                            enhancerOutputBuffer.push(enhancedChunk[i]);
+                        }
+                        if (isFirstEnhancerFrame && enhancerOutputBuffer.length >= (this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize)) {
+                            enhancerOutputBuffer.splice(0, this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize);
+                            isFirstEnhancerFrame = false;
+                        }
                     }
-                    for (let i = 0; i < enhancedChunk.length; i++) {
-                        enhancerOutputBuffer.push(enhancedChunk[i]);
+                    if (enhancerOutputBuffer.length >= frame.length) {
+                        const output = enhancerOutputBuffer.splice(0, frame.length);
+                        return new Float32Array(output);
+                    } else {
+                        return frame;
                     }
-                    if (isFirstEnhancerFrame && enhancerOutputBuffer.length >= (this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize)) {
-                        enhancerOutputBuffer.splice(0, this.ENHANCER_PARAMS.nFFT - this.ENHANCER_PARAMS.hopSize);
-                        isFirstEnhancerFrame = false;
-                    }
-                }
-                if (enhancerOutputBuffer.length >= frame.length) {
-                    const output = enhancerOutputBuffer.splice(0, frame.length);
-                    return new Float32Array(output);
-                } else {
+                } catch (error) {
+                    disableEnhancerRuntime(error);
                     return frame;
                 }
             };
@@ -574,7 +599,12 @@ class WebInputAudioSession extends BaseInputAudioSession {
             };
 
             return { enhanceFrame, resetEnhancer };
-        } catch {
+        } catch (error) {
+            this.config.enableEnhancer = false;
+            console.error(
+                'Failed to load FastEnhancer from the server. FastEnhancer has been disabled.',
+                error
+            );
             return { enhanceFrame: identityMap, resetEnhancer: () => { } };
         }
     }
@@ -588,29 +618,101 @@ class WebInputAudioSession extends BaseInputAudioSession {
         return int16.buffer;
     }
 
+    private frontendUtilityURL(path: string): string {
+        const baseURL = this.config.frontendUtilitiesBaseUrl ?? FRONTEND_UTILITIES_BASE_URL;
+        return `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+    }
+
+    private async fetchArrayBuffer(url: string): Promise<ArrayBuffer> {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${url}: ${response.status}`);
+        }
+        return await response.arrayBuffer();
+    }
+
+    private async fetchArrayBufferWithFallback(
+        localURL: string,
+        fallbackURL: string
+    ): Promise<ArrayBuffer> {
+        try {
+            const response = await fetch(localURL);
+            if (response.ok) {
+                return await response.arrayBuffer();
+            }
+        } catch {
+            // Fall back to the public URL below.
+        }
+        const fallbackResponse = await fetch(fallbackURL);
+        if (!fallbackResponse.ok) {
+            throw new Error(`Failed to fetch ${fallbackURL}: ${fallbackResponse.status}`);
+        }
+        return await fallbackResponse.arrayBuffer();
+    }
+
+    private injectScript(src: string): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => resolve();
+            script.onerror = () => {
+                script.remove();
+                reject(new Error(`Failed to load script ${src}`));
+            };
+            document.head.appendChild(script);
+        });
+    }
+
+    private formatLoadError(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    private async injectScriptWithFallback(
+        localURL: string,
+        fallbackURL: string
+    ): Promise<'local' | 'fallback'> {
+        try {
+            await this.injectScript(localURL);
+            return 'local';
+        } catch (localError) {
+            try {
+                await this.injectScript(fallbackURL);
+                return 'fallback';
+            } catch (fallbackError) {
+                throw new Error(
+                    `Failed to load script from local URL ${localURL} `
+                    + `(${this.formatLoadError(localError)}) and fallback URL `
+                    + `${fallbackURL} (${this.formatLoadError(fallbackError)}).`
+                );
+            }
+        }
+    }
+
     private async ensureModelsEnv() {
         if (!this.config.enableEnhancer && !this.config.enableVAD) {
             // No need to load models
             return;
         }
-        // Inject window.ort and window.vad
-        const inject = (src: string) => new Promise<void>((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = src;
-            s.onload = () => resolve();
-            s.onerror = (e) => reject(e);
-            document.head.appendChild(s);
-        });
         if (!window.ort) {
             // Pick ORT version by UA (only iOS stays on 1.17.0)
             const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
             const ortVersion = isIOS ? '1.17.0' : '1.22.0';
+            const localOrtBaseURL = this.frontendUtilityURL(`onnxruntime-web/${ortVersion}/dist/`);
+            const fallbackOrtBaseURL = `${ONNXRUNTIME_WEB_CDN_BASE_URL}@${ortVersion}/dist/`;
+            const ortSource = await this.injectScriptWithFallback(
+                `${localOrtBaseURL}ort.js`,
+                `${fallbackOrtBaseURL}ort.js`
+            );
 
-            await inject(`https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/ort.js`);
-            window.ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ortVersion}/dist/`;
+            window.ort.env.wasm.wasmPaths = ortSource === 'local'
+                ? localOrtBaseURL
+                : fallbackOrtBaseURL;
         }
         if (this.config.enableVAD && !window.vad) {
-            await inject('https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.27/dist/bundle.min.js');
+            await this.injectScriptWithFallback(
+                this.frontendUtilityURL(`vad-web/${VAD_WEB_VERSION}/dist/bundle.min.js`),
+                `${VAD_WEB_CDN_BASE_URL}/bundle.min.js`
+            );
         }
     }
 }
@@ -674,12 +776,26 @@ function createPausableTimeout(
     };
 }
 class WebOutputAudioSession extends BaseOutputAudioSession {
+    private static readonly AUDIO_FADE_IN_SECONDS = 0.004;
     private audioContext: AudioContext | null = null;
+    private outputGain: GainNode | null = null;
     private audioBufferSources: AudioBufferSourceNode[] = [];
+    private audioBufferSourceTimes = new Map<
+        AudioBufferSourceNode,
+        { start: number; end: number; responseId: string }
+    >();
+    private audioBufferCompletionTimers = new Map<
+        AudioBufferSourceNode,
+        number
+    >();
     private audioTimeToPlay = 0;
     private audioChunkStartedTimeouts: ReturnType<typeof createPausableTimeout>[] = [];
-    private audioChunksPaused: ArrayBuffer[] = [];
+    private audioChunksPaused: Array<{ responseId: string; chunk: ArrayBuffer }> = [];
+    private activeResponseId: string | null = null;
     private serverTtsFinished = false;
+    private pausedByServer = false;
+    private drainingPausedChunks = false;
+    private needsFadeIn = false;
     constructor(private config: OutputAudioSessionConfig) {
         super();
     }
@@ -688,6 +804,14 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             throw new Error('Session already started');
         }
         this.audioContext = new window.AudioContext({ sampleRate: this.config.sampleRate });
+        this.outputGain = this.audioContext.createGain();
+        this.outputGain.gain.value = 0;
+        this.outputGain.connect(this.audioContext.destination);
+        this.audioContext.onstatechange = () => {
+            if (this.audioContext?.state === "running" && !this.pausedByServer) {
+                void this.drainPausedChunks();
+            }
+        };
         await this.audioContext.resume();
     }
     async close(): Promise<void> {
@@ -695,74 +819,143 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             throw new Error('Session not started');
         }
         await this.stop();
+        this.audioContext.onstatechange = null;
+        this.outputGain?.disconnect();
+        this.outputGain = null;
         this.audioContext.close();
         this.audioContext = null;
         this.audioTimeToPlay = 0;
+    }
+    /** Open the single client playback stream for one server response. */
+    startTTS(responseId: string): void {
+        if (!responseId) {
+            throw new Error("TTS response ID missing");
+        }
+        if (this.activeResponseId && this.activeResponseId !== responseId) {
+            throw new Error("Another TTS response is still active");
+        }
+        this.activeResponseId = responseId;
+        this.serverTtsFinished = false;
+        this.needsFadeIn = true;
     }
     async pause(): Promise<void> {
         if (!this.audioContext) {
             throw new Error('Session not started');
         }
-        if (this.audioContext.state == 'suspended') {
+        if (this.pausedByServer) {
             throw new Error('Session already paused');
         }
+        this.pausedByServer = true;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.pause();
         });
-        await this.audioContext.suspend();
+        if (this.audioContext.state === "running") {
+            await this.audioContext.suspend();
+        }
     }
     async resume(): Promise<void> {
         if (!this.audioContext) {
             throw new Error('Session not started');
         }
-        if (this.audioContext.state == 'running') {
+        if (this.audioContext.state == 'running' && !this.pausedByServer) {
             throw new Error('Session not paused');
         }
+        this.pausedByServer = false;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.resume();
         });
         await this.audioContext.resume();
-        // Play the paused chunks immediately
-        for (const chunk of this.audioChunksPaused) {
-            await this.pushAudioChunk(chunk);
-        }
-        this.audioChunksPaused.length = 0;
+        await this.drainPausedChunks();
     }
-    async stop(): Promise<void> {
+    async stop(responseId?: string): Promise<{ unconfirmedPlayedMs: number }> {
+        if (responseId && responseId !== this.activeResponseId) {
+            return { unconfirmedPlayedMs: 0 };
+        }
+        const currentTime = this.audioContext?.currentTime ?? 0;
+        let unconfirmedPlayedMs = 0;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.cancel();
         });
         this.audioChunkStartedTimeouts.length = 0;
         this.audioBufferSources.forEach(source => {
+            const timing = this.audioBufferSourceTimes.get(source);
+            if (timing && currentTime > timing.start) {
+                unconfirmedPlayedMs += Math.max(
+                    0,
+                    Math.min(currentTime, timing.end) - timing.start,
+                ) * 1000;
+            }
             source.onended = null;
-            source.disconnect();
+            try { source.stop(); } catch { }
+            try { source.disconnect(); } catch { }
         });
+        this.audioBufferCompletionTimers.forEach(timerId => {
+            window.clearTimeout(timerId);
+        });
+        this.audioBufferCompletionTimers.clear();
         this.audioBufferSources.length = 0;
+        this.audioBufferSourceTimes.clear();
         this.audioTimeToPlay = 0;
         this.audioChunksPaused.length = 0;
         this.serverTtsFinished = false;
+        this.pausedByServer = false;
+        this.activeResponseId = null;
+        this.needsFadeIn = false;
+        if (this.audioContext && this.outputGain) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+        }
+        if (responseId && this.audioContext?.state === "suspended") {
+            await this.audioContext.resume();
+        }
         // DO NOT suspend to avoid pop sounds after restart
         // await this.audioContext?.suspend();
+        return { unconfirmedPlayedMs };
     }
-    async notifyTTSFinished(): Promise<void> {
+    async notifyTTSFinished(responseId: string): Promise<void> {
+        if (responseId !== this.activeResponseId) {
+            return;
+        }
         this.serverTtsFinished = true;
         await this.maybeNotifyPlaybackFinished();
     }
     private async maybeNotifyPlaybackFinished(): Promise<void> {
-        if (!this.serverTtsFinished || this.audioBufferSources.length !== 0) {
+        if (
+            !this.serverTtsFinished
+            || this.audioBufferSources.length !== 0
+            || this.audioChunksPaused.length !== 0
+        ) {
+            return;
+        }
+        const responseId = this.activeResponseId;
+        if (!responseId) {
             return;
         }
         this.serverTtsFinished = false;
-        await this.allChunksPlayedCallback();
+        this.activeResponseId = null;
+        await this.allChunksPlayedCallback(responseId);
     }
     async pushAudioChunk(pcm_chunk_int16: ArrayBuffer): Promise<void> {
-        if (!this.audioContext) {
+        if (!this.audioContext || !this.outputGain) {
             throw new Error('Session not started');
         }
-        // If suspended, meaning that the session is paused; cache the incoming audio for future
-        if (this.audioContext.state === 'suspended') {
-            this.audioChunksPaused.push(pcm_chunk_int16);
+        const responseId = this.activeResponseId;
+        if (!responseId) {
+            throw new Error("Received TTS audio without an active response");
+        }
+        if (this.pausedByServer) {
+            this.audioChunksPaused.push({ responseId, chunk: pcm_chunk_int16 });
             return;
+        }
+        if (!this.isAudioContextRunning()) {
+            await this.audioContext.resume();
+            if (!this.isAudioContextRunning()) {
+                // WebKit may temporarily interrupt an AudioContext when the
+                // output device changes. Retain the chunk and drain it from the
+                // state-change callback instead of losing the server ack.
+                this.audioChunksPaused.push({ responseId, chunk: pcm_chunk_int16 });
+                return;
+            }
         }
         const int16 = new Int16Array(pcm_chunk_int16);
         if (int16.length === 0) return;
@@ -776,15 +969,11 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         buffer.getChannelData(0).set(float32);
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+        source.connect(this.outputGain);
 
         // Mount onended callback before starting
         source.onended = () => {
-            this.chunkPlayedCallback(int16.buffer);
-            // Remove this source from the list
-            const idx = this.audioBufferSources.indexOf(source);
-            if (idx !== -1) this.audioBufferSources.splice(idx, 1);
-            void this.maybeNotifyPlaybackFinished();
+            void this.completeAudioSource(source, int16.buffer);
         };
 
         // Add to buffer sources list before starting
@@ -795,15 +984,36 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         if (this.audioTimeToPlay < currentTime) {
             this.audioTimeToPlay = currentTime;
         }
-        source.start(this.audioTimeToPlay);
+        if (this.needsFadeIn) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+            this.outputGain.gain.linearRampToValueAtTime(
+                1,
+                currentTime + WebOutputAudioSession.AUDIO_FADE_IN_SECONDS,
+            );
+            this.needsFadeIn = false;
+        }
+        const chunkStartTime = this.audioTimeToPlay;
+        const chunkEndTime = chunkStartTime + buffer.duration / source.playbackRate.value;
+        this.audioBufferSourceTimes.set(source, {
+            start: chunkStartTime,
+            end: chunkEndTime,
+            responseId,
+        });
+        source.start(chunkStartTime);
+        this.scheduleAudioSourceCompletionCheck(
+            source,
+            int16.buffer,
+            chunkEndTime,
+        );
 
         // Mount onstarted
         const msForChunkStart = (this.audioTimeToPlay - currentTime) * 1000;
         if (msForChunkStart <= 0) {
-            this.chunkStartedCallback(int16.buffer);
+            this.chunkStartedCallback(responseId, int16.buffer);
         } else {
             const timeout = createPausableTimeout(() => {
-                this.chunkStartedCallback(int16.buffer);
+                this.chunkStartedCallback(responseId, int16.buffer);
                 // Remove this timeout from the list
                 const idx = this.audioChunkStartedTimeouts.indexOf(timeout);
                 if (idx !== -1) this.audioChunkStartedTimeouts.splice(idx, 1);
@@ -812,5 +1022,97 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         }
         // Update time to play for next chunk
         this.audioTimeToPlay += buffer.duration / source.playbackRate.value;
+    }
+
+    private async drainPausedChunks(): Promise<void> {
+        if (
+            this.drainingPausedChunks
+            || this.pausedByServer
+            || this.audioContext?.state !== "running"
+        ) {
+            return;
+        }
+        this.drainingPausedChunks = true;
+        try {
+            while (
+                !this.pausedByServer
+                && this.audioContext?.state === "running"
+                && this.audioChunksPaused.length > 0
+            ) {
+                const pausedAudio = this.audioChunksPaused.shift();
+                if (
+                    pausedAudio
+                    && pausedAudio.responseId === this.activeResponseId
+                ) {
+                    await this.pushAudioChunk(pausedAudio.chunk);
+                }
+            }
+        } finally {
+            this.drainingPausedChunks = false;
+        }
+        await this.maybeNotifyPlaybackFinished();
+    }
+
+    private isAudioContextRunning(): boolean {
+        return this.audioContext?.state === "running";
+    }
+
+    private async completeAudioSource(
+        source: AudioBufferSourceNode,
+        pcmChunkInt16: ArrayBuffer,
+    ): Promise<void> {
+        const index = this.audioBufferSources.indexOf(source);
+        if (index < 0) {
+            return;
+        }
+        const timerId = this.audioBufferCompletionTimers.get(source);
+        if (timerId !== undefined) {
+            window.clearTimeout(timerId);
+            this.audioBufferCompletionTimers.delete(source);
+        }
+        source.onended = null;
+        this.audioBufferSources.splice(index, 1);
+        const timing = this.audioBufferSourceTimes.get(source);
+        this.audioBufferSourceTimes.delete(source);
+        try { source.disconnect(); } catch { }
+        if (timing) {
+            await this.chunkPlayedCallback(timing.responseId, pcmChunkInt16);
+        }
+        await this.maybeNotifyPlaybackFinished();
+    }
+
+    private scheduleAudioSourceCompletionCheck(
+        source: AudioBufferSourceNode,
+        pcmChunkInt16: ArrayBuffer,
+        chunkEndTime: number,
+    ): void {
+        const audioContext = this.audioContext;
+        if (!audioContext || !this.audioBufferSources.includes(source)) {
+            return;
+        }
+        const remainingMs = Math.max(
+            20,
+            (chunkEndTime - audioContext.currentTime) * 1000 + 20,
+        );
+        const timerId = window.setTimeout(() => {
+            this.audioBufferCompletionTimers.delete(source);
+            const currentContext = this.audioContext;
+            if (!currentContext || !this.audioBufferSources.includes(source)) {
+                return;
+            }
+            if (currentContext.currentTime + 0.005 >= chunkEndTime) {
+                // WebKit occasionally omits AudioBufferSourceNode.onended. The
+                // audio clock is authoritative, so release server backpressure
+                // once it has advanced past the scheduled end time.
+                void this.completeAudioSource(source, pcmChunkInt16);
+                return;
+            }
+            this.scheduleAudioSourceCompletionCheck(
+                source,
+                pcmChunkInt16,
+                chunkEndTime,
+            );
+        }, remainingMs);
+        this.audioBufferCompletionTimers.set(source, timerId);
     }
 }

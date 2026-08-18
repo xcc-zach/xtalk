@@ -1,0 +1,36 @@
+{
+  "asr": {
+    "type": "SherpaOnnxASR",
+    "params": {
+      "base_url": "managed://sensevoice-small?backend=mlx",
+      "mode": "offline"
+    }
+  },
+  "llm_agent": {
+    "type": "DefaultAgent",
+    "params": {
+      "model": {
+        "api_key": "",
+        "model": "qwen3.6-plus",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          }
+        }
+      }
+    }
+  },
+  "tts": {
+    "type": "MossTTSNano",
+    "params": {
+      "base_url": "managed://moss-tts-nano?backend=mlx",
+      "voices": [
+        {
+          "name": "zh",
+          "path": "managed://moss-tts-nano/voices/zh_1.wav"
+        }
+      ]
+    }
+  }
+}

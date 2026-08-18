@@ -1,101 +1,237 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="utf-8" />
-    <title>Xtalk Dev</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XTalk</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
     <link rel="stylesheet" href="./static/css/index.css" />
 </head>
 
 <body>
-    <header>
-        <div class="container">
-            <h1>Xtalk Dev</h1>
-            <div class="status">
-                <div>State: <span id="stream-state">--</span></div>
-                <div>Session: <span id="session-id">--</span></div>
+    <div class="app">
+        <button id="drawer-backdrop" class="drawer-backdrop" type="button" tabindex="-1"
+            aria-label="关闭侧边栏"></button>
+
+        <aside id="sessions-drawer" class="app-drawer app-drawer-left" aria-hidden="true"
+            aria-labelledby="sessions-title">
+            <div class="drawer-header sessions-drawer-header">
+                <h2 id="sessions-title">XTalk</h2>
+                <div class="drawer-header-actions">
+                    <button id="btn-refresh-sessions" class="icon-button icon-button-quiet" type="button"
+                        aria-label="刷新会话列表" title="刷新会话列表">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6" />
+                        </svg>
+                    </button>
+                    <button id="btn-close-sessions" class="icon-button icon-button-quiet" type="button"
+                        aria-label="关闭会话列表">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 6l12 12M18 6L6 18" />
+                        </svg>
+                    </button>
+                </div>
             </div>
-            <div class="controls">
-                <button id="btn-start">Start</button>
-                <button id="btn-stop">Stop</button>
-                <button id="btn-mute">Mute</button>
+
+            <button id="btn-new-session" class="new-session-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" />
+                </svg>
+                <span>新聊天</span>
+            </button>
+
+            <div id="session-list-empty" class="sidebar-empty">暂无会话。</div>
+            <div id="session-list" class="session-list" role="list"></div>
+        </aside>
+
+        <aside id="debug-drawer" class="app-drawer app-drawer-right" aria-hidden="true"
+            aria-labelledby="debug-title">
+            <div class="drawer-header">
+                <div>
+                    <div class="drawer-eyebrow">Inspector</div>
+                    <h2 id="debug-title">调试信息</h2>
+                </div>
+                <button id="btn-close-debug" class="icon-button icon-button-quiet" type="button"
+                    aria-label="关闭调试信息">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                </button>
             </div>
-            <div class="controls">
-                <div class="voice-selector">
-                    <label for="voice-select">Voice:</label>
+
+            <div class="debug-scroll">
+                <section class="debug-section" aria-labelledby="runtime-title">
+                    <h3 id="runtime-title">Runtime</h3>
+                    <dl class="runtime-grid">
+                        <div>
+                            <dt>Connection</dt>
+                            <dd id="connection-state">disconnected</dd>
+                        </div>
+                        <div>
+                            <dt>Stream</dt>
+                            <dd id="stream-state">idle</dd>
+                        </div>
+                        <div>
+                            <dt>Muted</dt>
+                            <dd id="muted-state">false</dd>
+                        </div>
+                        <div class="runtime-session">
+                            <dt>Session</dt>
+                            <dd id="session-id">--</dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <section class="debug-section" aria-labelledby="voice-title">
+                    <label id="voice-title" for="voice-select">Voice</label>
                     <select id="voice-select" disabled>
                         <option value="">Loading...</option>
                     </select>
-                </div>
-                <div class="upload-btn">
-                    <button id="btn-upload-file">Upload Doc</button>
-                    <input id="file-input" type="file" accept="text/*,.pdf,application/pdf" style="display:none;" />
-                </div>
-                <button id="btn-toggle-recent-audio" class="recent-audio-toggle">Recent 60s Audio</button>
+                </section>
+
+                <details class="debug-details" open>
+                    <summary>
+                        <span>Latency</span>
+                        <span class="summary-value"><span id="latency-e2e">--</span> ms E2E</span>
+                    </summary>
+                    <dl class="latency-grid">
+                        <div><dt>Network</dt><dd><span id="latency-network">--</span> ms</dd></div>
+                        <div><dt>ASR</dt><dd><span id="latency-asr">--</span> ms</dd></div>
+                        <div><dt>LLM First Token</dt><dd><span id="latency-llm-first">--</span> ms</dd></div>
+                        <div><dt>LLM Sentence</dt><dd><span id="latency-llm-sentence">--</span> ms</dd></div>
+                        <div><dt>TTS First Chunk</dt><dd><span id="latency-tts">--</span> ms</dd></div>
+                    </dl>
+                </details>
+
+                <details id="vad-status-details" class="debug-details" open hidden>
+                    <summary>
+                        <span>Frontend VAD</span>
+                        <span id="vad-current-state" class="summary-value">idle</span>
+                    </summary>
+                    <div class="vad-panel">
+                        <div class="vad-panel-heading">
+                            <span>最近 30 秒</span>
+                            <span id="vad-timeline-clock">--:--:--.---</span>
+                        </div>
+                        <div id="vad-timeline" class="vad-timeline" aria-label="前端 VAD 开始和结束时间线">
+                            <div id="vad-timeline-events" class="vad-timeline-events"></div>
+                            <div class="vad-timeline-axis" aria-hidden="true">
+                                <span>-30s</span>
+                                <span>-20s</span>
+                                <span>-10s</span>
+                                <span>now</span>
+                            </div>
+                        </div>
+                        <div class="vad-recording-heading">
+                            <span>VAD 录音</span>
+                            <span id="vad-recording-count">0 clips</span>
+                        </div>
+                        <div id="vad-recording-empty" class="vad-recording-empty">
+                            等待前端 VAD 触发
+                        </div>
+                        <ol id="vad-recording-list" class="vad-recording-list"></ol>
+                    </div>
+                </details>
+
+                <details class="debug-details">
+                    <summary>Thought</summary>
+                    <div id="thought-content" class="debug-content"></div>
+                </details>
+
+                <details class="debug-details">
+                    <summary>Caption</summary>
+                    <div id="caption-content" class="debug-content"></div>
+                </details>
+
+                <details class="debug-details">
+                    <summary>Retrieval</summary>
+                    <div id="retrieval-content" class="debug-content"></div>
+                </details>
+
+                <details id="recent-audio-details" class="debug-details">
+                    <summary>Recent 60s Audio</summary>
+                    <div class="recent-audio-panel">
+                        <div id="recent-audio-status" class="recent-audio-status">
+                            Waiting for server full audio stream
+                        </div>
+                        <audio id="recent-audio-player" class="recent-audio-player" controls
+                            preload="metadata"></audio>
+                    </div>
+                </details>
             </div>
-        </div>
-    </header>
-    <main class="container app-shell">
-        <aside class="sidebar card">
-            <div class="sidebar-header">
-                <div>
-                    <div class="sidebar-eyebrow">History</div>
-                    <h2>Sessions</h2>
-                </div>
-                <button id="btn-refresh-sessions" class="sidebar-action">Refresh</button>
-            </div>
-            <button id="btn-new-session" class="new-session-btn">New Session</button>
-            <div id="session-list-empty" class="sidebar-empty">No sessions yet.</div>
-            <div id="session-list" class="session-list" role="list"></div>
         </aside>
-        <section class="content-area">
-            <div id="latency-bar" class="latency-bar">
-                <span class="latency-item">Network: <span id="latency-network">--</span>ms</span>
-                <span class="latency-item">ASR: <span id="latency-asr">--</span>ms</span>
-                <span class="latency-item">LLM First Token: <span id="latency-llm-first">--</span>ms</span>
-                <span class="latency-item">LLM Sentence: <span id="latency-llm-sentence">--</span>ms</span>
-                <span class="latency-item">TTS First Chunk: <span id="latency-tts">--</span>ms</span>
-                <span class="latency-item latency-e2e">E2E: <span id="latency-e2e">--</span>ms</span>
-            </div>
-            <div id="recent-audio-card" class="card recent-audio-card is-hidden" aria-hidden="true">
-                <div class="recent-audio-header">
-                    <span id="recent-audio-status" class="recent-audio-status">Waiting for server full audio stream</span>
-                </div>
-                <div id="recent-audio-panel" class="recent-audio-panel">
-                    <audio id="recent-audio-player" class="recent-audio-player" controls preload="metadata"></audio>
-                    <div class="recent-audio-hint">Shows a snapshot of the latest 60 seconds of server full audio.</div>
-                </div>
-            </div>
-            <div class="card">
-                <canvas id="waveform"></canvas>
-            </div>
-            <div class="card">
-                <div class="chat-card-label">Chat</div>
-                <div id="messages"></div>
-            </div>
-            <div class="toggle-bar">
-                <button id="btn-toggle-thought" class="toggle-btn active">Thought</button>
-                <button id="btn-toggle-caption" class="toggle-btn active">Caption</button>
-                <button id="btn-toggle-retrieval" class="toggle-btn active">Retrieval</button>
-            </div>
-            <div id="panel-thought" class="card panel">
-                <div class="panel-label">Thought</div>
-                <div id="thought-content" class="panel-content"></div>
-            </div>
-            <div id="panel-caption" class="card panel">
-                <div class="panel-label">Caption</div>
-                <div id="caption-content" class="panel-content"></div>
-            </div>
-            <div id="panel-retrieval" class="card panel">
-                <div class="panel-label">Retrieval</div>
-                <div id="retrieval-content" class="panel-content"></div>
-            </div>
-        </section>
-    </main>
-    <footer>
-        Xtalk Dev
-    </footer>
+
+        <header class="topbar">
+            <button id="btn-toggle-sessions" class="icon-button" type="button" aria-label="打开会话列表"
+                aria-controls="sessions-drawer" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                </svg>
+            </button>
+            <div class="brand">XTalk</div>
+            <button id="btn-toggle-debug" class="icon-button" type="button" aria-label="打开调试信息"
+                aria-controls="debug-drawer" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+                </svg>
+            </button>
+        </header>
+
+        <main class="workspace">
+            <section id="orb-view" class="view-panel orb-view" aria-hidden="false">
+                <button id="btn-show-chat" class="orb-button" type="button" aria-label="显示聊天记录">
+                    <canvas id="waveform"></canvas>
+                </button>
+            </section>
+
+            <section id="chat-view" class="view-panel chat-view is-hidden" aria-hidden="true"
+                aria-label="对话记录">
+                <div id="messages" aria-live="polite"></div>
+                <button id="btn-show-orb" class="chat-mini-orb" type="button" aria-label="返回语音圆球模式"
+                    title="返回语音圆球模式">
+                    <span aria-hidden="true"></span>
+                </button>
+            </section>
+        </main>
+
+        <div class="control-dock" aria-label="语音控制">
+            <button id="btn-upload-file" class="control-button control-button-secondary" type="button"
+                aria-label="上传文件" title="上传文件">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" />
+                </svg>
+                <span class="control-spinner" aria-hidden="true"></span>
+            </button>
+            <input id="file-input" type="file" accept="text/*,.pdf,application/pdf" hidden />
+
+            <button id="btn-mute" class="control-button control-button-secondary" type="button"
+                aria-label="关闭麦克风" aria-pressed="false" title="关闭麦克风" disabled>
+                <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
+                </svg>
+                <svg class="icon-mic-off" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9 9v3a3 3 0 0 0 4.2 2.75M15 10V6a3 3 0 0 0-5.5-1.65M5 11a7 7 0 0 0 11.3 5.52M19 11a7 7 0 0 1-.76 3.18M12 18v3M9 21h6M4 4l16 16" />
+                </svg>
+            </button>
+
+            <button id="btn-call" class="control-button control-button-primary" type="button"
+                data-action="start" aria-label="开始对话" title="开始对话">
+                <svg class="icon-wave" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 12v1M8 9v7M12 5v14M16 8v9M20 11v3" />
+                </svg>
+                <svg class="icon-close" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+                <span class="control-spinner" aria-hidden="true"></span>
+            </button>
+        </div>
+
+        <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    </div>
+
     <script type="module" src="./static/js/index.js"></script>
 </body>
 

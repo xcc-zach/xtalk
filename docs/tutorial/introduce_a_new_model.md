@@ -1,44 +1,128 @@
-*Experimental API*
+> **Note**
+> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the configured `llm_agent` during staged configuration.
 
-> **Note**
-> See `examples/sample_app/custom_model.py` and `examples/sample_app/echo_agent.py` for details.
-    
-> **Note**
-> See [Recipe](#recipe) for adding a model of existing types.
-    
-You may want to introduce a new model of an existing type (e.g. text-to-speech), or add a model of new type (e.g. a model that handles backchannel). This can be achieved by `register_model_search_spec` before a `xtalk_instance` is created from config:
-    
-```python
-from xtalk import Xtalk
-Xtalk.register_model_search_spec(
-    slot="llm_agent",
-    spec=Path(__file__).parent / "echo_agent.py",
-)
-xtalk_instance = Xtalk.from_config(args.config)
-```
-    
-Here `slot` matches the name of corresponding init arg in `Pipeline`. You can check `Xtalk.MODEL_REGISTRY` for existing slots, or use a new slot to represent a new type of models (see `examples\sample_app\custom_service.py` and there `llm_output_refactor_model` can be the new slot).
-    
-`spec` is the path to model implementation, an example implementation in `echo_agent.py` looks like this:
+You may want to introduce a new model for an existing model type, such as a new LLM Agent. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
+
+## 1. Import the Model Interface and Registration Decorator
+
+`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For interface details, see the [Agent API](../api/server/xtalk/models/agents/interfaces.md).
 
 ```python
+from typing import Any, AsyncIterator, Iterable
+
+from xtalk import Xtalk, model
 from xtalk.model_types import Agent
+from xtalk.models.agents import AgentContext, AgentOutput
+```
 
+## 2. Define and Register the Model Implementation
+
+```python
+@model
 class EchoAgent(Agent):
-    """A simple agent that echoes user input."""
+    """A simple agent that echoes finalized ASR text."""
 
-    def generate(self, input) -> str:
-        if isinstance(input, dict):
-            return input["content"]
-        return input
+    def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
+        """Synchronously bridge ``async_accept()`` for compatibility."""
+
+        yield from self.sync_iter_from_async(self.async_accept(context))
+
+    async def async_accept(
+        self,
+        context: AgentContext,
+    ) -> AsyncIterator[AgentOutput]:
+        """Emit finalized ASR text."""
+
+        if context["type"] != "asr_final":
+            return
+        text = context["data"]["text"]
+        if text:
+            yield text
+
+    def restore_history(self, messages: list[dict[str, Any]]) -> None:
+        """Ignore persisted history."""
+
+        del messages
 
     def clone(self) -> "EchoAgent":
+        """Create a fresh stateless agent."""
+
         return EchoAgent()
 
 ```
-    
-Then you can use the custom model in config file:
+
+Notes:
+
+- `async_accept` is the main async runtime entrypoint.
+- `clone()` should return a model instance suitable for a new session, avoiding shared mutable state across sessions.
+- For a complete development guide, see [Introduce an LLM Agent](introduce_an_llm_agent.md).
+
+## 3. Select the New Model
+
+Change the `llm_agent` `type` to `EchoAgent` and continue using
+`Xtalk.from_config(...)`:
+
+```json
+{
+    "llm_agent": {
+        "type": "EchoAgent",
+        "params": {}
+    }
+}
+```
+
+When the base config should remain reusable, select the registered Python class
+during staged configuration instead:
+
 ```python
+def clear_agent_params(config: dict[str, Any]) -> dict[str, Any]:
+    agent_config = config.get("llm_agent")
+    if isinstance(agent_config, dict):
+        agent_config["params"] = {}
+    return config
+
+
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .transform_config(clear_agent_params)
+    .set_model(EchoAgent)
+    .build()
+)
+```
+
+## 4. Register Before Creating Xtalk
+
+Because `EchoAgent` is defined in the same server file, Python executes the
+class definition and `@model` registration before reaching `set_model(...)`.
+
+```python
+xtalk_instance = (
+    Xtalk.configure(args.config)
+    .transform_config(clear_agent_params)
+    .set_model(EchoAgent)
+    .build()
+)
+xtalk_instance.mount_routes(app)
+```
+
+If the model is defined in a separate file, import that file first:
+
+```python
+from my_app.echo_agent import EchoAgent
+
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .transform_config(clear_agent_params)
+    .set_model(EchoAgent)
+    .build()
+)
+```
+
+## 5. Complete Config Example
+
+The following config keeps the original ASR and TTS while replacing the agent with `EchoAgent`:
+
+```json
 {
     "asr": {
         "type": "Qwen3ASRFlashRealtime",
@@ -46,7 +130,10 @@ Then you can use the custom model in config file:
             "api_key": "<API_KEY>"
         }
     },
-    "llm_agent": "EchoAgent",
+    "llm_agent": {
+        "type": "EchoAgent",
+        "params": {}
+    },
     "tts": {
         "type": "CosyVoice",
         "params": {
@@ -55,87 +142,3 @@ Then you can use the custom model in config file:
     }
 }
 ```
-
-#### Recipe
-
-Recipes for major model customization are listed below. You can read source code for interfaces of other model types. We will update these interfaces from time to time.
-    
-> **Note**
-> See `src/xtalk/model_types.py` for all available model types.
-    
-> [!IMPORTANT]
-> X-Talk has asynchronous default implementations for sync versions, which usually with `run_in_executor`, like `async_recognize` for `recognize` w.r.t. ASR. However, in order to achieve best concurrency for production, we recommend to implement these async versions by your self.
-
-##### New ASR (auto-speech-recognition) Model
-    
-Your ASR class must inherit from `xtalk.speech.interfaces.ASR` and implement the following methods:
-
-* **`recognize(audio: bytes) -> str`**
-    * Recognize audio in a single pass. 
-* **`reset() -> None`**
-    * Reset internal recognition state.
-* **`clone() -> ASR`**
-    * Return a new instance for use in new or concurrent sessions.
-    * Sharing weights/connections (e.g., `_shared_model`) is allowed, but you can't share states. 
-    
-Methods below are optional:
-* **`recognize_stream(audio: bytes, *, is_final: bool = False) -> str`**
-    * Interface for streaming incremental recognition.
-    * Returns the "current cumulative recognition result up to this point".
-* **`async_recognize(audio: bytes)`**
-* **`async def async_recognize_stream(
-        self, audio: bytes, *, is_final: bool = False
-    )`**
-
-    
-> [!IMPORTANT]
-> Input for `recognize` and `recognize_stream` is PCM 16-bit mono 16 kHz raw bytes. You may need to do conversion by yourself.
-    
-> **Note**
-> X-Talk have default implementation for `recognize_stream` with a `MockStreamRecognizer`. Therefore, no worry for your non-streaming ASR models.
-
-> **Note**
-> You can refer to existing implementations (e.g., `src/xtalk/speech/asr/zipformer_local.py`) when building your own ASR class. We recommend deploying ASR as a separate service and invoking it via API calls within the ASR class, referencing the implementation of `src/xtalk/speech/asr/sherpa_onnx_asr.py`.
-    
-##### New TTS (text-to-speech) Model
-    
-Your new TTS class must inherit from `xtalk.speech.interfaces.TTS` and implement the following methods:
-
-
-- **`synthesize(self, text: str) -> bytes`**
-
-  - Input: The text to synthesize.
-  - Output: Raw audio bytes in PCM 16-bit, mono, 48000 Hz.
-
-- **`clone(self) -> TTS`**
-
-  - Return a new TTS instance:
-    - It should have isolated runtime state to avoid cross-session interference and it may share read-only resources if your backend supports that.
-
-> **Note**
-> Follow this integration contract for new TTS implementations:
-> - Non-streaming TTS: implement `synthesize`; optionally override `async_synthesize` for async efficiency.
-> - Streaming TTS: still implement `synthesize`, and additionally override `synthesize_stream`. You may also override `async_synthesize` and `async_synthesize_stream` for async efficiency.
-> - Do not override `synthesize_stream` for a non-streaming backend just to adapt signatures. The base-class default already wraps `synthesize` into one chunk for compatibility, and that inherited wrapper should not be treated as native streaming support.
-
-**Optional methods**
-
-- **`synthesize_stream(self, text: str, **kwargs) -> Iterable[bytes]`**
-  - Override this method only if your backend supports true streaming synthesis.
-- **`set_voice(self, voice_names: list[str])`**
-
-  - This method works with the `TTSVoiceChange` event in `TTSManager` to switch voices via language model tool calls.
-  - Usually there is only one element in `voice_names`, and this is the current behavior for tool call result. However, some TTS models may support mixing multiple voices for reference. Therefore, `voice_names` is list type.
-
-- **`set_emotion(self, emotion: str | list[float])`**
-
-  - This method works with the `TTSEmotionChange` event in `TTSManager` to switch emotions via language model tool calls.
-  - Current tool call result only carries `emotion` as `str`. However, you may also want `list[float]` as emotion vector for future use.
-    
-- **`async def async_synthesize(self, text: str, **kwargs: Any)`**
-  - Optional async optimization for both streaming and non-streaming backends.
-- **`async def async_synthesize_stream(
-        self, text: str, **kwargs: Any
-    )`**
-  - Optional async optimization for streaming backends. If omitted, the base class asynchronously iterates over `synthesize_stream`.
-    

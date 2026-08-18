@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "moss-transcribe.cpp": {
+      "revision": "190a569c13b4b247450f2fb3b2a431244e84833e",
+      "archive": "moss-transcribe.cpp-190a569c13b4b247450f2fb3b2a431244e84833e.tar.gz",
+      "url": "https://github.com/localai-org/moss-transcribe.cpp/archive/190a569c13b4b247450f2fb3b2a431244e84833e.tar.gz",
+      "sha256": "bf10df98f16a0755ce7c21b8ab8394ad0a0ae4aa101e55db021dc4f3d528de8a"
+    },
+    "ggml": {
+      "revision": "eced84c86f8b012c752c016f7fe789adea168e1e",
+      "archive": "ggml-eced84c86f8b012c752c016f7fe789adea168e1e.tar.gz",
+      "url": "https://github.com/ggml-org/ggml/archive/eced84c86f8b012c752c016f7fe789adea168e1e.tar.gz",
+      "sha256": "8036f930dbe909affbcecdda7137d671520764d4396962d2b9c3df476cb29cb0"
+    }
+  }
+}

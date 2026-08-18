@@ -1,14 +1,15 @@
+import logging
 from typing import Any
-from ...log_utils import logger
-from ..event_bus import EventBus
-from ..interfaces import Manager
-from ...pipelines import Pipeline
 
+from ...models.agents.tools.retrievers import LOCAL_SEARCH_TOOL, WEB_SEARCH_TOOL
+from ..event_bus import EventBus
 from ..events import (
-    ToolCallOccurred,
     RetrievalUpdated,
+    ToolCallOccurred,
 )
-from ...llm_agent.tools.retrievers import WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalManager(Manager):
@@ -16,12 +17,10 @@ class RetrievalManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline  # Access pipeline for retrieval context
         self.config: dict[str, Any] = config or {}
 
     @Manager.event_handler(ToolCallOccurred, priority=80)

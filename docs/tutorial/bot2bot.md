@@ -1,3 +1,5 @@
+*Experimental feature*
+
 X-Talk can bridge multiple frontend sessions into one shared browser-side audio bus so that bots hear a continuous audio stream instead of only microphone input.
 
 This tutorial documents the current frontend-only bot-to-bot bridge API:
@@ -18,7 +20,7 @@ Use the web audio bridge when you want one browser page to:
 - optionally inject real user microphone audio into the same shared stream,
 - keep the server contract unchanged and do the routing on the frontend.
 
-This API is currently Web-only. It lives under `frontend/src/platforms`.
+This API is currently Web-only. It lives under [`frontend/src/platforms`](https://github.com/xcc-zach/xtalk/tree/main/frontend/src/platforms).
 
 ## Shared stream model
 

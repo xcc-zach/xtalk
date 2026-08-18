@@ -1,0 +1,141 @@
+site_name: xtalk
+docs_dir: docs
+repo_url: https://github.com/xcc-zach/xtalk
+repo_name: xcc-zach/xtalk
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+extra:
+  alternate:
+    - name: English
+      link: /en/
+      lang: en
+    - name: 简体中文
+      link: /zh/
+      lang: zh
+plugins:
+  - search:
+      separator: '[\s\u200b\-]'
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+          site_name: X-Talk Documentation
+        - locale: zh
+          name: 简体中文
+          build: true
+          site_name: X-Talk文档
+          link: /zh/
+          nav_translations:
+            Home: 首页
+            Tutorial: 教程
+            'App Tutorial': 桌面应用教程
+            'Model Configuration': 模型配置
+            'Add Tools': 添加工具
+            'Web Search': 联网搜索
+            'Voice Wake': 语音唤醒
+            Quickstart: 快速开始
+            'Technical Reference': 技术参考
+            Recipe: 开发指南
+            # Tabs under Tutorial
+            'Basic Usage': 基础使用
+            Other: 其他
+            'Start the Service': 启动服务
+            'Config the Service': 配置服务
+            'Sample Config for Fully Local Deployment': 完全本地部署示例配置
+            'Introduce Tools': 引入工具
+            Bot2Bot: Bot2Bot
+            'Introduce a New Model': 引入新模型
+            'Introduce an LLM Agent': 引入LLM Agent
+            'Model Types and Control Logic Customization': 模型类型与控制逻辑定制
+            Testing: 测试
+            'Service Configuration': 服务配置项
+            Logging: 日志
+            'Text Input': 文本输入
+            # Tabs under Technical Reference
+            'Overall Architecture': 整体架构
+            'Supported Models': 支持的模型
+            'ASR Design': ASR设计
+            'TTS Design': TTS设计
+            'Speech Enhancer Design': 语音增强设计
+            'VAD Design': VAD设计
+            'Turn Detector Design': Turn Detector设计
+            'Forced Aligner': 强制对齐
+            'Model clone() and reset()': 模型对象的clone()与reset()语义
+            # Tabs under API
+            'Client': 客户端
+            'Server': 服务端
+markdown_extensions:
+  - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Tutorial:
+      - 'Basic Usage':
+          - 'Start the Service': tutorial/start_the_service.md
+          - 'Config the Service': tutorial/config_the_service.md
+          - 'Introduce a New Model': tutorial/introduce_a_new_model.md
+          - 'Model Types and Control Logic Customization': tutorial/customize_the_service.md
+      - Other:
+          - 'Introduce an LLM Agent': tutorial/introduce_an_llm_agent.md
+          - 'Introduce Tools': tutorial/tool_design.md
+          - 'Text Input': tutorial/text_input.md
+          - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
+          - 'Service Configuration': tutorial/service_config.md
+          - Logging: tutorial/logging.md
+          - Testing: tutorial/testing.md
+          - Bot2Bot: tutorial/bot2bot.md
+  - 'App Tutorial':
+      - 'Model Configuration': app_tutorial/model_configuration.md
+      - 'Add Tools': app_tutorial/add_tools.md
+      - 'Web Search': app_tutorial/web_search.md
+      - 'Voice Wake': app_tutorial/voice_wake.md
+  - 'Technical Reference':
+      - 'Overall Architecture': technical_reference/system_design.md
+      - 'Supported Models': technical_reference/supported_models.md
+      - 'ASR Design': technical_reference/asr_design.md
+      - 'TTS Design': technical_reference/tts_design.md
+      - 'Speech Enhancer Design': technical_reference/speech_enhancer_design.md
+      - 'VAD Design': technical_reference/vad_design.md
+      - 'Turn Detector Design': technical_reference/turn_detector_design.md
+      - 'Forced Aligner': technical_reference/forced_aligner.md
+      - 'Model clone() and reset()': technical_reference/model_clone_reset.md
+      - Recipe: developer/recipe.md
+  - API:
+      - 'Client': api/client/globals.md
+      - 'Server': api/server/index.md

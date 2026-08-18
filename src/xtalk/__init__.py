@@ -1,22 +1,32 @@
-from .api import Xtalk
-from .pipelines import Pipeline, DefaultPipeline
+# ruff: noqa: E402
+
+from .log_utils import _initialize_package_logging
+
+_initialize_package_logging()
+del _initialize_package_logging
+
+from .api import Xtalk, XtalkBuilder
+from .models import Models
+from .models.registry import model, model_type
 from .serving import (
-    Service,
     DefaultService,
-    BaseEvent,
-    create_event_class,
-    Manager,
+    Event,
     EventBus,
+    Manager,
+    Service,
+    create_event_class,
 )
 
 __all__ = [
     "Xtalk",
-    "Pipeline",
-    "DefaultPipeline",
+    "XtalkBuilder",
+    "Models",
     "Service",
     "DefaultService",
-    "BaseEvent",
+    "Event",
     "create_event_class",
     "Manager",
     "EventBus",
+    "model",
+    "model_type",
 ]

@@ -1,30 +1,37 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import json
+import logging
+from typing import Any, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
-    ErrorOccurred,
-    WebSocketMessageReceived,
+    ASRResultFinal,
+    ASRResultPartial,
     AudioFrameReceived,
-    VADSpeechStart,
-    VADSpeechEnd,
-    TTSPlaybackFinished,
-    TTSVoiceChange,
-    TTSEmotionChange,
-    TTSSpeedChange,
-    TTSChunkPlayed,
-    TTSModelSwitchRequested,
-    LLMModelSwitchRequested,
     ClockSyncReceived,
+    ErrorOccurred,
+    LLMModelSwitchRequested,
     SessionConfigReceived,
+    TTSChunkPlayed,
+    TTSEmotionChange,
+    TTSModelSwitchRequested,
+    TTSPlaybackFinished,
+    TTSPlaybackStopped,
+    TTSSpeedChange,
+    TTSVoiceChange,
+    TurnInputAbortRequested,
+    VADSpeechEnd,
+    VADSpeechStart,
+    WebSocketMessageReceived,
 )
 from ..interfaces import EventListenerMixin
-from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
+
+MAX_TEXT_INPUT_BYTES = 8 * 1024
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -76,14 +83,17 @@ class TextMsgHandler(EventListenerMixin):
         self.session_id = session_id
         self.websocket = websocket
         self.event_bus = event_bus
+        self._text_turn_lock = asyncio.Lock()
 
         # Build dispatch table: message type -> handler callable
-        self._dispatch: dict[str, Callable[[dict], Any]] = {
+        self._dispatch: dict[str, Callable[[dict[str, Any]], Any]] = {
             "ping": self._handle_ping,
             "clock_sync": self._handle_clock_sync,
+            "submit_text": self._handle_submit_text,
             "vad_speech_start": self._handle_vad_speech_start,
             "vad_speech_end": self._handle_vad_speech_end,
             "tts_playback_finished": self._handle_tts_playback_finished,
+            "tts_playback_stopped": self._handle_tts_playback_stopped,
             "tts_chunk_played": self._handle_tts_chunk_played,
             "change_voice": self._handle_change_voice,
             "change_emotion": self._handle_change_emotion,
@@ -125,6 +135,76 @@ class TextMsgHandler(EventListenerMixin):
             )
         )
 
+    async def _handle_submit_text(self, message_data: dict[str, Any]) -> None:
+        """Publish one validated text submission as a synthetic speech turn."""
+        text = message_data.get("text")
+        if not isinstance(text, str):
+            logger.warning(
+                "submit_text requires a string - session: %s",
+                self.session_id,
+            )
+            return
+
+        normalized_text = text.strip()
+        if not normalized_text:
+            logger.warning(
+                "submit_text requires non-blank text - session: %s",
+                self.session_id,
+            )
+            return
+        if len(normalized_text.encode("utf-8")) > MAX_TEXT_INPUT_BYTES:
+            logger.warning(
+                "submit_text exceeds %s bytes - session: %s",
+                MAX_TEXT_INPUT_BYTES,
+                self.session_id,
+            )
+            return
+
+        async with self._text_turn_lock:
+            await self.event_bus.publish(
+                TurnInputAbortRequested(
+                    session_id=self.session_id,
+                    origin="text",
+                ),
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+            )
+
+            try:
+                await self.event_bus.publish(
+                    VADSpeechStart(
+                        session_id=self.session_id,
+                        origin="text",
+                    ),
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                )
+                await self.event_bus.publish(
+                    ASRResultPartial(
+                        session_id=self.session_id,
+                        text=normalized_text,
+                        display_text=normalized_text,
+                        speech_pause=True,
+                        origin="text",
+                    ),
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                )
+            finally:
+                await self.event_bus.publish(
+                    VADSpeechEnd(
+                        session_id=self.session_id,
+                        origin="text",
+                    ),
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                )
+
+            await self.event_bus.publish(
+                ASRResultFinal(
+                    session_id=self.session_id,
+                    text=normalized_text,
+                    display_text=normalized_text,
+                    origin="text",
+                )
+            )
+
     async def _handle_vad_speech_start(self, message_data: dict) -> None:
         """Handle VAD speech-start signal."""
         await self._publish(
@@ -138,12 +218,36 @@ class TextMsgHandler(EventListenerMixin):
                 session_id=self.session_id,
                 origin="client",
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def _handle_tts_playback_finished(self, message_data: dict) -> None:
         """Handle frontend TTS playback completion and transition to idle."""
-        await self._publish(TTSPlaybackFinished(session_id=self.session_id))
+        await self.event_bus.publish(
+            TTSPlaybackFinished(
+                session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
+
+    async def _handle_tts_playback_stopped(self, message_data: dict) -> None:
+        """Apply the final partial-chunk playback reported during interruption."""
+        try:
+            played_audio_ms = max(
+                0.0,
+                float(message_data.get("played_audio_ms", 0.0)),
+            )
+        except (TypeError, ValueError):
+            played_audio_ms = 0.0
+        await self.event_bus.publish(
+            TTSPlaybackStopped(
+                session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
+                played_audio_ms=played_audio_ms,
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
 
     async def _handle_change_voice(self, message_data: dict) -> None:
         """Handle requests to change the reference voice."""
@@ -170,7 +274,7 @@ class TextMsgHandler(EventListenerMixin):
         await self._publish(TTSSpeedChange(session_id=self.session_id, speed=speed))
 
     async def _handle_change_tts_model(self, message_data: dict) -> None:
-        """Handle requests to switch TTS models (IndexTTS / IndexTTS2)."""
+        """Handle requests to switch the IndexTTS protocol version."""
         model_type = message_data.get("model_type", "")
         if not _require(
             message_data, "model_type", self.session_id, "change_tts_model"
@@ -202,7 +306,13 @@ class TextMsgHandler(EventListenerMixin):
 
     async def _handle_tts_chunk_played(self, message_data: dict) -> None:
         """Handle frontend confirmation that a TTS chunk finished playback."""
-        await self._publish(TTSChunkPlayed(session_id=self.session_id))
+        await self.event_bus.publish(
+            TTSChunkPlayed(
+                session_id=self.session_id,
+                response_id=str(message_data.get("response_id", "") or ""),
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
 
     async def _handle_session_config(self, message_data: dict) -> None:
         """Handle per-session configuration from client."""
@@ -229,6 +339,12 @@ class TextMsgHandler(EventListenerMixin):
                 "Failed to parse WebSocket text - session: %s, payload: %s",
                 self.session_id,
                 message,
+            )
+            return
+        if not isinstance(message_data, dict):
+            logger.warning(
+                "WebSocket text signal must be a JSON object - session: %s",
+                self.session_id,
             )
             return
 

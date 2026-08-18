@@ -3,28 +3,31 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import fields
 from typing import Any
 
-from ...llm_agent import AgentContext
-from ...log_utils import logger
-from ...pipelines import Pipeline
-from ..event_bus import EventBus
+from ...models import Agent, Models, SpeakerDiarization
+from ...models.agents import AgentContext
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
-    ASRResultPartial,
     ASRResultFinal,
-    BaseEvent,
+    ASRResultPartial,
     CaptionUpdated,
     ConsumeLLMAgentGenerationRequested,
     EmbeddingStatusUpdated,
+    Event,
     LLMAgentLoop,
-    SpeakerRecognized,
+    MultiSpeakerTurnReady,
+    ResponseFinish,
     ResponseUpdate,
-    ResponseFinish
+    SpeakerRecognized,
 )
 from ..interfaces import Manager
 
-_BASE_EVENT_FIELD_NAMES = frozenset(field.name for field in fields(BaseEvent))
+logger = logging.getLogger(__name__)
+
+_BASE_EVENT_FIELD_NAMES = frozenset(field.name for field in fields(Event))
 
 
 class LLMAgentContextManager(Manager):
@@ -36,8 +39,8 @@ class LLMAgentContextManager(Manager):
         Shared event bus for the current session.
     session_id : str
         Current session identifier.
-    pipeline : Pipeline
-        Session pipeline that owns the LLM agent.
+    models : Models
+        Session model container that owns the LLM agent.
     config : dict[str, Any] | None, optional
         Unused manager config kept for interface consistency.
     """
@@ -46,14 +49,14 @@ class LLMAgentContextManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config: dict[str, Any] = config or {}
-        self.llm_agent = pipeline.get_agent()
+        self.llm_agent = models.get(Agent)
+        self.multi_speaker_enabled = models.get(SpeakerDiarization) is not None
 
     @Manager.event_handler(ASRResultPartial, priority=20)
     async def _handle_asr_result_partial(self, event: ASRResultPartial) -> None:
@@ -65,7 +68,20 @@ class LLMAgentContextManager(Manager):
     async def _handle_asr_result_final(self, event: ASRResultFinal) -> None:
         """Forward ``ASRResultFinal`` into the agent."""
 
+        if self.multi_speaker_enabled and event.origin != "text":
+            return
         await self._accept_event_context(event, context_type="asr_final")
+
+    @Manager.event_handler(MultiSpeakerTurnReady, priority=20)
+    async def _handle_multi_speaker_turn_ready(
+        self,
+        event: MultiSpeakerTurnReady,
+    ) -> None:
+        """Forward the joined ASR/MTD hard turn into the agent."""
+
+        if not self.multi_speaker_enabled:
+            return
+        await self._accept_event_context(event, context_type="multi_speaker_final")
 
     @Manager.event_handler(ResponseUpdate, priority=20)
     async def _handle_response_update(self, event: ResponseUpdate) -> None:
@@ -108,7 +124,7 @@ class LLMAgentContextManager(Manager):
 
     async def _accept_event_context(
         self,
-        event: BaseEvent,
+        event: Event,
         *,
         context_type: str,
     ) -> None:
@@ -116,7 +132,7 @@ class LLMAgentContextManager(Manager):
 
         Parameters
         ----------
-        event : BaseEvent
+        event : Event
             Source event published within the current session.
         context_type : str
             Logical agent-context stream name.
@@ -138,8 +154,9 @@ class LLMAgentContextManager(Manager):
                 ConsumeLLMAgentGenerationRequested(
                     session_id=self.session_id,
                     stream=self.llm_agent.async_accept(context),
+                    persistent=context_type == "loop",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         except Exception as e:
             logger.warning(

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-wake-word-settings"
+description = "Enables the get_wake_word_settings command without any pre-configured scope."
+commands.allow = ["get_wake_word_settings"]
+
+[[permission]]
+identifier = "deny-get-wake-word-settings"
+description = "Denies the get_wake_word_settings command without any pre-configured scope."
+commands.deny = ["get_wake_word_settings"]

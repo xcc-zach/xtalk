@@ -1,6 +1,6 @@
-*测试中的功能*
+*实验中的功能*
 
-X-Talk 提供了统一的 `scripts/test.py` 脚本，用于测试集生成和后端自动化评测。
+X-Talk 提供了统一的 [`scripts/test.py`](https://github.com/xcc-zach/xtalk/blob/main/scripts/test.py) 脚本，用于测试集生成和后端自动化评测。
 
 它有两种模式：
 
@@ -42,8 +42,7 @@ logs/test_templates/smoke/
 {
   "type": "IndexTTS",
   "params": {
-    "host": "127.0.0.1",
-    "port": 11996,
+    "base_url": "http://127.0.0.1:11996",
     "voices": [
       {
         "name": "man",
@@ -61,8 +60,7 @@ logs/test_templates/smoke/
   "tts": {
     "type": "IndexTTS",
     "params": {
-      "host": "127.0.0.1",
-      "port": 11996,
+      "base_url": "http://127.0.0.1:11996",
       "voices": [
         {
           "name": "man",
@@ -74,7 +72,7 @@ logs/test_templates/smoke/
 }
 ```
 
-其中 `type` 应与 TTS 模型的 Python 类名一致，`params` 应与该类的初始化参数一致。可用的 TTS 后端及其可选依赖请参阅 [Supported Models](../docs/supported_models.zh.md)。
+其中 `type` 应与 TTS 模型的 Python 类名一致，`params` 应与该类的初始化参数一致。可用的 TTS 后端及其可选依赖请参阅 [Supported Models](../technical_reference/supported_models.zh.md)。
 
 对于 `IndexTTS`，`voices` 中的每一项都需要：
 

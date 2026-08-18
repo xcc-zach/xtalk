@@ -1,14 +1,68 @@
+<!-- 此文件由 generate_server_docs.py 自动生成。 -->
 # xtalk.model_types
 
 ## Embeddings
 
-_定义于 `langchain_core.embeddings`。_
+_定义于 [`xtalk.models.embeddings.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/embeddings/interfaces.py)。_
 
 ```python
-from langchain_core.embeddings import Embeddings
+@model_type(aliases=['embeddings'])
+class Embeddings(_LangChainEmbeddings)
 ```
 
-该模块重新导出的外部依赖。
+Interface marker for embedding models.
+
+## ForcedAligner
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+@model_type
+class ForcedAligner(ABC)
+```
+
+Abstract interface for forced alignment models.
+
+### 方法
+
+#### align
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+def align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Align text units against 48 kHz PCM audio.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 48 kHz.
+- `text` (`str`)
+  Original text that the audio speaks.
+- `language` (`str | None, optional`)
+  Optional model-specific language hint.
+
+#### async_align
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+async def async_align(self, *, audio: bytes, text: str, language: str | None = None) -> list[ForcedAlignmentUnit]
+```
+
+Asynchronously align text units against 48 kHz PCM audio.
+
+#### clone
+
+_定义于 [`xtalk.models.forced_aligner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/forced_aligner/interfaces.py)。_
+
+```python
+def clone(self) -> 'ForcedAligner'
+```
+
+Clone the aligner for a new service session.
 
 ## BaseChatModel
 
@@ -18,431 +72,1154 @@ _定义于 `langchain_core.language_models.chat_models`。_
 from langchain_core.language_models.chat_models import BaseChatModel
 ```
 
-该模块重新导出的外部依赖。
+External dependency re-exported by this module.
 
 ## Agent
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
+@model_type(aliases=['llm_agent'])
 class Agent(ABC)
 ```
 
-Xtalk 所使用的会话式 Agent 抽象接口。
+Abstract interface for conversational agents used by Xtalk.
 
-### Methods
+### 方法
 
 #### content_to_text
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def content_to_text(content: Any) -> str
 ```
 
-将模型内容块规范化为纯文本。
+Normalize model content blocks into plain text.
 
-##### Parameters
+##### 参数
 
-- `content`
-  LangChain 模型消息或分块产生的内容。
+- `content:`
+  Content emitted by a LangChain model chunk or message.
 
-##### Returns
+##### 返回
 
 - `str`
-  从输入中提取出的纯文本内容。
+  Plain-text content extracted from the input.
 
 #### accept
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def accept(self, context: AgentContext) -> Iterable[AgentOutput]
 ```
 
-接收一次增量上下文更新。
+Accept an incremental context update.
 
-##### Parameters
+##### 参数
 
 - `context` (`AgentContext`)
-  由服务层事件转发而来的上下文负载。
+  Context payload forwarded from serving-layer events.
 
-##### Yields
+##### 生成
 
 - `AgentStreamItem`
-  由该次更新触发的零个或多个流式输出项。
+  Zero or more streamed response items triggered by the context
+  update.
 
 #### async_accept
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput]
 ```
 
-异步接收一次增量上下文更新。
+Asynchronously accept an incremental context update.
 
-##### Parameters
+##### 参数
 
 - `context` (`AgentContext`)
-  由服务层事件转发而来的上下文负载。
+  Context payload forwarded from serving-layer events.
 
-##### Yields
+##### 生成
 
 - `AgentStreamItem`
-  由该次更新触发的流式输出项。
+  Streamed response items triggered by the context update.
 
 #### sync_iter_from_async
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def sync_iter_from_async(self, async_iter: AsyncIterator[T]) -> Iterable[T]
 ```
 
-将异步迭代器转换为同步生成器。
+Convert an async iterator into a synchronous generator.
 
-##### Parameters
+##### 参数
 
 - `async_iter` (`AsyncIterator[T]`)
-  待桥接的异步迭代器。
+  Async iterator to bridge into synchronous iteration.
 
-##### Yields
+##### 生成
 
 - `T`
-  `async_iter` 产生的各项内容。
+  Items produced by ``async_iter``.
 
 #### clone
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def clone(self) -> 'Agent'
 ```
 
-为新会话克隆 Agent。
+Clone the agent for a new session.
 
-##### Returns
+##### 返回
 
 - `Agent`
-  适用于新会话的 Agent 实例。
+  Session-safe agent instance.
 
 #### restore_history
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def restore_history(self, messages: list[dict[str, Any]]) -> None
 ```
 
-将持久化的对话消息恢复到 Agent 状态中。
+Restore persisted conversation messages into the agent state.
+
+##### 参数
+
+- `messages` (`list[dict[str, Any]]`)
+  Persisted chat messages ordered by session history.
 
 #### get_chat_history
 
-_定义于 `xtalk.llm_agent.interfaces`。_
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
 
 ```python
 def get_chat_history(self, with_system: bool = False) -> str | None
 ```
 
-当可用时，返回序列化后的对话历史。
+Return the serialized conversation history when available.
 
-##### Parameters
+##### 参数
 
 - `with_system` (`bool, optional`)
-  在具体实现支持时，是否包含系统提示消息。
+  Whether to include the system prompt message when supported by the
+  concrete implementation.
 
-##### Returns
+##### 返回
 
 - `str | None`
-  对话历史；如果没有则为 `None`。
-
-#### add_tools
-
-_定义于 `xtalk.llm_agent.interfaces`。_
-
-```python
-def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
-```
-
-向 Agent 附加工具。
-
-##### Parameters
-
-- `tools` (`list[BaseTool | Callable[[], BaseTool]]`)
-  工具实例，或返回工具实例的工厂函数。
+  Conversation history or ``None``.
 
 ## Rewriter
 
-_定义于 `xtalk.rewriter.interfaces`。_
+_定义于 [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)。_
 
 ```python
+@model_type(aliases=['caption_rewriter'])
 class Rewriter(ABC)
 ```
 
-文本重写辅助组件的抽象接口。
+Abstract interface for text rewriting helpers.
 
-### Methods
+### 方法
 
 #### rewrite
 
-_定义于 `xtalk.rewriter.interfaces`。_
+_定义于 [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)。_
 
 ```python
 def rewrite(self, input: str) -> str
 ```
 
-重写输入文本。
+Rewrite input text.
+
+##### 参数
+
+- `input` (`str`)
+  Source text to rewrite.
+
+##### 返回
+
+- `str`
+  Rewritten text.
 
 #### async_rewrite
 
-_定义于 `xtalk.rewriter.interfaces`。_
+_定义于 [`xtalk.models.rewriters.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/rewriters/interfaces.py)。_
 
 ```python
 async def async_rewrite(self, input: str) -> str
 ```
 
-异步重写输入文本。
+Asynchronously rewrite input text.
+
+##### 参数
+
+- `input` (`str`)
+  Source text to rewrite.
+
+##### 返回
+
+- `str`
+  Rewritten text.
 
 ## ASR
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
+@model_type(aliases=['asr'])
 class ASR(ABC)
 ```
 
-自动语音识别的抽象接口。
+Abstract interface for automatic speech recognition.
 
-### Methods
+### 方法
 
 #### recognize
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 def recognize(self, audio: bytes) -> str
 ```
 
-识别完整音频缓冲区。
+Recognize a full audio buffer.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes.
+
+##### 返回
+
+- `str`
+  Recognized text.
 
 #### recognize_stream
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 def recognize_stream(self, audio: bytes, *, is_final: bool = False, chat_history: str | None = None) -> str
 ```
 
-以流式模式增量识别音频。
+Recognize audio incrementally in streaming mode.
 
-##### Parameters
+##### 参数
 
 - `audio` (`bytes`)
-  增量 PCM 16-bit 单声道音频字节。
+  Incremental PCM 16-bit mono audio bytes.
 - `is_final` (`bool, optional`)
-  调用方是否希望把当前点视为一个临时边界，并在需要时刷出原本会保留在缓冲中的尾部音频。这只是解码提示，并不意味着必须重置流式状态；之前已经识别出的文本应继续保留，以便后续音频在累计结果上继续识别。
+  Whether the caller is asking the ASR to treat the current point as
+  a temporary boundary and optionally flush any tail audio that would
+  otherwise remain buffered. This is only a decoding hint. It does
+  not mean the streaming state must be reset, and previously
+  recognized text for the session must be preserved so later audio
+  can continue from the accumulated result.
 - `chat_history` (`str | None, optional`)
-  当前会话的序列化聊天历史；在不可用时不包含进行中的轮次。
+  Serialized chat history for the current session, excluding the
+  in-progress turn when unavailable.
 
-##### Returns
+##### 返回
 
 - `str`
-  当前识别结果。
+  Current recognition result.
 
 #### stream_chunk_bytes_hint
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 def stream_chunk_bytes_hint(self) -> int | None
 ```
 
-返回建议的流式分块大小。
+Return the preferred streaming chunk size.
 
-##### Returns
+##### 返回
 
 - `int | None`
-  建议每次传给 `recognize_stream` 的分块字节数；如果没有偏好则为 `None`。
+  Recommended byte count for each chunk passed to
+  ``recognize_stream``, or ``None`` when no preference is provided.
 
 #### reset
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 def reset(self) -> None
 ```
 
-重置内部识别状态。
+Reset internal recognition state.
 
 #### clone
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 def clone(self) -> 'ASR'
 ```
 
-为新会话克隆 ASR 实例。
+Clone the ASR instance for a new session.
+
+##### 返回
+
+- `ASR`
+  Clone with shared weights and independent runtime state.
 
 #### async_recognize
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 async def async_recognize(self, audio: bytes) -> str
 ```
 
-异步识别完整音频缓冲区。
+Asynchronously recognize a full audio buffer.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes.
+
+##### 返回
+
+- `str`
+  Recognized text.
 
 #### async_recognize_stream
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.asr.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/interfaces.py)。_
 
 ```python
 async def async_recognize_stream(self, audio: bytes, *, is_final: bool = False, chat_history: str | None = None) -> str
 ```
 
-异步识别增量音频输入。
+Asynchronously recognize incremental audio input.
 
-##### Parameters
+##### 参数
 
 - `audio` (`bytes`)
-  增量 PCM 16-bit 单声道音频字节。
+  Incremental PCM 16-bit mono audio bytes.
 - `is_final` (`bool, optional`)
-  调用方是否希望把当前点视为一个临时边界，并在需要时刷出原本会保留在缓冲中的尾部音频。这只是解码提示，并不意味着必须重置流式状态；之前已经识别出的文本应继续保留，以便后续音频在累计结果上继续识别。
+  Whether the caller is asking the ASR to treat the current point as
+  a temporary boundary and optionally flush any tail audio that would
+  otherwise remain buffered. This is only a decoding hint. It does
+  not mean the streaming state must be reset, and previously
+  recognized text for the session must be preserved so later audio
+  can continue from the accumulated result.
 - `chat_history` (`str | None, optional`)
-  当前会话的序列化聊天历史；在不可用时不包含进行中的轮次。
+  Serialized chat history for the current session, excluding the
+  in-progress turn when unavailable.
 
-##### Returns
+##### 返回
 
 - `str`
-  当前识别结果。
+  Current recognition result.
 
 ## TTS
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
 
 ```python
+@model_type(aliases=['tts'])
 class TTS(ABC)
 ```
 
-文本转语音引擎的抽象基类。
+Abstract base class for text-to-speech engines.
+
+### 说明
+
+``synthesize`` is the required baseline API for every implementation.
+Streaming-capable engines should additionally override
+``synthesize_stream``; non-streaming engines should inherit the default
+compatibility wrapper. The inherited streaming helpers do not by
+themselves declare native streaming capability.
+
+### 方法
+
+#### synthesize
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+def synthesize(self, text: str) -> bytes
+```
+
+Synthesize audio for a full text input.
+
+##### 参数
+
+- `text` (`str`)
+  Text to synthesize.
+
+##### 返回
+
+- `bytes`
+  PCM 16-bit mono audio bytes at 48 kHz.
+
+##### 说明
+
+Every TTS implementation, including streaming backends, must provide
+this method.
+
+#### synthesize_stream
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+def synthesize_stream(self, text: str, **kwargs) -> Iterable[bytes]
+```
+
+Stream synthesized audio chunks for a text input.
+
+##### 参数
+
+- `text` (`str`)
+  Text to synthesize.
+- `**kwargs`
+  Model-specific streaming options.
+
+##### 生成
+
+- `bytes`
+  PCM 16-bit mono audio bytes at 48 kHz.
+
+##### 说明
+
+Override this method only when the backend supports native streaming
+synthesis. The default implementation yields a single chunk produced
+by ``synthesize`` for compatibility and should not be treated as a
+declaration of streaming support.
+
+#### async_synthesize
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+async def async_synthesize(self, text: str, **kwargs: Any) -> bytes
+```
+
+Asynchronously synthesize audio for text.
+
+##### 参数
+
+- `text` (`str`)
+  Text to synthesize.
+- `**kwargs`
+  Model-specific synthesis options.
+
+##### 返回
+
+- `bytes`
+  Synthesized PCM audio bytes.
+
+##### 说明
+
+This method is an optional async optimization. Implementations may
+inherit the default executor-based wrapper.
+
+#### async_synthesize_stream
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+async def async_synthesize_stream(self, text: str, **kwargs: Any) -> AsyncIterator[bytes]
+```
+
+Asynchronously stream synthesized audio chunks.
+
+##### 参数
+
+- `text` (`str`)
+  Text to synthesize.
+- `**kwargs`
+  Model-specific synthesis options.
+
+##### 生成
+
+- `bytes`
+  Streamed PCM audio chunks.
+
+##### 说明
+
+This method is an optional async optimization for streaming-capable
+backends. When not overridden, it asynchronously iterates over
+``synthesize_stream``.
+
+#### clone
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+def clone(self) -> 'TTS'
+```
+
+Clone the TTS engine for a new session.
+
+##### 返回
+
+- `TTS`
+  Session-safe clone.
+
+#### set_voice
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+def set_voice(self, voice_names: list[str]) -> None
+```
+
+Update the active voice selection.
+
+##### 参数
+
+- `voice_names` (`list[str]`)
+  One or more voice names understood by the implementation.
+
+#### set_emotion
+
+_定义于 [`xtalk.models.tts.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/tts/interfaces.py)。_
+
+```python
+def set_emotion(self, emotion: str | list[float]) -> None
+```
+
+Update the active synthesis emotion.
+
+##### 参数
+
+- `emotion` (`str | list[float]`)
+  Emotion label or model-specific emotion vector.
 
 ## Captioner
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)。_
 
 ```python
+@model_type(aliases=['captioner'])
 class Captioner(ABC)
 ```
 
-音频描述模型的抽象基类。
+Abstract base class for audio captioning models.
+
+### 方法
+
+#### caption
+
+_定义于 [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)。_
+
+```python
+def caption(self, audio: bytes) -> str
+```
+
+Generate a caption for audio.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 返回
+
+- `str`
+  Generated caption text.
+
+#### caption_stream
+
+_定义于 [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)。_
+
+```python
+def caption_stream(self, audio: bytes) -> Iterable[str]
+```
+
+Stream caption text for audio input.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 生成
+
+- `str`
+  Streamed caption text.
+
+#### async_caption
+
+_定义于 [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)。_
+
+```python
+async def async_caption(self, audio: bytes) -> str
+```
+
+Asynchronously caption audio.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 返回
+
+- `str`
+  Generated caption text.
+
+#### async_caption_stream
+
+_定义于 [`xtalk.models.captioner.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/captioner/interfaces.py)。_
+
+```python
+async def async_caption_stream(self, audio: bytes) -> AsyncIterator[str]
+```
+
+Asynchronously stream caption text.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 生成
+
+- `str`
+  Streamed caption text.
 
 ## PuntRestorer
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)。_
 
 ```python
+@model_type(aliases=['punt_restorer_model'])
 class PuntRestorer(ABC)
 ```
 
-标点恢复模型的抽象基类。
+Abstract base class for punctuation restoration models.
+
+### 方法
+
+#### restore
+
+_定义于 [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)。_
+
+```python
+def restore(self, text: str) -> str
+```
+
+Restore punctuation in text.
+
+##### 参数
+
+- `text` (`str`)
+  Text without reliable punctuation.
+
+##### 返回
+
+- `str`
+  Text with restored punctuation.
+
+#### async_restore
+
+_定义于 [`xtalk.models.punt_restorer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/punt_restorer/interfaces.py)。_
+
+```python
+async def async_restore(self, text: str) -> str
+```
+
+Asynchronously restore punctuation in text.
+
+##### 参数
+
+- `text` (`str`)
+  Text without reliable punctuation.
+
+##### 返回
+
+- `str`
+  Restored text.
 
 ## VAD
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
 
 ```python
+@model_type(aliases=['vad'])
 class VAD(ABC)
 ```
 
-语音活动检测引擎的抽象基类。
+Abstract base class for voice activity detection engines.
+
+### 方法
+
+#### is_speech
+
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
+
+```python
+def is_speech(self, frame: bytes) -> bool
+```
+
+Determine whether an audio frame contains speech.
+
+##### 参数
+
+- `frame` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 返回
+
+- `bool`
+  ``True`` if speech is detected, otherwise ``False``.
+
+#### async_is_speech
+
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
+
+```python
+async def async_is_speech(self, frame: bytes) -> bool
+```
+
+Asynchronously determine whether an audio frame contains speech.
+
+##### 参数
+
+- `frame` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+
+##### 返回
+
+- `bool`
+  ``True`` if speech is detected, otherwise ``False``.
+
+#### reset
+
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
+
+```python
+def reset(self) -> None
+```
+
+Reset session-local VAD state and release external resources.
+
+#### clone
+
+_定义于 [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)。_
+
+```python
+def clone(self) -> 'VAD'
+```
+
+Clone the VAD instance for a new session.
+
+##### 返回
+
+- `VAD`
+  Clone with shared weights and independent runtime state.
 
 ## SpeechEnhancer
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
 
 ```python
+@model_type(aliases=['speech_enhancer'])
 class SpeechEnhancer(ABC)
 ```
 
-语音增强引擎的抽象基类。
+Abstract base class for speech enhancement engines.
 
-### Notes
+### 说明
 
-输入与输出均使用 16 kHz 的 PCM 16-bit 单声道音频字节。
+Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
+
+### 方法
+
+#### enhance
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+def enhance(self, audio: bytes, far: bytes) -> bytes
+```
+
+Enhance an audio frame.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
+
+##### 返回
+
+- `bytes`
+  Enhanced PCM audio bytes.
+
+#### flush
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+def flush(self) -> bytes
+```
+
+Flush any internally buffered audio.
+
+##### 返回
+
+- `bytes`
+  Remaining enhanced PCM audio bytes.
+
+#### async_enhance
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+async def async_enhance(self, audio: bytes, far: bytes) -> bytes
+```
+
+Asynchronously enhance audio.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
+
+##### 返回
+
+- `bytes`
+  Enhanced PCM audio bytes.
+
+#### async_flush
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+async def async_flush(self) -> bytes
+```
+
+Asynchronously flush buffered audio.
+
+##### 返回
+
+- `bytes`
+  Remaining enhanced PCM audio bytes.
+
+#### reset
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+def reset(self) -> None
+```
+
+Reset internal buffers and caches.
+
+#### clone
+
+_定义于 [`xtalk.models.speech_enhancer.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_enhancer/interfaces.py)。_
+
+```python
+def clone(self) -> 'SpeechEnhancer'
+```
+
+Clone the speech enhancer for a new session.
+
+##### 返回
+
+- `SpeechEnhancer`
+  Clone with shared weights and isolated runtime state.
 
 ## SpeakerEncoder
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)。_
 
 ```python
+@model_type(aliases=['speaker_encoder'])
 class SpeakerEncoder(ABC)
 ```
 
-说话人嵌入模型的抽象基类。
+Abstract base class for speaker embedding models.
+
+### 方法
+
+#### extract
+
+_定义于 [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)。_
+
+```python
+def extract(self, audio: bytes) -> np.ndarray
+```
+
+Generate a speaker embedding vector.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes.
+
+##### 返回
+
+- `np.ndarray`
+  Speaker embedding vector.
+
+#### async_extract
+
+_定义于 [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)。_
+
+```python
+async def async_extract(self, audio: bytes) -> np.ndarray
+```
+
+Asynchronously extract a speaker embedding.
+
+##### 参数
+
+- `audio` (`bytes`)
+  PCM 16-bit mono audio bytes.
+
+##### 返回
+
+- `np.ndarray`
+  Speaker embedding vector.
+
+#### similarity
+
+_定义于 [`xtalk.models.speaker_encoder.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speaker_encoder/interfaces.py)。_
+
+```python
+def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float
+```
+
+Compute similarity between two speaker embeddings.
+
+##### 参数
+
+- `embedding1` (`np.ndarray`)
+  First speaker embedding.
+- `embedding2` (`np.ndarray`)
+  Second speaker embedding.
+
+##### 返回
+
+- `float`
+  Cosine similarity score.
 
 ## SpeechSpeedController
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)。_
 
 ```python
+@model_type(aliases=['speech_speed_controller'])
 class SpeechSpeedController(ABC)
 ```
 
-TTS 语速控制器接口。
+Interface for TTS speed controllers.
+
+### 方法
+
+#### process
+
+_定义于 [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)。_
+
+```python
+def process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes
+```
+
+Apply a speed adjustment to synthesized audio.
+
+##### 参数
+
+- `audio_bytes` (`bytes`)
+  Synthesized audio bytes.
+- `speed` (`float, optional`)
+  Speed multiplier.
+
+##### 返回
+
+- `bytes`
+  Processed audio bytes.
+
+#### async_process
+
+_定义于 [`xtalk.models.speech_speed_controller.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/speech_speed_controller/interfaces.py)。_
+
+```python
+async def async_process(self, audio_bytes: bytes, speed: float = 1.0) -> bytes
+```
+
+Asynchronously apply a speed adjustment to audio.
+
+##### 参数
+
+- `audio_bytes` (`bytes`)
+  Synthesized audio bytes.
+- `speed` (`float, optional`)
+  Speed multiplier.
+
+##### 返回
+
+- `bytes`
+  Processed audio bytes.
 
 ## TurnDetector
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
 
 ```python
+@model_type(aliases=['turn_detector'])
 class TurnDetector(ABC)
 ```
 
-轮次检测器的抽象接口。
+Abstract interface for turn-taking detectors.
 
-### Methods
+### 方法
+
+#### __init__
+
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
+
+```python
+def __init__(self) -> None
+```
+
+#### listening
+
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
+
+```python
+def listening(self) -> bool
+```
+
+Return whether the detector is currently listening for user turns.
+
+##### 返回
+
+- `bool`
+  Current listening state.
+
+#### listening
+
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
+
+```python
+def listening(self, value: bool) -> None
+```
+
+Update the listening state.
+
+##### 参数
+
+- `value` (`bool`)
+  New listening state.
+
+#### listening_lock
+
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
+
+```python
+def listening_lock(self, is_async: bool = True)
+```
+
+Return the lock guarding listening state changes.
+
+##### 参数
+
+- `is_async` (`bool, optional`)
+  Whether to return the async lock instead of the threading lock.
+
+##### 返回
+
+- `asyncio.Lock | threading.Lock`
+  Lock object matching the requested concurrency model.
 
 #### detect
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
 
 ```python
-def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
 ```
 
-根据音频和文本检测当前回合状态。
+Detect conversational turn state from audio and/or text context.
 
-##### Parameters
+##### 参数
 
 - `audio` (`bytes | None, optional`)
-  当前 16 kHz PCM 16-bit 单声道音频帧。
+  Current PCM 16-bit mono audio frame at 16 kHz.
 - `text` (`str | None, optional`)
-  当前回合的 ASR 文本。
+  ASR text for the current turn.
+- `assistant_text` (`str | None, optional`)
+  Cumulative AI response text confirmed as played to the user.
+  ``None`` means that this call carries no assistant response update.
 - `speech_start` (`bool, optional`)
-  VAD 是否刚刚检测到语音开始。该参数可以在没有 `audio` 或 `text` 的情况下单独提供。
+  Whether VAD has just detected the start of speech. This may be
+  provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
-  用户是否看起来暂停了说话。
+  Whether the user appears to have paused speaking. This is typically
+  provided together with ``text``.
+
+##### 返回
+
+- `TurnDetectionResult`
+  Turn-detection decision for the current input.
 
 #### async_detect
 
-_定义于 `xtalk.speech.interfaces`。_
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
 
 ```python
-async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
 ```
 
-异步检测当前回合状态。
+Asynchronously detect conversational turn state.
 
-##### Parameters
+##### 参数
 
 - `audio` (`bytes | None, optional`)
-  当前 16 kHz PCM 16-bit 单声道音频帧。
+  Current PCM 16-bit mono audio frame at 16 kHz.
 - `text` (`str | None, optional`)
-  当前回合的 ASR 文本。
+  ASR text for the current turn.
+- `assistant_text` (`str | None, optional`)
+  Cumulative AI response text confirmed as played to the user.
+  ``None`` means that this call carries no assistant response update.
 - `speech_start` (`bool, optional`)
-  VAD 是否刚刚检测到语音开始。该参数可以在没有 `audio` 或 `text` 的情况下单独提供。
+  Whether VAD has just detected the start of speech. This may be
+  provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
-  用户是否看起来暂停了说话。
+  Whether the user appears to have paused speaking.
+
+##### 返回
+
+- `TurnDetectionResult`
+  Turn-detection decision for the current input.
+
+#### clone
+
+_定义于 [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)。_
+
+```python
+def clone(self) -> 'TurnDetector'
+```
+
+Clone the turn detector for a new session.
+
+##### 返回
+
+- `TurnDetector`
+  Session-safe clone.

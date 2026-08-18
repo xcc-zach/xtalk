@@ -1,38 +1,50 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import logging
 from collections import deque
-from typing import Optional, NamedTuple, Any
+from typing import Any, NamedTuple, Optional
+from uuid import uuid4
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
+from ...models import (
+    TTS,
+    Models,
+    SpeechSpeedController,
+    StreamingTextTTS,
+)
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
+    ErrorOccurred,
+    LLMFirstSentence,
+    ToolCallOccurred,
+    TTSChunkPlayed,
+    TTSChunkReady,
+    TTSEmotionChange,
+    TTSFinished,
+    TTSModelSwitchRequested,
+    TTSPaused,
+    TTSResumed,
+    TTSSpeedChange,
     # Outbound events (unchanged for OutputGateway)
     TTSStarted,
     TTSStopped,
-    TTSPaused,
-    TTSResumed,
-    TTSFinished,
+    TTSResponseClosed,
+    TTSStreamingTextAccepted,
+    TTSTextDeliveryFinished,
+    TTSTextSynthesisStarted,
     TTSTextSynthesized,
-    TTSChunkReady,
-    TTSChunkPlayed,
-    ErrorOccurred,
     TTSVoiceChange,
-    TTSEmotionChange,
-    TTSSpeedChange,
-    ToolCallOccurred,
-    # Inbound mediator events
-    TurnTTSStartRequested,
+    TurnTTSFlushRequested,
+    TurnTTSDeliveryStartRequested,
     TurnTTSPauseRequested,
     TurnTTSResumeRequested,
+    # Inbound mediator events
+    TurnTTSStartRequested,
     TurnTTSStopRequested,
-    TurnTTSFlushRequested,
-    TTSModelSwitchRequested,
-    LLMFirstSentence,
+    TurnTTSTextAppendRequested,
 )
-from ..events import TurnTTSTextAppendRequested
 from ..interfaces import Manager
-from ...pipelines import Pipeline
+
+logger = logging.getLogger(__name__)
 
 
 class TTSQueueItem(NamedTuple):
@@ -40,6 +52,24 @@ class TTSQueueItem(NamedTuple):
 
     audio_chunk: bytes
     sample_rate: int
+    speed_processed: bool = False
+
+
+class _TTSSentenceStart(NamedTuple):
+    """FIFO marker emitted before one regular TTS sentence."""
+
+    text: str
+
+
+class _TTSSentenceEnd(NamedTuple):
+    """FIFO marker emitted after one regular TTS sentence."""
+
+    text: str
+    succeeded: bool = True
+
+
+class _TTSSynthesisError(RuntimeError):
+    """Signal that one TTS sentence could not produce usable audio."""
 
 
 class TTSManager(Manager):
@@ -58,7 +88,7 @@ class TTSManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         """
@@ -67,11 +97,11 @@ class TTSManager(Manager):
         Args:
             event_bus: shared event bus
             session_id: unique session identifier
-            pipeline: pipeline providing TTS models/controllers
+            models: model container providing TTS models/controllers
         """
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
+        self.models = models
         # Session-level config
         self.config: dict[str, Any] = config or {}
 
@@ -80,17 +110,25 @@ class TTSManager(Manager):
         self._first_sentence_ready = False
 
         # Queue for audio chunks fed to downstream consumers
-        self.tts_queue: asyncio.Queue[TTSQueueItem] = asyncio.Queue()
+        self.tts_queue: asyncio.Queue[
+            TTSQueueItem | _TTSSentenceStart | _TTSSentenceEnd
+        ] = asyncio.Queue()
 
         self._segments_queue: Optional[asyncio.Queue] = None
         self._segments_task: Optional[asyncio.Task] = None
+        self._streaming_tts: Optional[StreamingTextTTS] = None
+        self._streaming_audio_task: Optional[asyncio.Task] = None
+        self._streaming_text: str = ""
+        self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts: list[bytes] = []
+        self._streaming_sample_rate = 0
 
         # Consumer status
         self._consumer_running = False
         self.consumer_task: Optional[asyncio.Task] = None
 
         # Optional speed controller, falls back to passthrough when absent
-        self.speed_controller = self.pipeline.get_speed_controller()
+        self.speed_controller = self.models.get(SpeechSpeedController)
         self.current_speed: float = 1.0
 
         self._resume_event = asyncio.Event()
@@ -99,6 +137,12 @@ class TTSManager(Manager):
         self._outstanding_chunk_ms: deque[float] = deque()
         self._outstanding_total_ms = 0.0
         self._outstanding_condition = asyncio.Condition()
+        self._tts_generation_failure: str | None = None
+        self._response_id: str | None = None
+        self._delivery_started = False
+        self._pending_playback_events: list[
+            TTSStreamingTextAccepted | TTSTextSynthesized
+        ] = []
 
     def _ensure_segments_queue(self) -> asyncio.Queue:
         """Ensure a queue exists for sentence segments."""
@@ -106,38 +150,318 @@ class TTSManager(Manager):
             self._segments_queue = asyncio.Queue()
         return self._segments_queue
 
+    def _is_tts_active(self) -> bool:
+        """Return whether synthesis, queued delivery, or playback is active."""
+
+        if self._streaming_tts is not None:
+            return True
+        if self._streaming_audio_task and not self._streaming_audio_task.done():
+            return True
+        if self._segments_task and not self._segments_task.done():
+            return True
+        return bool(
+            self.consumer_task
+            and not self.consumer_task.done()
+            and (not self.tts_queue.empty() or self._outstanding_total_ms > 0.0)
+        )
+
+    async def _start_streaming_tts(self, tts_model: StreamingTextTTS) -> bool:
+        """Start a live text-streaming TTS session and its audio reader."""
+        try:
+            await tts_model.start()
+        except Exception as e:
+            logger.error(
+                "Failed to start streaming TTS - session: %s, error: %s",
+                self.session_id,
+                e,
+            )
+            await self._publish_error("streaming_tts_start_error", str(e))
+            return False
+
+        self._streaming_tts = tts_model
+        self._streaming_audio_task = asyncio.create_task(
+            self._streaming_audio_loop(tts_model)
+        )
+        return True
+
+    async def _append_streaming_text(self, text: str) -> None:
+        """Forward incremental text to the active streaming TTS model."""
+        if self._streaming_tts is None:
+            return
+        prepared_audio_ms = max(0.0, self._streaming_audio_duration_ms)
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_begin "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
+        try:
+            await self._streaming_tts.append_text(text)
+        except Exception as e:
+            logger.error(
+                "Failed to append streaming TTS text - session: %s, error: %s",
+                self.session_id,
+                e,
+            )
+            await self._publish_error("streaming_tts_append_error", str(e))
+            return
+
+        self._streaming_text += text
+        logger.debug(
+            "[realtime-tts-race] stage=append_upstream_complete "
+            "session=%s chunk_chars=%d buffered_chars=%d",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+        )
+        await self._publish_or_buffer_playback_event(
+            TTSStreamingTextAccepted(
+                session_id=self.session_id,
+                response_id=self._response_id or "",
+                text=text,
+                prepared_audio_ms=prepared_audio_ms,
+            )
+        )
+        if not self._first_sentence_ready:
+            self._first_sentence_ready = True
+            await self.event_bus.publish(LLMFirstSentence(session_id=self.session_id))
+
+    async def _flush_and_stop_streaming_tts(self) -> None:
+        """Flush residual streaming text and stop the upstream live session."""
+        if self._streaming_tts is None:
+            return
+        will_flush = bool(self._streaming_text.strip())
+        logger.debug(
+            "[realtime-tts-race] stage=flush_decision "
+            "session=%s buffered_chars=%d will_flush=%s",
+            self.session_id,
+            len(self._streaming_text),
+            will_flush,
+        )
+        try:
+            if will_flush:
+                await self._streaming_tts.flush()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_begin "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
+            await self._streaming_tts.stop()
+            logger.debug(
+                "[realtime-tts-race] stage=stop_upstream_complete "
+                "session=%s flushed=%s",
+                self.session_id,
+                will_flush,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to flush/stop streaming TTS - session: %s, error: %s",
+                self.session_id,
+                e,
+            )
+            await self._publish_error("streaming_tts_stop_error", str(e))
+
+    async def _stop_streaming_tts(self) -> None:
+        """Abort any active streaming TTS session and cancel its audio reader."""
+        streaming_tts = self._streaming_tts
+        streaming_task = self._streaming_audio_task
+        self._streaming_tts = None
+        self._streaming_audio_task = None
+        self._consumer_running = False
+
+        async with self._outstanding_condition:
+            self._outstanding_condition.notify_all()
+
+        if streaming_tts is not None:
+            try:
+                await streaming_tts.stop()
+            except Exception as e:
+                logger.warning(
+                    "Failed to stop streaming TTS during reset - session: %s, error: %s",
+                    self.session_id,
+                    e,
+                )
+
+        current_task = asyncio.current_task()
+        if (
+            streaming_task
+            and streaming_task is not current_task
+            and not streaming_task.done()
+        ):
+            streaming_task.cancel()
+            try:
+                await streaming_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _streaming_audio_loop(self, tts_model: StreamingTextTTS) -> None:
+        """Prepare live TTS audio independently from paced delivery."""
+
+        try:
+            sample_rate = int(
+                getattr(
+                    tts_model,
+                    "output_sample_rate",
+                    getattr(tts_model, "sample_rate", 48000),
+                )
+                or 48000
+            )
+            self._streaming_sample_rate = sample_rate
+            async for audio in tts_model.audio_stream():
+                if not audio:
+                    continue
+                processed_audio = audio
+                if self.speed_controller is not None and self.current_speed != 1.0:
+                    processed_audio = await self.speed_controller.async_process(
+                        audio,
+                        self.current_speed,
+                    )
+                if not processed_audio:
+                    continue
+
+                self._streaming_audio_parts.append(processed_audio)
+                self._streaming_audio_duration_ms += self._chunk_duration_ms(
+                    processed_audio,
+                    sample_rate,
+                )
+                await self.tts_queue.put(
+                    TTSQueueItem(
+                        processed_audio,
+                        sample_rate,
+                        speed_processed=True,
+                    )
+                )
+
+            synthesized_text = await self._publish_streaming_text_synthesized()
+            if synthesized_text:
+                await self.tts_queue.put(_TTSSentenceEnd(synthesized_text))
+            self._last_chunk_sent_for_tts = True
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(
+                "Streaming TTS audio loop crashed - session: %s, error: %s",
+                self.session_id,
+                e,
+            )
+            await self._publish_error("streaming_tts_generation_error", str(e))
+        finally:
+            if self._streaming_tts is tts_model:
+                self._streaming_tts = None
+            async with self._outstanding_condition:
+                self._outstanding_condition.notify_all()
+
+    async def _publish_streaming_text_synthesized(self) -> str:
+        """Publish complete processed PCM for one streaming TTS turn."""
+
+        text = self._streaming_text.strip()
+        audio = b"".join(self._streaming_audio_parts)
+        sample_rate = self._streaming_sample_rate
+        if not text or not audio or sample_rate <= 0:
+            return ""
+
+        await self._publish_or_buffer_playback_event(
+            TTSTextSynthesized(
+                session_id=self.session_id,
+                response_id=self._response_id or "",
+                text=text,
+                audio_duration=self._chunk_duration_ms(audio, sample_rate),
+                audio_chunk=audio,
+                sample_rate=sample_rate,
+            )
+        )
+        self._streaming_text = ""
+        self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts.clear()
+        self._streaming_sample_rate = 0
+        return text
+
     @Manager.event_handler(TurnTTSStartRequested, priority=100)
     async def _handle_turn_tts_start(self, event: TurnTTSStartRequested) -> None:
-        """Handle mediator request to start TTS generation."""
-        # Always use segment queue: start only initializes, text arrives via append
-        segments_queue = self._ensure_segments_queue()
-        # Start consumer if not already running
-        if not self._segments_task or self._segments_task.done():
-            # Reset state before starting
-            await self.reset_tts()
-            await self._publish_tts_started()
+        """Create a preparation pipeline without opening client delivery."""
 
-            # Start downstream consumer and upstream producer
-            await self._start_consumer()
-            self._segments_task = asyncio.create_task(self._segments_producer_loop())
+        if not event.response_id:
+            return
+        if event.response_id == self._response_id:
+            return
+        if self._response_id is not None:
+            return
+
+        await self.reset_tts()
+        self._response_id = event.response_id
+        self._delivery_started = False
+
+        tts_model = self.models.get(TTS)
+        if isinstance(tts_model, StreamingTextTTS):
+            if await self._start_streaming_tts(tts_model):
+                return
+
+        self._segments_task = asyncio.create_task(self._segments_producer_loop())
+
+    @Manager.event_handler(TurnTTSDeliveryStartRequested, priority=100)
+    async def _handle_delivery_start(
+        self,
+        event: TurnTTSDeliveryStartRequested,
+    ) -> None:
+        """Open delivery for the currently prepared response."""
+
+        if event.response_id != self._response_id or self._delivery_started:
+            return
+        self._delivery_started = True
+        await self._publish_tts_started()
+        pending_events = self._pending_playback_events
+        self._pending_playback_events = []
+        for pending_event in pending_events:
+            await self.event_bus.publish(
+                pending_event,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+            )
+        await self._start_consumer()
 
     @Manager.event_handler(TurnTTSTextAppendRequested, priority=98)
     async def _handle_turn_tts_append(self, event: TurnTTSTextAppendRequested) -> None:
         """Append text segments for TTS (both sim-gen and regular modes)."""
+        if event.response_id != self._response_id:
+            return
         text = event.text
         if not text:
+            return
+        logger.debug(
+            "[realtime-tts-race] stage=append_handler_enter "
+            "session=%s chunk_chars=%d buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(text),
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
+        if self._streaming_tts is not None:
+            await self._append_streaming_text(text)
             return
         await self._ensure_segments_queue().put(text)
 
     @Manager.event_handler(TurnTTSFlushRequested, priority=98)
     async def _handle_turn_tts_flush(self, event: TurnTTSFlushRequested) -> None:
+        if event.response_id != self._response_id:
+            return
+        logger.debug(
+            "[realtime-tts-race] stage=flush_handler_enter "
+            "session=%s buffered_chars=%d streaming_active=%s",
+            self.session_id,
+            len(self._streaming_text),
+            self._streaming_tts is not None,
+        )
+        if self._streaming_tts is not None:
+            await self._flush_and_stop_streaming_tts()
+            return
         # Use sentinel object to mark flush
         await self._ensure_segments_queue().put(self._FLUSH_SENTINEL)
 
     @Manager.event_handler(TurnTTSResumeRequested, priority=95)
     async def _handle_turn_tts_resume(self, event: TurnTTSResumeRequested) -> None:
         """Resume TTS playback when mediator requests."""
-        if not self._segments_task or self._segments_task.done():
+        if not self._is_tts_active():
             return
         if self._resume_event.is_set():
             logger.warning("Try to resume TTS which is not paused")
@@ -151,7 +475,7 @@ class TTSManager(Manager):
     @Manager.event_handler(TurnTTSPauseRequested, priority=95)
     async def _handle_turn_tts_pause(self, event: TurnTTSPauseRequested) -> None:
         """Pause TTS playback when mediator requests."""
-        if not self._segments_task or self._segments_task.done():
+        if not self._is_tts_active():
             return
         await self._publish_tts_pause()
         await self._pause_tts()
@@ -159,14 +483,31 @@ class TTSManager(Manager):
     @Manager.event_handler(TurnTTSStopRequested, priority=95)
     async def _handle_turn_tts_stop(self, event: TurnTTSStopRequested) -> None:
         """Stop TTS playback when mediator requests."""
+        if self._response_id is None:
+            return
+        if event.response_id not in (None, self._response_id):
+            return
+        response_id = self._response_id
+        was_delivering = self._delivery_started
         await self.reset_tts()
-        # Do not publish TTSStopped for playback_finished
-        if event.reason == "playback_finished":
+        if not was_delivering:
             return
         tts_stopped_event = TTSStopped(
             session_id=self.session_id,
+            response_id=response_id,
         )
-        await self.event_bus.publish(tts_stopped_event)
+        await self.event_bus.publish(
+            tts_stopped_event,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
+
+    @Manager.event_handler(TTSResponseClosed, priority=100)
+    async def _handle_response_closed(self, event: TTSResponseClosed) -> None:
+        """Release a normally completed response's remaining TTS resources."""
+
+        if event.response_id != self._response_id:
+            return
+        await self.reset_tts()
 
     async def reset_tts(self) -> None:
         """Reset all TTS state and cancel consumers."""
@@ -176,8 +517,15 @@ class TTSManager(Manager):
         self.pending_sentence_buffer = ""
         self._first_sentence_ready = False
         self._last_chunk_sent_for_tts = False
+        self._streaming_text = ""
+        self._streaming_audio_duration_ms = 0.0
+        self._streaming_audio_parts.clear()
+        self._streaming_sample_rate = 0
+        self._tts_generation_failure = None
+        self._pending_playback_events.clear()
 
         # Stop consumer
+        await self._stop_streaming_tts()
         await self._stop_consumer()
         await self._reset_outstanding_audio()
 
@@ -206,6 +554,9 @@ class TTSManager(Manager):
                     self._segments_queue.task_done()
                 except asyncio.QueueEmpty:
                     break
+        self._segments_queue = None
+        self._response_id = None
+        self._delivery_started = False
 
     async def _segments_producer_loop(self) -> None:
         segments_queue = self._ensure_segments_queue()
@@ -227,6 +578,20 @@ class TTSManager(Manager):
 
         self._consumer_running = True
         self.consumer_task = asyncio.create_task(self._tts_consumer())
+
+    async def _publish_or_buffer_playback_event(
+        self,
+        event: TTSStreamingTextAccepted | TTSTextSynthesized,
+    ) -> None:
+        """Publish playback metadata only after this response may be delivered."""
+
+        if self._delivery_started:
+            await self.event_bus.publish(
+                event,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+            )
+            return
+        self._pending_playback_events.append(event)
 
     async def _stop_consumer(self) -> None:
         """Stop the TTS audio consumer."""
@@ -301,6 +666,7 @@ class TTSManager(Manager):
     async def _tts_consumer(self) -> None:
         """Consume queued TTS output and publish audio events."""
 
+        active_sentence_text = ""
         try:
             while self._consumer_running:
                 # When paused, avoid consuming queue items or emitting events
@@ -313,12 +679,34 @@ class TTSManager(Manager):
                     # Pull from the queue with a short timeout
                     item = await asyncio.wait_for(self.tts_queue.get(), timeout=0.1)
 
-                    # Publish audio chunks (skip if paused)
-                    if isinstance(item, TTSQueueItem) and item.audio_chunk:
+                    if isinstance(item, _TTSSentenceStart):
+                        active_sentence_text = item.text
+                        await self.event_bus.publish(
+                            TTSTextSynthesisStarted(
+                                session_id=self.session_id,
+                                response_id=self._response_id or "",
+                                text=item.text,
+                            ),
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                        )
+                    elif isinstance(item, _TTSSentenceEnd):
+                        sentence_text = active_sentence_text or item.text
+                        await self.event_bus.publish(
+                            TTSTextDeliveryFinished(
+                                session_id=self.session_id,
+                                response_id=self._response_id or "",
+                                text=sentence_text,
+                                succeeded=item.succeeded,
+                            ),
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+                        )
+                        active_sentence_text = ""
+                    elif isinstance(item, TTSQueueItem) and item.audio_chunk:
                         # Apply speed control when enabled
                         processed_audio = item.audio_chunk
                         if (
-                            self.speed_controller is not None
+                            not item.speed_processed
+                            and self.speed_controller is not None
                             and self.current_speed != 1.0
                         ):
                             processed_audio = await self.speed_controller.async_process(
@@ -334,15 +722,18 @@ class TTSManager(Manager):
 
                             event = TTSChunkReady(
                                 session_id=self.session_id,
+                                response_id=self._response_id or "",
                                 audio_chunk=chunk,
                                 sample_rate=item.sample_rate,
                             )
                             await self.event_bus.publish(
-                                event, wait_for_completion=True
+                                event, mode=EventDispatchMode.WAIT_UNTIL_COMPLETE
                             )
-                            await self._track_outstanding_chunk(
-                                self._chunk_duration_ms(chunk, item.sample_rate)
+                            chunk_ms = self._chunk_duration_ms(
+                                chunk,
+                                item.sample_rate,
                             )
+                            await self._track_outstanding_chunk(chunk_ms)
                     # Mark task as done after processing
                     self.tts_queue.task_done()
 
@@ -350,7 +741,11 @@ class TTSManager(Manager):
                     if self._last_chunk_sent_for_tts and self.tts_queue.empty():
                         self._last_chunk_sent_for_tts = False
                         await self.event_bus.publish(
-                            TTSFinished(session_id=self.session_id),
+                            TTSFinished(
+                                session_id=self.session_id,
+                                response_id=self._response_id or "",
+                            ),
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
 
                 except asyncio.TimeoutError:
@@ -360,7 +755,11 @@ class TTSManager(Manager):
                     if self._last_chunk_sent_for_tts and self.tts_queue.empty():
                         self._last_chunk_sent_for_tts = False
                         await self.event_bus.publish(
-                            TTSFinished(session_id=self.session_id),
+                            TTSFinished(
+                                session_id=self.session_id,
+                                response_id=self._response_id or "",
+                            ),
+                            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
                         )
                     continue
                 except Exception as e:
@@ -386,6 +785,8 @@ class TTSManager(Manager):
     @Manager.event_handler(TTSChunkPlayed, priority=100)
     async def _handle_tts_chunk_played(self, event: TTSChunkPlayed) -> None:
         """Release outstanding outbound budget after frontend playback confirmation."""
+        if event.response_id and event.response_id != self._response_id:
+            return
         async with self._outstanding_condition:
             if self._outstanding_chunk_ms:
                 self._outstanding_total_ms = max(
@@ -398,9 +799,13 @@ class TTSManager(Manager):
         """Publish TTSStarted event."""
         event = TTSStarted(
             session_id=self.session_id,
+            response_id=self._response_id or "",
         )
         # Wait for completion to maintain ordering
-        await self.event_bus.publish(event, wait_for_completion=True)
+        await self.event_bus.publish(
+            event,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
 
     async def _publish_tts_pause(self) -> None:
         """Publish TTSPaused event."""
@@ -424,78 +829,132 @@ class TTSManager(Manager):
         await self.reset_tts()
 
     async def _add_text_for_tts(self, text: str, *, final: bool) -> None:
-        """Generate TTS audio from text and enqueue sentence segments."""
-        self.pending_sentence_buffer += text
+        """Generate and enqueue FIFO-ordered TTS sentence audio."""
 
+        self.pending_sentence_buffer += text
         sentences, remaining = self._split_text_by_delimiters(
             self.pending_sentence_buffer
         )
-
-        # TODO: split sentence in sentences
         self.pending_sentence_buffer = remaining
 
         if final and self.pending_sentence_buffer.strip():
-            # TODO: split remaining
             sentences.append(self.pending_sentence_buffer.strip())
             self.pending_sentence_buffer = ""
 
-        if len(sentences) > 0 and not self._first_sentence_ready:
+        if sentences and not self._first_sentence_ready:
             self._first_sentence_ready = True
             await self.event_bus.publish(LLMFirstSentence(session_id=self.session_id))
+
         for sentence in sentences:
             await self._enqueue_sentence_stream(sentence)
 
-        # Set the flag AFTER all sentences have been enqueued to avoid a race
-        # where the consumer sees the flag before the last chunks are queued.
         if final:
             self._last_chunk_sent_for_tts = True
 
     async def _enqueue_sentence_stream(self, sentence: str) -> None:
-        """Run streaming TTS for one sentence and enqueue resulting chunks."""
-        tts_model = self.pipeline.get_tts_model()
+        """Prepare final sentence PCM while enqueueing it for paced delivery."""
+
+        tts_model = self.models.get(TTS)
         if not tts_model:
             await self._publish_error(
                 "tts_model_missing", "TTS model is not configured"
             )
             return
+        if self._tts_generation_failure is not None:
+            return
 
+        sentence_started = False
+        sentence_ended = False
         try:
             sample_rate = int(getattr(tts_model, "sample_rate", 48000) or 48000)
-            synthesized_duration_ms = 0.0
-            speed = 1.0
-            if self.speed_controller is not None and self.current_speed != 1.0:
-                speed = max(0.01, float(self.current_speed or 1.0))
-            async for ch in self._synthesize_stream_with_fallback(tts_model, sentence):
-                synthesized_duration_ms += self._chunk_duration_ms(ch, sample_rate)
-                await self.tts_queue.put(TTSQueueItem(ch, sample_rate))
-            await self.event_bus.publish(
+            sentence_speed = self.current_speed
+            await self.tts_queue.put(_TTSSentenceStart(sentence))
+            sentence_started = True
+            audio_parts: list[bytes] = []
+            async for chunk in self._synthesize_stream_with_fallback(
+                tts_model,
+                sentence,
+            ):
+                processed_chunk = chunk
+                if self.speed_controller is not None and sentence_speed != 1.0:
+                    processed_chunk = await self.speed_controller.async_process(
+                        chunk,
+                        sentence_speed,
+                    )
+                if not processed_chunk:
+                    continue
+
+                audio_parts.append(processed_chunk)
+                await self.tts_queue.put(
+                    TTSQueueItem(
+                        processed_chunk,
+                        sample_rate,
+                        speed_processed=True,
+                    )
+                )
+
+            if not audio_parts:
+                raise _TTSSynthesisError("TTS returned no audio data.")
+
+            prepared_audio = b"".join(audio_parts)
+            await self._publish_or_buffer_playback_event(
                 TTSTextSynthesized(
                     session_id=self.session_id,
+                    response_id=self._response_id or "",
                     text=sentence,
-                    audio_duration=synthesized_duration_ms / speed,
-                ),
-                wait_for_completion=True,
+                    audio_duration=self._chunk_duration_ms(
+                        prepared_audio,
+                        sample_rate,
+                    ),
+                    audio_chunk=prepared_audio,
+                    sample_rate=sample_rate,
+                )
             )
+            await self.tts_queue.put(_TTSSentenceEnd(sentence))
+            sentence_ended = True
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(
-                "TTS synthesis error: %s - session: %s",
-                e,
-                self.session_id,
-            )
-            await self._publish_error("tts_generation_error", str(e))
+            if sentence_started and not sentence_ended:
+                await self.tts_queue.put(
+                    _TTSSentenceEnd(sentence, succeeded=False)
+                )
+            first_failure = self._tts_generation_failure is None
+            if first_failure:
+                self._tts_generation_failure = str(e)
+                logger.error(
+                    "TTS synthesis failed; blocking remaining sentences in this turn - "
+                    "session: %s, error: %s",
+                    self.session_id,
+                    e,
+                )
+                await self._publish_error("tts_generation_error", str(e))
 
     async def _synthesize_stream_with_fallback(self, tts_model: Any, text: str):
         """Call streaming TTS API, falling back to sync methods on failure."""
+
+        yielded_audio = False
         try:
             async for chunk in tts_model.async_synthesize_stream(text):
+                if not chunk:
+                    continue
+                yielded_audio = True
                 yield chunk
             return
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            uses_default_async_wrapper = (
+                type(tts_model).async_synthesize_stream
+                is TTS.async_synthesize_stream
+            )
+            if (
+                yielded_audio
+                or uses_default_async_wrapper
+                or self._is_non_retryable_tts_error(e)
+            ):
+                raise _TTSSynthesisError(str(e)) from e
             logger.warning(
                 "Streaming TTS failed, trying fallback - session: %s, error: %s",
                 self.session_id,
@@ -508,6 +967,8 @@ class TTSManager(Manager):
             try:
                 return list(tts_model.synthesize_stream(text))
             except Exception as err:
+                if self._is_non_retryable_tts_error(err):
+                    raise _TTSSynthesisError(str(err)) from err
                 logger.error(
                     "Synchronous streaming TTS failed - session: %s, error: %s",
                     self.session_id,
@@ -516,16 +977,31 @@ class TTSManager(Manager):
                 try:
                     return [tts_model.synthesize(text)]
                 except Exception as final_err:
-                    logger.error(
-                        "Synchronous TTS fallback failed - session: %s, error: %s",
-                        self.session_id,
-                        final_err,
-                    )
-                    return []
+                    raise _TTSSynthesisError(str(final_err)) from final_err
 
         chunks = await loop.run_in_executor(None, _sync_stream)
         for chunk in chunks:
-            yield chunk
+            if chunk:
+                yield chunk
+
+    @staticmethod
+    def _is_non_retryable_tts_error(error: Exception) -> bool:
+        """Return whether retrying the same TTS request would immediately fail."""
+
+        message = str(error).lower()
+        markers = (
+            "allocationquota",
+            "free tier",
+            "throttling",
+            "rate limit",
+            "ratequota",
+            "invalidapikey",
+            "invalid api key",
+            "authentication",
+            "unauthorized",
+            "insufficient balance",
+        )
+        return any(marker in message for marker in markers)
 
     def _split_text_by_delimiters(self, accumulated_text: str) -> tuple[list[str], str]:
         """Split text by sentence delimiters, returning sentences + residual text."""
@@ -549,6 +1025,10 @@ class TTSManager(Manager):
         """Handle tool call events for TTS control (speed, voice, emotion)."""
         name = event.name
         args = event.args
+
+        if name == "direct_audio":
+            await self._handle_direct_audio(args)
+            return
 
         # Add parameter validation
         if name == "set_speed":
@@ -607,13 +1087,73 @@ class TTSManager(Manager):
                 )
             )
 
+    async def _handle_direct_audio(self, args: dict[str, Any]) -> None:
+        """Route a direct-audio tool result through the response lifecycle.
+
+        Parameters
+        ----------
+        args : dict[str, Any]
+            Tool arguments containing PCM ``audio`` and ``sample_rate``.
+        """
+
+        audio = args.get("audio", b"")
+        if isinstance(audio, bytearray):
+            audio = bytes(audio)
+        elif isinstance(audio, memoryview):
+            audio = audio.tobytes()
+        if not isinstance(audio, bytes) or not audio:
+            logger.warning(
+                "direct_audio missing valid audio bytes - session: %s",
+                self.session_id,
+            )
+            return
+        try:
+            sample_rate = int(args.get("sample_rate", 48000) or 48000)
+        except (TypeError, ValueError):
+            logger.warning(
+                "direct_audio received invalid sample_rate %r - session: %s",
+                args.get("sample_rate"),
+                self.session_id,
+            )
+            return
+        if sample_rate <= 0:
+            logger.warning(
+                "direct_audio received non-positive sample_rate %r - session: %s",
+                sample_rate,
+                self.session_id,
+            )
+            return
+
+        response_id = uuid4().hex
+        await self.event_bus.publish(
+            TurnTTSStartRequested(
+                session_id=self.session_id,
+                response_id=response_id,
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
+        if response_id != self._response_id:
+            return
+        await self.tts_queue.put(
+            TTSQueueItem(
+                audio_chunk=audio,
+                sample_rate=sample_rate,
+                speed_processed=False,
+            )
+        )
+        self._last_chunk_sent_for_tts = True
+
     @Manager.event_handler(TTSVoiceChange, priority=100)
     async def _handle_voice_change(self, event: TTSVoiceChange) -> None:
         """Handle requests to change the reference voice."""
         voice_name = event.voice_name
 
         try:
-            self.pipeline.get_tts_model().set_voice(voice_names=[voice_name])
+            tts_model = self.models.get(TTS)
+            if tts_model is None:
+                logger.warning("TTS model is not configured - session: %s", self.session_id)
+                return
+            tts_model.set_voice(voice_names=[voice_name])
         except Exception as e:
             logger.error(
                 "Failed to change voice: %s - session: %s",
@@ -636,7 +1176,11 @@ class TTSManager(Manager):
             return
 
         try:
-            self.pipeline.get_tts_model().set_emotion(
+            tts_model = self.models.get(TTS)
+            if tts_model is None:
+                logger.warning("TTS model is not configured - session: %s", self.session_id)
+                return
+            tts_model.set_emotion(
                 emotion=emotion_name if emotion_name else emotion_vector
             )
         except Exception as e:
@@ -656,21 +1200,60 @@ class TTSManager(Manager):
 
     @Manager.event_handler(TTSModelSwitchRequested, priority=100)
     async def _handle_tts_model_switch(self, event: TTSModelSwitchRequested) -> None:
-        """Handle TTS model switch requests (IndexTTS / IndexTTS2)."""
+        """Handle TTS model switch requests for IndexTTS 1.5 or 2."""
         model_type = event.model_type
         config = event.config
 
         try:
-            if hasattr(self.pipeline, "set_tts_model"):
-                self.pipeline.set_tts_model(model_type, config)
-            else:
-                logger.warning(
-                    "Pipeline does not support set_tts_model - session: %s",
-                    self.session_id,
-                )
+            self._set_tts_model(model_type, config)
         except Exception as e:
             logger.error(
                 "Failed to switch TTS model: %s - session: %s",
                 e,
                 self.session_id,
             )
+
+    def _set_tts_model(self, model_type: str, config: dict[str, Any]) -> None:
+        """Replace the active TTS model for the current session."""
+        from ...models.tts.index_tts import IndexTTS
+
+        current_tts = self.models.get(TTS)
+        current_ref_paths = []
+        if current_tts and hasattr(current_tts, "audio_paths"):
+            current_ref_paths = current_tts.audio_paths or []
+        elif current_tts and hasattr(current_tts, "_base_audio_paths"):
+            current_ref_paths = current_tts._base_audio_paths or []
+
+        ref_audio_paths = config.get("ref_audio_paths") or current_ref_paths
+        sample_rate = config.get("sample_rate", 48000)
+        timeout = config.get("timeout", 30.0)
+        voices = config.get("voices") or [
+            {"name": str(index), "path": path}
+            for index, path in enumerate(ref_audio_paths)
+        ]
+
+        if model_type != "IndexTTS":
+            raise ValueError(f"Unsupported TTS model type: {model_type}")
+        model_version = str(config.get("model", config.get("model_version", "1.5")))
+
+        base_url = config.get("base_url")
+        if base_url is None and ("host" in config or "port" in config):
+            host = config.get("host", "localhost")
+            port = config.get("port", 6006)
+            base_url = f"http://{host}:{port}"
+
+        self.models.set(
+            TTS,
+            IndexTTS(
+                voices=voices,
+                base_url=base_url,
+                sample_rate=sample_rate,
+                timeout=timeout,
+                model=model_version,
+                emo_weight=config.get("emo_weight", 1.0),
+                emo_random=config.get("emo_random", False),
+                max_text_tokens_per_sentence=config.get(
+                    "max_text_tokens_per_sentence", 120
+                ),
+            ),
+        )

@@ -3,15 +3,92 @@
 Event Bus with enhanced error handling and recursion protection.
 """
 import asyncio
+import logging
+import time
+import weakref
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Callable, Any, Optional, Set, Type, Union
-import weakref
-import time
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
-from ..log_utils import logger
+from .events import ErrorOccurred, Event
 
-from .events import BaseEvent, ErrorOccurred
+logger = logging.getLogger(__name__)
+
+
+class EventDispatchMode(str, Enum):
+    """Control when :meth:`EventBus.publish` returns to its caller.
+
+    ``RETURN_AFTER_DISPATCH`` preserves the default background-dispatch
+    behavior. The two waiting modes execute handlers in descending priority
+    order; only ``WAIT_UNTIL_COMPLETE_OR_STOPPED`` observes an explicit
+    :class:`EventPropagation.STOP` result.
+    """
+
+    RETURN_AFTER_DISPATCH = "return_after_dispatch"
+    WAIT_UNTIL_COMPLETE = "wait_until_complete"
+    WAIT_UNTIL_COMPLETE_OR_STOPPED = "wait_until_complete_or_stopped"
+
+    @classmethod
+    def parse(
+        cls,
+        value: Union["EventDispatchMode", str],
+    ) -> "EventDispatchMode":
+        """Normalize an enum member or supported long/short string.
+
+        Parameters
+        ----------
+        value : EventDispatchMode | str
+            Dispatch mode enum, canonical value, or short alias. Supported
+            aliases are ``dispatch``, ``wait``, and ``wait_stoppable``.
+
+        Returns
+        -------
+        EventDispatchMode
+            Canonical dispatch mode.
+
+        Raises
+        ------
+        ValueError
+            Raised when *value* is not a supported dispatch mode.
+        """
+
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(
+                "event dispatch mode must be an EventDispatchMode or string"
+            )
+
+        normalized = value.strip().lower().replace("-", "_")
+        aliases = {
+            "dispatch": cls.RETURN_AFTER_DISPATCH,
+            "wait": cls.WAIT_UNTIL_COMPLETE,
+            "wait_stoppable": cls.WAIT_UNTIL_COMPLETE_OR_STOPPED,
+        }
+        alias = aliases.get(normalized)
+        if alias is not None:
+            return alias
+        try:
+            return cls(normalized)
+        except ValueError as exc:
+            supported = ", ".join(
+                (
+                    "return_after_dispatch (dispatch)",
+                    "wait_until_complete (wait)",
+                    "wait_until_complete_or_stopped (wait_stoppable)",
+                )
+            )
+            raise ValueError(
+                f"unsupported event dispatch mode {value!r}; expected {supported}"
+            ) from exc
+
+
+class EventPropagation(str, Enum):
+    """Describe whether a waiting event dispatch should continue."""
+
+    CONTINUE = "continue"
+    STOP = "stop"
 
 
 @dataclass
@@ -59,7 +136,7 @@ class EventBus:
         # Event history tracking
         self._enable_history = enable_history
         self._max_history = max_history
-        self._event_history: List[BaseEvent] = []
+        self._event_history: List[Event] = []
 
         # Metrics
         self._stats = {
@@ -68,6 +145,7 @@ class EventBus:
             "errors_occurred": 0,
             "handlers_count": 0,
             "error_events_dropped": 0,  # Error events dropped due to recursion protection
+            "events_stopped": 0,
         }
 
         # Active async tasks
@@ -84,7 +162,7 @@ class EventBus:
         self._error_event_times: List[float] = []
         self._last_error_event_time = 0.0
 
-    def _get_event_key(self, event_identifier: Union[Type[BaseEvent], str]) -> str:
+    def _get_event_key(self, event_identifier: Union[Type[Event], str]) -> str:
         """Normalize event identifier (class or string) into type string."""
         # Already a string
         if isinstance(event_identifier, str):
@@ -104,17 +182,17 @@ class EventBus:
 
     def subscribe(
         self,
-        event_class: Union[Type[BaseEvent], str],
-        handler: Callable[[BaseEvent], Any],
+        event_class: Union[Type[Event], str],
+        handler: Callable[[Event], Any],
         priority: int = 0,
     ) -> None:
         """Subscribe a handler to an event type.
 
         Parameters
         ----------
-        event_class : Type[BaseEvent] | str
+        event_class : Type[Event] | str
             Event class or event type string such as ``"tts.started"``.
-        handler : Callable[[BaseEvent], Any]
+        handler : Callable[[Event], Any]
             Sync or async callable invoked for matching events.
         priority : int, optional
             Higher values run earlier.
@@ -130,13 +208,13 @@ class EventBus:
         self._stats["handlers_count"] += 1
 
     def unsubscribe(
-        self, event_class: Union[Type[BaseEvent], str], handler: Callable
+        self, event_class: Union[Type[Event], str], handler: Callable
     ) -> bool:
         """Unsubscribe a handler from an event type.
 
         Parameters
         ----------
-        event_class : Type[BaseEvent] | str
+        event_class : Type[Event] | str
             Event class or event type string.
         handler : Callable
             Previously subscribed handler to remove.
@@ -157,40 +235,65 @@ class EventBus:
         return False
 
     async def publish(
-        self, event: BaseEvent, wait_for_completion: bool = False
+        self,
+        event: Event,
+        mode: Union[
+            EventDispatchMode,
+            str,
+        ] = EventDispatchMode.RETURN_AFTER_DISPATCH,
     ) -> bool:
         """Publish an event to all matching handlers.
 
         Parameters
         ----------
-        event : BaseEvent
+        event : Event
             Event instance to dispatch.
-        wait_for_completion : bool, optional
-            Whether to await handler completion before returning.
+        mode : EventDispatchMode | str, optional
+            Return and propagation behavior. Long canonical strings and the
+            short aliases ``dispatch``, ``wait``, and ``wait_stoppable`` are
+            accepted.
 
         Returns
         -------
         bool
             ``True`` on success, otherwise ``False``.
         """
+        dispatch_mode = EventDispatchMode.parse(mode)
         try:
             self._stats["events_published"] += 1
 
-            # Append to history if enabled
-            if self._enable_history:
+            stoppable = (
+                dispatch_mode
+                is EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED
+            )
+            # Stopped events are intentionally omitted from history. Existing
+            # modes retain the historical record-at-publish behavior.
+            if self._enable_history and not stoppable:
                 self._add_to_history(event)
 
             # Retrieve handlers for this event type
             event_type = event.event_type
             handlers = self._handlers.get(event_type, [])
             if not handlers:
+                if self._enable_history and stoppable:
+                    self._add_to_history(event)
                 return True
 
-            if wait_for_completion:
+            if dispatch_mode is EventDispatchMode.WAIT_UNTIL_COMPLETE:
                 # Preserve priority order for event chains that require deterministic
                 # completion before returning.
                 for handler in handlers:
                     await self._handle_event_safe(handler, event)
+                return True
+
+            if stoppable:
+                for handler in handlers:
+                    propagation = await self._handle_event_safe(handler, event)
+                    if propagation is EventPropagation.STOP:
+                        self._stats["events_stopped"] += 1
+                        return True
+                if self._enable_history:
+                    self._add_to_history(event)
                 return True
 
             # spawn handler tasks
@@ -217,7 +320,11 @@ class EventBus:
 
             return False
 
-    async def _handle_event_safe(self, handler: EventHandler, event: BaseEvent) -> None:
+    async def _handle_event_safe(
+        self,
+        handler: EventHandler,
+        event: Event,
+    ) -> EventPropagation:
         """
         Safely handle an event, capturing exceptions.
 
@@ -230,9 +337,13 @@ class EventBus:
 
             # Invoke handler
             if asyncio.iscoroutinefunction(handler.handler):
-                await handler.handler(event)
+                result = await handler.handler(event)
             else:
-                handler.handler(event)
+                result = handler.handler(event)
+
+            if result is EventPropagation.STOP:
+                return EventPropagation.STOP
+            return EventPropagation.CONTINUE
 
         except Exception as e:
             handler.error_count += 1
@@ -250,6 +361,7 @@ class EventBus:
                     error_type="event_handler_error",
                     error_message=str(e),
                 )
+            return EventPropagation.CONTINUE
 
     async def _publish_error_event_safe(
         self,
@@ -318,7 +430,7 @@ class EventBus:
                 # Publish error event (fire-and-forget to avoid blocking)
                 # Use try-except to ensure depth counter is restored even if publish fails
                 try:
-                    await self.publish(error_event, wait_for_completion=False)
+                    await self.publish(error_event)
                     self._last_error_event_time = current_time
                     self._error_event_times.append(current_time)
                 except Exception as e:
@@ -330,7 +442,7 @@ class EventBus:
                 # Ensure depth counter is always restored
                 self._error_event_depth -= 1
 
-    def _add_to_history(self, event: BaseEvent) -> None:
+    def _add_to_history(self, event: Event) -> None:
         """
         Append event to history storage.
 
@@ -345,7 +457,7 @@ class EventBus:
 
     def get_history(
         self, event_type: Optional[str] = None, session_id: Optional[str] = None
-    ) -> List[BaseEvent]:
+    ) -> List[Event]:
         """
         Retrieve event history with optional filters.
 

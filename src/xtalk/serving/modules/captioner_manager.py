@@ -29,19 +29,20 @@ Events:
 """
 
 import asyncio
+import logging
 import time
 from collections import deque
-from typing import Deque, Optional, Tuple, Any
+from typing import Any, Deque, Optional, Tuple
 
-from ...log_utils import logger
-from ..event_bus import EventBus
+from ...models import Captioner, Models, Rewriter
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     CaptionUpdated,
 )
 from ..interfaces import Manager
-from ...pipelines import Pipeline
-from ...rewriter.interfaces import Rewriter
+
+logger = logging.getLogger(__name__)
 
 
 class CaptionerManager(Manager):
@@ -57,21 +58,17 @@ class CaptionerManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         # Per-session config
         self.config: dict[str, Any] = config or {}
 
         # Check captioner/rewriter availability
-        self.captioner = pipeline.get_captioner_model()
-        # Reuse caption rewriter from pipeline if available
-        self.caption_rewriter: Optional[Rewriter] = (
-            pipeline.get_caption_rewriter_model()
-        )
+        self.captioner = models.get(Captioner)
+        self.caption_rewriter: Optional[Rewriter] = models.get(Rewriter)
 
         # Audio cache: deque of (timestamp, bytes). During speech_active, we let it grow beyond the 15s cap;
         # after speech ends we prune down to the configured limit.
@@ -138,7 +135,7 @@ class CaptionerManager(Manager):
             logger.warning("Captioner error (refresh): %s", e)
             return
         if text:
-            # Apply rewriter (if configured) here rather than inside pipeline
+            # Apply rewriter if configured.
             rewritten = await self._rewrite_caption(text)
             await self.event_bus.publish(
                 CaptionUpdated(
@@ -147,7 +144,7 @@ class CaptionerManager(Manager):
                     is_final=False,
                     reason="refresh",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
     async def _rewrite_caption(self, caption: Optional[str]) -> Optional[str]:

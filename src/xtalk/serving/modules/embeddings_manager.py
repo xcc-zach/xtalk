@@ -1,16 +1,18 @@
 import asyncio
+import logging
 import os
 import shutil
 from typing import Any
 
-from ...log_utils import logger
-from ..event_bus import EventBus
-from ..interfaces import Manager
-from ...pipelines import Pipeline
+from ...models import Embeddings, Models
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     EmbeddingStatusUpdated,
     TextForEmbeddingReady,
 )
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingsManager(Manager):
@@ -18,12 +20,12 @@ class EmbeddingsManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: dict[str, Any] | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
+        self.models = models
         # Session-level config shared with managers
         self.config: dict[str, Any] = config or {}
 
@@ -39,7 +41,7 @@ class EmbeddingsManager(Manager):
                 status="processing",
                 text=text,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         db = await self._run_embedding_job(text)
@@ -50,7 +52,7 @@ class EmbeddingsManager(Manager):
                 text=text,
                 vector_store_instance=db,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     def _resolve_data_dir(self) -> str | None:
@@ -77,10 +79,10 @@ class EmbeddingsManager(Manager):
     async def _run_embedding_job(self, text: str) -> Any | None:
         """Write text to session-level Chroma vector store."""
         # Fetch embeddings model
-        embeddings_model = self.pipeline.get_embeddings_model()
+        embeddings_model = self.models.get(Embeddings)
         if embeddings_model is None:
             logger.warning(
-                "Embeddings model is not configured on pipeline, skip embedding."
+                "Embeddings model is not configured on models, skip embedding."
             )
             return None
 

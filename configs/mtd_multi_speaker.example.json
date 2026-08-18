@@ -1,0 +1,28 @@
+{
+  "speaker_diarization": {
+    "type": "MossTranscribeDiarize",
+    "params": {
+      "base_url": "http://127.0.0.1:18604",
+      "request_timeout_s": 15.0,
+      "temperature": 0.0,
+      "max_tokens": 2048
+    }
+  },
+  "service_config": {
+    "multi_speaker": {
+      "response_policy": "focus_only",
+      "focus_speaker_ids": ["S01"],
+      "exclude_non_focus_from_history": true,
+      "suppress_when_speaker_missing": false,
+      "join_timeout_s": 5.0,
+      "fallback_on_timeout": true,
+      "diarization": {
+        "pre_buffer_s": 1.0,
+        "partial": {
+          "interval_s": 1.0,
+          "first_partial_min_s": 0.8
+        }
+      }
+    }
+  }
+}

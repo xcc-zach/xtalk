@@ -1,94 +1,117 @@
 # 配置服务
 
-## 自定义模型
+## 配置文件
 
-如前文在 [启动服务](start_the_service.zh.md) 中所述，X-Talk 实例可以通过 JSON 配置创建，该配置用于自定义所使用的模型。
+如[启动服务](start_the_service.zh.md) 中所述，`Xtalk.from_config(path/to/config.json)`读取配置文件来实例化X-Talk。最简配置文件内容如下：
 
-查看支持的模型：
-```python
-from xtalk import Xtalk
-print(Xtalk.MODEL_REGISTRY)
-# 类似这样
-# {
-#     "asr": ["xtalk.speech.asr"],
-#     "llm_agent": ["xtalk.llm_agent"],
-#     "tts": ["xtalk.speech.tts"],
-#     "embeddings": ["xtalk.embeddings"],
-#  "speaker_encoder": ["xtalk.speech.speaker_encoder"],
-#     "captioner": ["xtalk.speech.captioner"],
-#     "caption_rewriter": ["xtalk.rewriter"],
-#     "thought_rewriter": ["xtalk.rewriter"],
-#     "vad": ["xtalk.speech.vad"],
-#     "speech_enhancer": ["xtalk.speech.speech_enhancer"],
-#     "speech_speed_controller": ["xtalk.speech.speech_speed_controller"],
-#     "turn_detector": ["xtalk.speech.turn_detector"],
-# }
+```json
+{
+    "asr": {
+        "type": "Qwen3ASRFlashRealtime",
+        "params": {
+            "api_key": "<API_KEY>"
+        }
+    },
+    "llm_agent": {
+        "type": "DefaultAgent",
+        "params": {
+            "model": {
+                "api_key": "<API_KEY>",
+                "model": "qwen-plus-2025-12-01",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            }
+        }
+    },
+    "tts": {
+        "type": "CosyVoice",
+        "params": {
+            "api_key": "<API_KEY>"
+        }
+    }
+}
 ```
 
-对于模型配置，配置内容应与模型 Python 类名及其初始化参数一致。
+键值如`asr`代表模型类型，`type`代表该模型类型选择的模型，`params`为模型初始化参数。
 
-例如，`DefaultAgent` 的定义位于 `src/xtalk/llm_agent/default.py`：
+例如，模型类型为`llm_agent`的`DefaultAgent` 的定义位于 [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py)：
 ```python
 class DefaultAgent(Agent):
     def __init__(
-            self,
-            model: BaseChatModel | dict,
-            system_prompt: str = _BASE_PROMPT,
-            voice_names: Optional[List[str]] = None,
-            emotions: Optional[List[str]] = None,
-            tools: Optional[List[Union[BaseTool, Callable[[], BaseTool]]]] = None,
-        ):
-    ...
+        self,
+        model: BaseChatModel | dict[str, Any],
+        backchannel_model: BaseChatModel | dict[str, Any] | None = None,
+        backchannel_source_dir: str | Path | None = None,
+        tools: list[Tool | Callable[[], Tool]] | None = None,
+        system_prompt: str = "",
+        proactive: bool = False,
+    ) -> None:
+        ...
 ```
 
 为了与初始化参数匹配，配置项应写成这样：
-```
-"llm_agent": {
+```json
+{
+  "llm_agent": {
     "type": "DefaultAgent",
     "params": {
       "model": {
         "api_key": "none",
         "base_url": "http://127.0.0.1:8000/v1",
         "model": "cpatonn/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
-      },
-      "voice_names": [
-        "Man",
-        "Woman",
-        "Child"
-      ],
-      "emotions": [
-        "happy",
-        "angry",
-        "sad",
-        "fear",
-        "disgust",
-        "depressed",
-        "surprised",
-        "calm",
-        "normal"
-      ]
+      }
     }
-  },
+  }
+}
 ```
 
-像 `voice_names`、`emotions` 和 `tools`（目前尚不支持在配置中使用）这样的可选键可以省略。
+除必需的 `model` 外，其他可选键可以忽略。
 
-完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../docs/supported_models.zh.md)。
+完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../technical_reference/supported_models.zh.md)。
+
 > **Note**
 > 大多数模型实现都是客户端适配器。您可能还需要按照相应说明启动模型实例本身。
 
+## 分阶段配置
+
+需要在模型实例化之前为 Agent 添加 Python 工具时，使用 `Xtalk.configure(...)`：
+
+```python
+from langchain_core.tools import tool
+from xtalk import Xtalk
+
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """计算两个整数的乘积。"""
+    return a * b
+
+
+def add_multiply_tool(config: dict) -> dict:
+    agent_config = config["llm_agent"]
+    params = agent_config.setdefault("params", {})
+    params.setdefault("tools", []).append(multiply)
+    return config
+
+
+xtalk_instance = (
+    Xtalk.configure("path/to/config.json")
+    .transform_config(add_multiply_tool)
+    .build()
+)
+```
+
+添加 Agent 工具也可以使用专用方法 `.add_agent_tools([multiply])`。
 
 ## 自定义服务行为
 
-此外，您还可以通过以下配置自定义服务行为，例如是否将会话音频保存到 `logs/` 下、是否将会话音频发送到客户端：
+此外，您还可以通过以下配置自定义服务行为，例如是否将会话音频保存到 `logs/` 下：
 ```json
     "service_config": {
-        "recording": true,
-        "send_full_audio_to_client": true
+        "recording": true
     }
 ```
 
-完整的服务配置项列表，请参阅[所有服务配置项](../docs/service_config.zh.md)。
+完整的服务配置项列表，请参阅[所有服务配置项](service_config.zh.md)。
 
 
 ## 前端配置
@@ -108,6 +131,7 @@ const session = createSession(wsUrl, {
         enableVAD: true,
         enableEnhancer: true,
         vadRedemptionMs: 500,
+        frontendUtilitiesBaseUrl: "/xtalk/frontend-utilities",
     },
     outputConfig: {
         sampleRate: 48000,
@@ -132,18 +156,9 @@ const session = createSession(wsUrl, {
 - `enableEnhancer`
   是否启用前端语音增强。默认值为 `true`。
 - `vadRedemptionMs`
-  VAD 的 redemption 窗口，单位为毫秒。
-
-此外，桥接模式 `mode: "web_bridge"` 还支持以下字段：
-
-- `mode`
-  可选值为 `"microphone"` 或 `"web_bridge"`。
-- `participantId`
-  桥接模式下的参与者标识符。
-- `bridge`
-  共享的音频桥实例。
-- `autoEmitVad`
-  是否在桥接模式下自动广播前端 VAD 事件。
+  VAD 的 redemption 窗口，单位为毫秒，默认值为`500`。
+- `frontendUtilitiesBaseUrl`
+  浏览器端 ONNX Runtime、VAD 和 FastEnhancer 资源的基础地址。默认值为 `/xtalk/frontend-utilities`。如果服务端对应路径没有 ONNX Runtime 或 VAD 资源，前端会改从公共 CDN 加载。
 
 ### outputConfig
 
@@ -154,7 +169,7 @@ const session = createSession(wsUrl, {
 
 ### serviceURLs
 
-`serviceURLs` 用于覆盖辅助 HTTP 接口地址，当前支持：
+`serviceURLs` 用于覆盖 服务端HTTP 接口地址，当前支持：
 
 - `login`
 - `sessions`

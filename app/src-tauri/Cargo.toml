@@ -1,0 +1,46 @@
+[package]
+name = "xtalk-desktop"
+version = "0.1.0"
+description = "The native shell for XTalk Desktop"
+authors = ["XTalk contributors"]
+edition = "2021"
+rust-version = "1.77.2"
+license = "Apache-2.0"
+
+[lib]
+name = "xtalk_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "xtalk-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+bzip2 = { version = "0.4", features = ["static"] }
+getrandom = "0.3"
+pinyin = { version = "0.11", default-features = false, features = ["plain", "with_tone"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+tauri = { version = "=2.11.5", features = ["tray-icon"] }
+tauri-plugin-dialog = "=2.7.2"
+tauri-plugin-shell = "=2.3.5"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["crypto-rust", "sync-secret-service"] }

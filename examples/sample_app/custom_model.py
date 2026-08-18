@@ -1,19 +1,27 @@
 import argparse
+import asyncio
+import logging
+import mimetypes
 from pathlib import Path
+from typing import Any, AsyncIterator, Iterable
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
-import mimetypes
+
+from xtalk import Xtalk, model
+from xtalk.model_types import Agent
+from xtalk.models.agents import AgentContext, AgentOutput
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
-from xtalk import Xtalk
-from xtalk.log_utils import mute_other_logging
-
-mute_other_logging()
 
 parser = argparse.ArgumentParser(
     description="Configurable Xtalk Server with custom model"
@@ -24,14 +32,71 @@ args = parser.parse_args()
 
 app = FastAPI(title="Xtalk Server")
 
-# Register an Agent implemented in an external Python file
-Xtalk.register_model_search_spec(
-    slot="llm_agent",
-    spec=Path(__file__).parent / "echo_agent.py",
-)
-# Instantiate Xtalk from config
-# config can be passed as a path to json file or a dict
-xtalk_instance = Xtalk.from_config(args.config)
+
+@model
+class EchoAgent(Agent):
+    """A simple agent that echoes finalized ASR text."""
+
+    def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
+        """Synchronously bridge ``async_accept()`` for compatibility."""
+
+        yield from self._sync_iter_from_async(self.async_accept(context))
+
+    async def async_accept(
+        self,
+        context: AgentContext,
+    ) -> AsyncIterator[AgentOutput]:
+        """Emit the finalized ASR text for ``asr_final`` contexts."""
+
+        if str(context.get("type", "") or "") != "asr_final":
+            return
+        payload = context.get("data") or {}
+        if not isinstance(payload, dict):
+            return
+        text = str(payload.get("text", ""))
+        if text:
+            yield text
+
+    def restore_history(self, messages: list[dict[str, Any]]) -> None:
+        """Ignore persisted history for the stateless echo agent."""
+
+        del messages
+        return None
+
+    def clone(self) -> "EchoAgent":
+        """Create a fresh stateless echo agent."""
+
+        return EchoAgent()
+
+    def _sync_iter_from_async(
+        self,
+        async_iter: AsyncIterator[AgentOutput],
+    ) -> Iterable[AgentOutput]:
+        """Convert an async iterator into a synchronous generator."""
+
+        loop = asyncio.new_event_loop()
+        try:
+            while True:
+                try:
+                    item = loop.run_until_complete(async_iter.__anext__())
+                except StopAsyncIteration:
+                    break
+                yield item
+        finally:
+            aclose = getattr(async_iter, "aclose", None)
+            if callable(aclose):
+                try:
+                    loop.run_until_complete(aclose())
+                except Exception:
+                    pass
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            loop.close()
+
+
+xtalk_instance = Xtalk.configure(args.config).set_model(EchoAgent).build()
 xtalk_instance.mount_routes(app)
 
 
@@ -54,12 +119,12 @@ except:
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 @app.get("/modern", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index_modern.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index_modern.html")
 
 
 if __name__ == "__main__":

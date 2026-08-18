@@ -6,6 +6,8 @@ Manages turn detection by processing audio and ASR results through the TurnDetec
 Subscribes to:
 - EnhancedAudioFrameReceived: feeds audio to turn detector
 - ASRResultPartial: feeds text to turn detector
+- ResponseUpdate: feeds cumulative played AI response text to turn detector
+- ResponseFinish: feeds final played AI response text to turn detector
 - TTSChunkGenerated: sets turn detector to non-listening
 - TTSPlaybackFinished: resumes turn detector listening
 - TTSStopped: resumes turn detector listening
@@ -17,29 +19,32 @@ Emits:
 
 from __future__ import annotations
 
-from typing import Optional, Any
+import logging
+from typing import Any, Optional
 
-from ...log_utils import logger
-
-from ..event_bus import EventBus
-from ..interfaces import Manager
-from ..events import (
-    EnhancedAudioFrameReceived,
-    ASRResultPartial,
-    VADSpeechStart,
-    VADSpeechEnd,
-    TTSChunkReady,
-    TTSPlaybackFinished,
-    TTSStopped,
-    TurnDetectorStopSpeaking,
-    TurnDetectorStartGeneration,
-)
-from ...pipelines import Pipeline
-from ...speech.interfaces import (
+from ...models import VAD, Models, TurnDetector
+from ...models.turn_detector.interfaces import (
     TurnDetectionAction,
     TurnDetectionResult,
     TurnVADResult,
 )
+from ..event_bus import EventBus, EventDispatchMode
+from ..events import (
+    ASRResultPartial,
+    EnhancedAudioFrameReceived,
+    ResponseFinish,
+    ResponseUpdate,
+    TTSChunkReady,
+    TTSPlaybackFinished,
+    TTSStopped,
+    TurnDetectorStartGeneration,
+    TurnDetectorStopSpeaking,
+    VADSpeechEnd,
+    VADSpeechStart,
+)
+from ..interfaces import Manager
+
+logger = logging.getLogger(__name__)
 
 
 class TurnDetectorManager(Manager):
@@ -49,17 +54,16 @@ class TurnDetectorManager(Manager):
         self,
         event_bus: EventBus,
         session_id: str,
-        pipeline: Pipeline,
+        models: Models,
         config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.event_bus = event_bus
         self.session_id = session_id
-        self.pipeline = pipeline
         self.config: dict[str, Any] = config or {}
 
-        # Get turn detector from pipeline
-        self.turn_detector = self.pipeline.get_turn_detector_model()
-        self._backend_vad = self.pipeline.get_vad_model()
+        # Get turn detector from configured models.
+        self.turn_detector = models.get(TurnDetector)
+        self._backend_vad = models.get(VAD)
         self._proxy_vad_enabled = self._backend_vad is None
         self._proxy_vad_in_speech = False
 
@@ -88,6 +92,8 @@ class TurnDetectorManager(Manager):
         try:
             if self.turn_detector is None:
                 return
+            if event.origin == "text":
+                return
 
             if not event.text:
                 return
@@ -106,7 +112,7 @@ class TurnDetectorManager(Manager):
         try:
             if self.turn_detector is None:
                 return
-            if event.origin == "turn_detector":
+            if event.origin in {"text", "turn_detector"}:
                 return
 
             self._disable_proxy_vad()
@@ -118,9 +124,20 @@ class TurnDetectorManager(Manager):
     @Manager.event_handler(VADSpeechEnd)
     async def _on_vad_speech_end(self, event: VADSpeechEnd) -> None:
         """Track externally supplied VAD end events so proxy mode stays disabled."""
-        if event.origin == "turn_detector":
+        if event.origin in {"text", "turn_detector"}:
             return
         self._disable_proxy_vad()
+
+    @Manager.event_handler(ResponseUpdate, priority=100)
+    @Manager.event_handler(ResponseFinish, priority=100)
+    async def _on_assistant_text(
+        self,
+        event: ResponseUpdate | ResponseFinish,
+    ) -> None:
+        """Forward cumulative played AI response text to the turn detector."""
+        if self.turn_detector is None:
+            return
+        await self.turn_detector.async_detect(assistant_text=event.text)
 
     @Manager.event_handler(TTSChunkReady)
     async def _on_tts_chunk_generated(self, event: TTSChunkReady) -> None:
@@ -176,7 +193,7 @@ class TurnDetectorManager(Manager):
                     session_id=self.session_id,
                     origin="turn_detector",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
             return
 
@@ -189,7 +206,7 @@ class TurnDetectorManager(Manager):
                     session_id=self.session_id,
                     origin="turn_detector",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
 
     # ----------------------------
