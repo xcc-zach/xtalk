@@ -434,8 +434,15 @@ height.
 ## Shutdown
 
 Without background voice wake, closing the main window follows the normal full
-shutdown path. With wake enabled, the close request hides the window to the
-system tray and releases the conversation microphone instead. The tray Quit
+shutdown path. With wake enabled, the close request asks the WebView to close
+the active Session and release its microphone first. The WebView then resumes
+native wake-word detection, requires the detector to report `listening`, and
+only then asks Tauri to hide the window to the system tray. The sleep tool uses
+the same acknowledged sequence after its final spoken farewell. A failure in
+Session shutdown or detector startup leaves the window visible with an error
+instead of entering a partial background state. If the detector terminates
+unexpectedly after backgrounding, the native supervisor shows the main window
+again so the failure cannot leave an unreachable sleeping App. The tray Quit
 action stops the wake-word process, asks the authenticated Python sidecar
 shutdown endpoint to stop, waits for a bounded interval, and terminates only
 children it started if graceful shutdown does not finish. Managed model
