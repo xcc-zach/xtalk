@@ -18,7 +18,7 @@ use sidecar::{
 };
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use tools::NativeToolDefinition;
-use wake_word::{NativeWakeWordSettings, WakeWordSupervisor};
+use wake_word::{NativeWakeWordSettings, WakeWordState, WakeWordSupervisor};
 
 /// Runs the XTalk Desktop native shell.
 pub fn run() {
@@ -280,8 +280,9 @@ async fn resume_wake_word(
         .map_err(|error| error.to_string())
 }
 
+/// Opens the whiteboard without blocking the Windows webview event loop.
 #[tauri::command]
-fn show_whiteboard_window(app: tauri::AppHandle) -> Result<bool, String> {
+async fn show_whiteboard_window(app: tauri::AppHandle) -> Result<bool, String> {
     whiteboard::show_whiteboard_window(&app)
 }
 
@@ -290,8 +291,12 @@ fn hide_whiteboard_window(app: tauri::AppHandle) -> Result<bool, String> {
     whiteboard::hide_whiteboard_window(&app)
 }
 
+/// Updates whiteboard visibility outside the synchronous Windows IPC handler.
 #[tauri::command]
-fn set_whiteboard_window_visible(app: tauri::AppHandle, visible: bool) -> Result<bool, String> {
+async fn set_whiteboard_window_visible(
+    app: tauri::AppHandle,
+    visible: bool,
+) -> Result<bool, String> {
     whiteboard::set_whiteboard_window_visible(&app, visible)
 }
 
@@ -300,21 +305,34 @@ fn is_whiteboard_window_visible(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(whiteboard::is_whiteboard_window_visible(&app))
 }
 
+/// Hides the main window after the WebView has restored wake-word listening.
 #[tauri::command]
-fn background_main_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn background_main_window(app: tauri::AppHandle) -> Result<(), String> {
     let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
-    if !wake_word.is_enabled() {
+    let settings = wake_word.settings().await;
+    if !settings.enabled {
         return Err("voice wake must be enabled before entering sleep mode".to_owned());
     }
-    hide_main_window_for_wake(&app)
+    if settings.state != WakeWordState::Listening {
+        return Err("voice wake must be listening before entering sleep mode".to_owned());
+    }
+    hide_main_window(&app)?;
+    if wake_word.settings().await.state != WakeWordState::Listening {
+        tray::show_main_window(&app);
+        return Err("voice wake stopped while entering sleep mode".to_owned());
+    }
+    Ok(())
 }
 
-fn hide_main_window_for_wake(app: &tauri::AppHandle) -> Result<(), String> {
+fn request_main_window_backgrounding(app: &tauri::AppHandle) -> Result<(), String> {
+    app.emit("app-backgrounding", ())
+        .map_err(|error| format!("failed to request app backgrounding: {error}"))
+}
+
+fn hide_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window is missing".to_owned())?;
-    app.emit("app-backgrounding", ())
-        .map_err(|error| format!("failed to request app backgrounding: {error}"))?;
     window
         .hide()
         .map_err(|error| format!("failed to hide the main window: {error}"))?;
@@ -339,8 +357,8 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     let app = window.app_handle().clone();
     let wake_word = app.state::<Arc<WakeWordSupervisor>>().inner().clone();
     if wake_word.is_enabled() {
-        if let Err(error) = hide_main_window_for_wake(&app) {
-            eprintln!("failed to background the app: {error}");
+        if let Err(error) = request_main_window_backgrounding(&app) {
+            eprintln!("failed to request app backgrounding: {error}");
         }
         return;
     }
