@@ -467,6 +467,7 @@ impl WakeWordSupervisor {
         runtime.last_error = Some(error);
         drop(runtime);
         self.emit_status(app).await;
+        crate::tray::show_main_window(app);
     }
 
     async fn emit_status(&self, app: &AppHandle) {

@@ -13,6 +13,7 @@ Input: PCM 16-bit mono 16 kHz raw bytes.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Optional
 from urllib.parse import urlparse
@@ -46,6 +47,42 @@ def _resolve_sherpa_base_url(base_url: str) -> str:
     if parsed.scheme not in {"ws", "wss"}:
         raise ValueError("SherpaOnnxASR base_url must use ws:// or wss://")
     return normalized
+
+
+def _extract_sherpa_transcript(result: str | bytes | bytearray) -> str:
+    """Extract transcript text from a Sherpa-ONNX WebSocket result.
+
+    Sherpa-ONNX models may return either a plain transcript or a JSON object
+    containing transcript metadata. Preserve plain and malformed responses for
+    compatibility, while exposing only the ``text`` field from structured
+    results to the ASR pipeline.
+
+    Parameters
+    ----------
+    result : str or bytes or bytearray
+        Raw WebSocket response returned by the Sherpa-ONNX server.
+
+    Returns
+    -------
+    str
+        Human-readable transcript text.
+    """
+
+    if isinstance(result, (bytes, bytearray)):
+        raw_text = bytes(result).decode("utf-8", errors="ignore")
+    else:
+        raw_text = result
+
+    try:
+        payload = json.loads(raw_text)
+    except (json.JSONDecodeError, TypeError):
+        return raw_text
+
+    if isinstance(payload, dict):
+        transcript = payload.get("text")
+        if isinstance(transcript, str):
+            return transcript
+    return raw_text
 
 
 @model
@@ -283,9 +320,7 @@ class SherpaOnnxASR(ASR):
             # Tell the server this session is over
             await websocket.send("Done")
 
-        if isinstance(decoding_results, bytes):
-            return decoding_results.decode("utf-8", errors="ignore")
-        return str(decoding_results)
+        return _extract_sherpa_transcript(decoding_results)
 
     async def _recognize_offline_async(self, audio: bytes) -> str:
         """One-shot async recognition used by MockStreamRecognizer."""
@@ -331,4 +366,4 @@ class SherpaOnnxASR(ASR):
 
             decoding_results = await receive_task
 
-        return decoding_results
+        return _extract_sherpa_transcript(decoding_results)
