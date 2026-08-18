@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">XTalk</title>
+  <defs>
+    <linearGradient id="surface" x1="72" y1="48" x2="440" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#342A75"/>
+      <stop offset="0.48" stop-color="#171A31"/>
+      <stop offset="1" stop-color="#0A1320"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="150" y1="128" x2="371" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B9AEFF"/>
+      <stop offset="0.52" stop-color="#8B7CFF"/>
+      <stop offset="1" stop-color="#45D9C5"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(38.4 38.4) scale(.85)">
+    <rect width="512" height="512" rx="124" fill="url(#surface)"/>
+    <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#C9C1FF" stroke-opacity=".14" stroke-width="2"/>
+    <circle cx="401" cy="108" r="54" fill="#45D9C5" fill-opacity=".08"/>
+    <circle cx="112" cy="410" r="72" fill="#8B7CFF" fill-opacity=".1"/>
+    <path
+      d="M155 139 357 373M357 139 155 373"
+      fill="none"
+      stroke="url(#stroke)"
+      stroke-linecap="round"
+      stroke-width="58"
+      filter="url(#glow)"
+    />
+    <path
+      d="M155 139 357 373M357 139 155 373"
+      fill="none"
+      stroke="#F8F7FF"
+      stroke-linecap="round"
+      stroke-opacity=".5"
+      stroke-width="7"
+    />
+  </g>
+</svg>

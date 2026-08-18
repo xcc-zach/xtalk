@@ -7,7 +7,7 @@ The examples below show how to extend the framework by modifying it directly.
 Assume you want to add `Qwen3ASRFlashRealtime`, whose implementation currently lives in [`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py).
 
 1. Create `qwen3_asr_flash_realtime.py` under [`src/xtalk/models/asr`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/asr).
-2. Prepare the class skeleton and implement the required methods. For model interfaces, refer to [`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models); for interface details, see docs such as [ASR Design](../docs/asr_design.md).
+2. Prepare the class skeleton and implement the required methods. For model interfaces, refer to [`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models); for interface details, see docs such as [ASR Design](../technical_reference/asr_design.md).
 
 ```python
 from xtalk import model
@@ -108,7 +108,15 @@ The `Agent` in the previous section requires a new [`src/xtalk/serving/modules/d
 
 To invoke models inside a `Manager`, refer to [`src/xtalk/serving/modules/asr_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py). You can use methods such as `pipeline.get_asr_model`.
 
-Note that `wait_for_completion` in the event publishing method `publish` controls whether `await` waits until listeners directly triggered by that event have completed. Enabling `wait_for_completion` along an event chain ensures that every handler in that chain finishes before control returns to the original event source.
+The `mode` argument of the event-bus `publish` method controls when the call
+returns. `RETURN_AFTER_DISPATCH` schedules listeners in the background,
+`WAIT_UNTIL_COMPLETE` waits for every directly triggered listener in priority
+order, and `WAIT_UNTIL_COMPLETE_OR_STOPPED` additionally lets a listener stop
+lower-priority propagation by returning `EventPropagation.STOP`. The short
+strings `dispatch`, `wait`, and `wait_stoppable` are accepted as aliases, while
+application code should prefer the enum members. Waiting along an event chain
+ensures that every handler in that chain finishes before control returns to the
+original event source.
 
 ## Introduce a New Model Type
 

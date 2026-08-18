@@ -7,12 +7,11 @@ from typing import Any, Callable, Coroutine, Type
 from fastapi import WebSocket
 
 from ..models import Agent, Models
-from .event_bus import EventBus
+from .event_bus import EventBus, EventDispatchMode
 from .events import Event, LLMAgentLoop
 from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
 from .modules.captioner_manager import CaptionerManager
-from .modules.direct_audio_manager import DirectAudioManager
 from .modules.embeddings_manager import EmbeddingsManager
 from .modules.enhancer_manager import EnhancerManager
 from .modules.input_gateway import InputGateway
@@ -27,6 +26,7 @@ from .modules.retrieval_manager import RetrievalManager
 from .modules.speaker_manager import SpeakerManager
 from .modules.tts_manager import TTSManager
 from .modules.tts_playback_manager import TTSPlaybackManager
+from .modules.tts_response_coordinator import TTSResponseCoordinator
 from .modules.turn_detector_manager import TurnDetectorManager
 from .modules.turn_taking_manager import TurnTakingManager
 from .modules.vad_manager import VADManager
@@ -100,6 +100,7 @@ class Service:
             self.session_id,
             _websocket,
             config=self.service_config,
+            models=self.models,
             _event_overrides=self._event_overrides.get(OutputGateway),
         )
 
@@ -290,7 +291,7 @@ class Service:
         await self.input_gateway.handle_connection(already_accepted=already_accepted)
         await self.event_bus.publish(
             LLMAgentLoop(session_id=self.session_id),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await self.input_gateway.handle_message_loop()
 
@@ -394,8 +395,8 @@ class DefaultService(Service):
         MultiSpeakerTurnContextManager,
         LLMAgentContextManager,
         LLMAgentConsumptionManager,
-        DirectAudioManager,
         TTSManager,
+        TTSResponseCoordinator,
         TTSPlaybackManager,
         CaptionerManager,
         RetrievalManager,

@@ -146,21 +146,6 @@ Return the serialized conversation history when available.
 - `str | None`
   Conversation history or ``None``.
 
-#### add_tools
-
-_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
-
-```python
-def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
-```
-
-Attach tools to the agent.
-
-##### 参数
-
-- `tools` (`list[BaseTool | Callable[[], BaseTool]]`)
-  Tool instances or factories that produce tool instances.
-
 ## AgentContext
 
 _定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
@@ -189,4 +174,15 @@ _定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/
 AgentOutput
 ```
 
-**值:** `Union[str, ToolCall, ToolCallResult]`
+**值:** `Union[str, ToolCall, ToolCallResult, AgentTurnBoundary]`
+
+## AgentTurnBoundary
+
+_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
+
+```python
+@dataclass(frozen=True)
+class AgentTurnBoundary
+```
+
+Mark the end of one agent response segment.

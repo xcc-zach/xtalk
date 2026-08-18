@@ -1,13 +1,13 @@
-*Experimental API*
+*Experimental feature*
 
 > **Note**
 > See [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) for the complete example. It adds a dummy `LLMOutputRefactorModel` to X-Talk and prepends `Assistant response: ` before the final LLM response text is sent to the frontend.
 
-You may want to introduce a service-local custom model and connect its logic to the rest of the service flow.
+You may want to introduce a new model type and connect its logic to the rest of the service flow.
 
 ## Introduce a New Model Type
 
-There are two common ways to introduce a new model:
+There are two common ways to introduce a new model type:
 
 1. Define the model directly in service code and manually put it into `Models`. [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) uses this approach.
 2. Define a new model type first, then register a concrete model implementation so the model can be created from config.
@@ -36,6 +36,9 @@ If the model has per-session state, implement `clone` so each session gets an is
 Built-in models are still created from the config file:
 
 ```python
+from xtalk import Xtalk
+
+
 models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
 ```
 
@@ -44,8 +47,6 @@ Then put the custom model into the same `Models` container:
 ```python
 models.set(LLMOutputRefactorModel, LLMOutputRefactorModel())
 ```
-
-The model class itself is used as the key. Later, the `Manager` uses the same `LLMOutputRefactorModel` class to retrieve the model.
 
 ### Approach 2: Introduce a New Model Type, Then a New Model
 
@@ -103,38 +104,35 @@ When using this approach, you no longer need to manually `set` this model when c
 models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
 ```
 
-The later `Manager` should retrieve the model through the model type interface:
-
-```python
-refactor_model = self.models.get(LLMOutputRefactor)
-```
-
-If you only want to temporarily override the instance created from config, continue using the same model type interface as the key:
-
-```python
-models.set(LLMOutputRefactor, PrefixLLMOutputRefactor())
-```
-
 ## Create a Custom Event
 
 The refactored text needs to be passed to the frontend output component, so the example creates a new event type:
 
 ```python
+from xtalk import create_event_class
+
+
 LLMOutputRefactoredFinal = create_event_class(
     name="LLMOutputRefactoredFinal",
-    fields={"text": ""},
+    fields={"response_id": "", "text": ""},
 )
 ```
 
-This event only carries a `text` field for the refactored final response.
+This event carries the original `response_id` and the refactored `text`, allowing the frontend to associate the finish event with the correct response.
 
 ## Define a Custom Manager
 
-`LLMOutputRefactorManager` listens for `LLMAgentResponseFinish`, retrieves the custom model, refactors the text, and publishes `LLMOutputRefactoredFinal`.
+`LLMOutputRefactorManager` listens for `ResponseFinish`, which is published after TTS playback completes, retrieves the custom model, refactors the text, and publishes `LLMOutputRefactoredFinal`.
 
 The code below continues using `LLMOutputRefactorModel` from approach 1. If you use approach 2, replace `self.models.get(LLMOutputRefactorModel)` with `self.models.get(LLMOutputRefactor)`.
 
 ```python
+from typing import Any
+
+from xtalk import EventBus, Manager, Models
+from xtalk.events import ResponseFinish
+
+
 class LLMOutputRefactorManager(Manager):
     def __init__(
         self,
@@ -146,13 +144,14 @@ class LLMOutputRefactorManager(Manager):
         self.event_bus = event_bus
         self.models = models
 
-    @Manager.event_handler(LLMAgentResponseFinish)
-    async def handle_llm_response_finish(self, event: LLMAgentResponseFinish):
+    @Manager.event_handler(ResponseFinish)
+    async def handle_response_finish(self, event: ResponseFinish):
         refactor_model = self.models.get(LLMOutputRefactorModel)
         if refactor_model:
             refactored_output = refactor_model.refactor(event.text)
             new_event = LLMOutputRefactoredFinal(
                 session_id=event.session_id,
+                response_id=event.response_id,
                 text=refactored_output,
             )
             await self.event_bus.publish(new_event)
@@ -168,20 +167,26 @@ The service passes `models` to the manager when creating a session. The example 
 Create the service with `models`, then register the custom `Manager`:
 
 ```python
+from xtalk import DefaultService
+
+
 custom_service = DefaultService(models=models)
 custom_service.register_manager(LLMOutputRefactorManager)
 ```
 
-Each session will create an `LLMOutputRefactorManager` and share the model container managed by the service.
+Each session creates an `LLMOutputRefactorManager` and uses the model container cloned for that session.
 
 ## Adjust Existing Event Subscriptions
 
-By default, `OutputGateway` handles the original `LLMAgentResponseFinish`. The example wants the frontend to receive the refactored text, so it first unsubscribes the old handler:
+By default, `OutputGateway` handles the original `ResponseFinish`. The example wants the frontend to receive the refactored text, so it first unsubscribes the old handler:
 
 ```python
+from xtalk.serving.module_types import OutputGateway
+
+
 custom_service.unsubscribe_event(
     event_listener_cls=OutputGateway,
-    event_type=LLMAgentResponseFinish,
+    event_type=ResponseFinish,
 )
 ```
 
@@ -195,7 +200,7 @@ async def output_gateway_llm_output_refactored_final_handler(
     await self.send_signal(
         {
             "action": "finish_resp",
-            "data": {"text": event.text},
+            "data": {"response_id": event.response_id, "text": event.text},
         }
     )
 
@@ -212,6 +217,9 @@ custom_service.subscribe_event(
 Finally, pass the custom service to `Xtalk` and mount it on FastAPI:
 
 ```python
+from fastapi import FastAPI
+
+
 xtalk_instance = Xtalk(service_prototype=custom_service)
 
 app = FastAPI(title="Xtalk Server")

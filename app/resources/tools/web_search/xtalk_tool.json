@@ -1,0 +1,7 @@
+{
+  "display_name": {
+    "zh": "联网搜索",
+    "en": "Web Search"
+  },
+  "entrypoint": "web_search_tool:create_tools"
+}

@@ -7,7 +7,7 @@
 假设要引入Qwen3ASRFlashRealtime，目前实现已经在[`src/xtalk/models/asr/qwen3_asr_flash_realtime.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/asr/qwen3_asr_flash_realtime.py)。
 
 1. 在[`src/xtalk/models/asr`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models/asr)下创建`qwen3_asr_flash_realtime.py`
-2. 准备骨架，并实现对应方法（各类模型接口参考[`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models)，模型接口细节参考[ASR设计](../docs/asr_design.zh.md)等文档）
+2. 准备骨架，并实现对应方法（各类模型接口参考[`src/xtalk/models/*/interfaces.py`](https://github.com/xcc-zach/xtalk/tree/main/src/xtalk/models)，模型接口细节参考[ASR设计](../technical_reference/asr_design.zh.md)等文档）
 ```python
 from xtalk import model
 
@@ -86,7 +86,12 @@ async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput
 
 在`Manager`中调用模型可参考[`src/xtalk/serving/modules/asr_manager.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/asr_manager.py)，使用`pipeline.get_asr_model`等方法即可。
 
-注意事件发布`publish`方法中`wait_for_completion`代表`await`时是否等待该事件直接触发的监听函数处理完成。沿事件链条启用`wait_for_completion`可以保证该链条上所有事件处理完毕后才回到事件发送源头继续执行。
+事件总线 `publish` 方法的 `mode` 参数控制调用何时返回：
+`RETURN_AFTER_DISPATCH` 在后台调度监听函数，`WAIT_UNTIL_COMPLETE` 按优先级等待
+所有直接触发的监听函数完成，`WAIT_UNTIL_COMPLETE_OR_STOPPED` 还允许监听函数通过
+返回 `EventPropagation.STOP` 阻止事件继续传播给低优先级监听函数。输入时可以使用
+`dispatch`、`wait` 和 `wait_stoppable` 短字符串别名，但应用代码应优先使用枚举成员。
+沿事件链条使用等待模式，可以保证该链条上的处理完成后再回到事件发送源头继续执行。
 
 ## 引入新的类型的模型
 

@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from ...models import Models
 from ..event_bus import EventBus
 from ..events import (
     ASRResultFinal,
@@ -31,6 +32,7 @@ from ..events import (
     VADSpeechStart,
 )
 from ..interfaces import EventListenerMixin
+from ..multi_speaker_config import speaker_history_gate_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,9 @@ class OutputGateway(EventListenerMixin):
         Live WebSocket connection used for outbound messages.
     config : dict[str, Any] | None, optional
         Service configuration relevant to output behavior.
+    models : Models | None, optional
+        Session models used to place ASR previews before the speaker-history
+        barrier when the focus-only gate is active.
     """
 
     def __init__(
@@ -56,11 +61,16 @@ class OutputGateway(EventListenerMixin):
         session_id: str,
         websocket: WebSocket,
         config: dict[str, Any] | None = None,
+        models: Models | None = None,
     ):
         self.event_bus = event_bus
         self.session_id = session_id
         self.websocket = websocket
         self.config: dict[str, Any] = config or {}
+        self._speaker_history_gate_enabled = (
+            models is not None
+            and speaker_history_gate_enabled(models, self.config)
+        )
         self._full_audio_chunk_bytes = 128 * 1024
 
     # ── WebSocket helpers ───────────────────────────────────────────
@@ -154,10 +164,20 @@ class OutputGateway(EventListenerMixin):
 
     # ── Shared helpers ──────────────────────────────────────────────
 
-    async def _forward_asr(self, action: str, event) -> None:
+    async def _forward_asr(
+        self,
+        action: str,
+        event: ASRResultPartial | ASRResultFinal,
+    ) -> None:
         """Forward an ASR result (partial or final) to the frontend."""
         display_text = event.display_text or event.text
-        await self._forward(action, {"text": display_text})
+        await self._forward(
+            action,
+            {
+                "text": display_text,
+                "origin": event.origin,
+            },
+        )
 
     # ── Session ─────────────────────────────────────────────────────
 
@@ -167,7 +187,24 @@ class OutputGateway(EventListenerMixin):
 
     # ── Event handlers ──────────────────────────────────────────────
 
-    @EventListenerMixin.event_handler(ASRResultPartial, priority=5)
+    @EventListenerMixin.event_handler(
+        ASRResultPartial,
+        priority=40,
+        enabled_if=lambda gateway: gateway._speaker_history_gate_enabled,
+    )
+    async def _send_gated_update_asr_signal(
+        self,
+        event: ASRResultPartial,
+    ) -> None:
+        """Forward a focus-gated preview before the history barrier."""
+
+        await self._forward_asr("update_asr", event)
+
+    @EventListenerMixin.event_handler(
+        ASRResultPartial,
+        priority=5,
+        enabled_if=lambda gateway: not gateway._speaker_history_gate_enabled,
+    )
     async def _send_update_asr_signal(self, event: ASRResultPartial) -> None:
         await self._forward_asr("update_asr", event)
 
@@ -176,12 +213,12 @@ class OutputGateway(EventListenerMixin):
         await self._forward_asr("finish_asr", event)
 
     @EventListenerMixin.event_handler(TTSStarted, priority=5)
-    async def _on_start_tts(self, event) -> None:
-        await self._forward("start_tts", "")
+    async def _on_start_tts(self, event: TTSStarted) -> None:
+        await self._forward("start_tts", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(TTSStopped, priority=5)
-    async def _send_stop_tts_signal(self, event) -> None:
-        await self._forward("stop_tts", "")
+    async def _send_stop_tts_signal(self, event: TTSStopped) -> None:
+        await self._forward("stop_tts", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(ErrorOccurred, priority=5)
     async def _send_error_signal(self, event: ErrorOccurred) -> None:
@@ -197,15 +234,21 @@ class OutputGateway(EventListenerMixin):
 
     @EventListenerMixin.event_handler(ResponseUpdate, priority=5)
     async def _send_update_resp_signal(self, event: ResponseUpdate) -> None:
-        await self._forward("update_resp", {"text": event.text})
+        await self._forward(
+            "update_resp",
+            {"response_id": event.response_id, "text": event.text},
+        )
 
     @EventListenerMixin.event_handler(ResponseFinish, priority=5)
     async def _send_finish_resp_signal(self, event: ResponseFinish) -> None:
-        await self._forward("finish_resp", {"text": event.text})
+        await self._forward(
+            "finish_resp",
+            {"response_id": event.response_id, "text": event.text},
+        )
 
     @EventListenerMixin.event_handler(TTSFinished, priority=5)
     async def _send_tts_finished_signal(self, event: TTSFinished) -> None:
-        await self._forward("tts_finished", {})
+        await self._forward("tts_finished", {"response_id": event.response_id})
 
     @EventListenerMixin.event_handler(SpeakerRecognized, priority=5)
     async def _send_speaker_updated_signal(self, event: SpeakerRecognized) -> None:

@@ -8,7 +8,7 @@
 
 > **createSession**(`websocketURL`, `config?`): [`Session`](../interfaces/Session.md)
 
-Defined in: session/create.ts:31
+Defined in: session/create.ts:53
 
 Creates a session client bound to the provided websocket endpoint.
 

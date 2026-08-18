@@ -1,0 +1,353 @@
+# XTalk 桌面应用 Phase 0 架构
+
+## 边界
+
+所有桌面专用源码、测试、资源和构建脚本都位于 `app/`。后端使用已安装包公开的
+runtime builder 与工具 API，包括原生工具所需、文档已公开的
+`xtalk.models.agents.tools` API；UI 只从 `xtalk-client` 包根入口导入。两个适配层
+都不导入带下划线的核心私有 API，也不复制核心实现。
+
+## 启动协议
+
+1. Tauri 读取用户此前选择的外部模型配置路径，但不在原生 setup 阶段启动用户选择的
+   进程。
+2. 没有有效路径时，窗口会在不启动 sidecar 的情况下打开，WebView 随即弹出原生
+   JSON 文件选择器。
+3. WebView 订阅 managed 模型进度后，请求 Tauri 确保所选后端正在运行；若已有受管且
+   健康的实例则直接复用，否则先启动配置引用的全部 managed 服务，再启动 Python
+   sidecar。
+4. Tauri 生成本次启动随机 token、创建应用数据目录并启动已打包的 Python sidecar，
+   秘密不进入 argv。
+5. Tauri 通过 sidecar stdin 写入一条有大小上限的 JSON 启动消息。
+6. sidecar 加载指定的 XTalk 配置，绑定由操作系统分配的 loopback 端口，启动
+   FastAPI，然后输出一行 readiness JSON。
+7. Tauri 严格校验 readiness 协议，并通过最小 command 向 WebView 提供 endpoint
+   和 token。
+8. UI 创建 `xtalk-client` Session，并关闭前端 VAD 与增强器。
+9. Tauri 将随包 Silero 模型作为顶层配置回退项传给 sidecar；当所选配置没有显式
+   声明 VAD 时，由 Python sidecar 产生语音边界。
+sidecar 关闭 HTTP access log，避免公共 SDK 使用的 query capability 出现在 URL
+日志中。
+
+## 本地界面
+
+WebView 沿用 `examples/sample_app` 的布局层级和视觉语言，但不导入示例实现代码。
+界面包含默认收起的左侧聊天记录栏、上下文状态栏、Orb/对话双视图、底部玻璃控制坞
+和右侧“设置与诊断”抽屉。左侧栏可创建新聊天，并通过公开客户端 API 切换全部持久
+化会话。“新聊天”下方的同款“工具”按钮会打开居中浮窗，用于将工具目录复制到
+AppData、修改内置或用户工具的启用状态、删除用户工具，并通过重启 sidecar 应用
+变更。内置工具单独分组显示，且不提供删除入口。“设置与诊
+断”顶部显示本地服务状态，并将语言、外部模型配置、运行状态、本地服务诊断和恢复
+组织为可独立展开的选项卡。用户可更换模型配置并重新探测本地服务。“语言”选项默
+认按操作系统首选语言自动选择界面语言，也可持久化指定简体中文或英文。静态内容、
+动态状态、无障碍标签和原生文件选择器统一使用解析后的语言。浅色、深色和窄窗口
+布局共用同一桌面适配器和离线状态模型。macOS bundle 包含用户开始语音对话时所需
+的麦克风用途说明和 audio-input entitlement。
+
+会话历史以服务端数据为准，存储在强制配置给 sidecar 的应用数据目录下的
+`chat_history.sqlite3` 中。桌面端私有启动协议会传递固定的匿名用户标识，该标识不
+进入公开的 `service_config`，并由启动 token 与 Origin 边界确保此单用户身份仅供
+本应用使用。因此左侧栏中的会话标题和消息可跨应用及 sidecar 重启保留，无需再维护
+一份 WebView 自有的历史记录。
+
+## 认证契约
+
+所有 HTTP 请求都要求启动 token 和批准的 Origin。app 自有客户端使用
+`X-XTalk-App-Token`；由于公共 `xtalk-client` 没有自定义 header 扩展点，适配器只在
+显式 HTTP service URL 上附加 token。
+
+WebSocket URL 不包含启动 token，避免 SDK 把 token 作为 local-storage key 的一部分
+持久化。外层中间件仅在 WebSocket 携带启动 token，或携带从受启动 token 保护的登录
+路由取得的 XTalk access token 时放行；随后仍由 XTalk 完成权威 access-token 校验。
+loopback peer 与 Origin 检查始终生效。
+
+文本回合不再经过 app 自有 HTTP endpoint；公共客户端直接通过已经认证的 XTalk
+WebSocket 发送。
+
+## 文本输入与计时器链路
+
+桌面适配器直接调用公共 `Session.sendText()`。SDK 会裁剪首尾空白，把消息限制为
+2,048 个 JavaScript 字符，通过已连接的 WebSocket 发送 `submit_text`，并等待最多
+10 秒，直到收到文本完全匹配且 `origin="text"` 的 `finish_asr`。核心后端验证
+UTF-8 编码不超过 8 KiB，再通过普通 VAD、ASR、Agent、Tool、TTS 与持久化管线处理
+合成文本回合；UI 不会在本地乐观伪造消息。
+
+每个客户端 Session 同一时间只能有一条文本等待确认。断线、关闭、重新打开或切换
+Session 都会取消待确认请求；客户端不会排队或自动重试可能执行有副作用工具的回合。
+
+app 通过公共 runtime builder 注册已启用的内置与用户工具。随包异步计时器与
+`examples/sample_app/custom_async_tool.py` 契约一致，并作为普通内置 manifest 工具
+加载；若用户工具导出相同名称，则优先使用用户实现。单元测试覆盖 `Running`、进度、
+`Finished`、stop、工具
+入口加载，并验证公共 `ToolEngine` 更新链路。`DesktopDefaultAgent` 只负责桌面模型注册，
+完整回合循环与异步更新策略直接继承
+`xtalk.models.agents.default.DefaultAgent`。因此用户结束说话后，已订阅工具的每次进度
+更新都会唤醒普通的 Agent 异步报告循环；用户仍在说话时则忽略中间进度，仅延后最终
+更新，与默认 Agent 完全一致。工具 UI 仍通过独立观察通道显示这些更新。
+
+### 白板工具链路
+
+随包 `whiteboard` 工具为**每场对话维护独立的 Markdown 文本文档**。
+`backend/whiteboard_store.py` 持有按会话索引的注册表，并把每块白板以 JSON
+持久化到工具数据目录。四个 `AsyncTool`——`fetch_text`、`add_text`、
+`delete_text`、`update_text`——操作当前会话的文档，每次返回完整规范化快照
+`{action, success, text, revision, message}`；工具 UI 包装器把当前绑定的会话
+写入调用状态，工具据此访问正确的 store。store 同时支撑
+`GET /app/api/whiteboard?session_id=...`，专属 Tauri 白板窗口跟随主窗口的
+活动会话轮询该端点并以 Markdown 渲染。窗口作为主窗口的子窗口创建以保持在其
+之上，窗口内不再显示标题与版本徽标，原生标题走 i18n。Tool UI 观察通道只保留
+触发作用：`structured_payload = True` 仍会把快照挂到 `tool_ui.emit` 上，主
+窗口在第一次白板 emit 时打开白板窗口。开启对话键右侧的停靠按钮切换窗口
+显示/隐藏；关闭窗口只隐藏 webview 并发出 `whiteboard-window-hidden` 事件，
+保持按钮状态同步。
+
+文本输入要求已有活动的 XTalk Session。公共 SDK 的 `open()` 仍会初始化麦克风采集，
+因此即使随后只输入文字，启动 Session 也需要麦克风权限。
+
+## 本地语音管线
+
+WebView 请求浏览器原生回声消除、自动增益控制与降噪，然后通过公开
+`xtalk-client` WebSocket 发送 16 kHz 单声道 PCM；前端 VAD 与自定义
+FastEnhancer 保持关闭。首次使用时，Tauri 会将固定版本的 Silero VAD 模型下载到
+应用数据目录，校验文件大小与 SHA-256，并在后续启动时复用缓存文件。sidecar 再通过
+XTalk 普通公开模型配置加载它。桌面端回退配置使用 `0.7` 的语音概率阈值以减少环境
+噪声误触发；用户显式配置的 VAD 仍然优先。由服务端产生的语音开始、结束边界负责
+启动和结束配置中的远程 ASR 回合。
+
+模型的上游 commit、文件大小、不可变 HTTPS URL 与 SHA-256 固定在
+`resources/manifests/managed-models.lock.json`。下载或校验失败时，后端会拒绝启动，
+而不会加载不可信的模型文件。
+
+## 语音唤醒
+
+语音唤醒默认开启，默认唤醒词是“你好小克”；用户后续修改的开关和唤醒词都会持久化。
+Tauri 在 WebView 音频管线之外监管
+随包的 `sherpa-onnx-keyword-spotter-microphone` 进程，只读取其本地关键词检测结果。
+唤醒词可由用户编辑。Tauri 将中文转换成带声调的拼音 token，并使用
+随包的 `en.phone` 词典转换英文，然后把当前关键词文件写入 AppData。中英双语
+`sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20` 的 encoder、decoder、joiner、token
+表和英文词典由 `prepare_managed_runtime.py` 在构建时准备。唤醒监听产生的音频不会保存，
+也不会发送给 Python sidecar。
+声学触发阈值与唤醒词一同持久化，默认值为 `0.05`，并同时写入关键词定义和检测进程参数。
+
+关键词检测进程与 XTalk Session 不会同时占用麦克风。用户手动开始对话时，App 会先
+暂停关键词检测，再调用 `Session.open()`；对话结束后恢复检测。原生检测到唤醒词时，
+会先停止检测进程、显示并聚焦主窗口，再向 WebView 发送可信事件。UI 随后选择一个新
+会话并打开公共 Session，复用现有 Agent 的主动问候。启用语音唤醒后，关闭主窗口只会
+将其隐藏到系统托盘，并要求 UI 关闭当前 Session；只有托盘中的“退出”会真正关闭应用
+和所有 sidecar。
+
+## 可选原生模型运行时
+
+按需下载的可选语音模型运行在独立的 Rust HTTP sidecar
+`app/local-model-runtime` 中。首个引擎使用 SentencePiece 和五个 ONNX Session
+直接实现 MOSS-TTS-Nano：参考音频 codec encode、prefill、自回归 decode、本地帧
+采样和 codec decode。主接口 `POST /api/generate` 与官方 Python/FastAPI 服务一致：
+输入 multipart `text` 和 `prompt_audio`，输出包含 base64 WAV 的 JSON。参考音频会在
+编码前转换为 48 kHz，生成结果固定为 48 kHz 单声道 PCM16。
+
+Apple Silicon 安装包还包含 `app/local-model-runtime-mlx` 中的 Swift sidecar。
+它通过固定版本的 `mlx-audio-swift` 从本地加载 SenseVoice 与 MOSS safetensors
+快照，并保持同一套离线 ASR WebSocket 数据包与 MOSS multipart HTTP 协议，因此
+Python 模型客户端不需要按推理后端分支。MLX 的 MOSS 输出同样固定为 48 kHz
+单声道 PCM16。
+
+ONNX Runtime 是 App 资源，不要求用户另行安装。SenseVoice、Matcha 与 Rust MOSS
+sidecar 统一解析同一份随包 ONNX Runtime 1.27 动态库；模型权重不放进安装包。用户
+配置 `managed://sensevoice-small`、`managed://matcha-icefall-zh-en` 或
+`managed://moss-tts-nano` 后，Tauri 会读取不可变的
+`managed-models.lock.json`，仅下载对应服务的固定版本文件到
+`AppData/models/managed/<id>/<version>/`，校验文件大小和 SHA-256，以禁止目录逃逸
+的方式解压固定归档，再原子写入完成标记。此后每次启动仍会重新校验已安装快照。
+
+managed URL 支持 `?backend=cpu`、`?backend=cuda` 和 `?backend=mlx`。不带查询参数
+时，Tauri 依次选择 NVIDIA 设备上随包可用的 CUDA provider、Apple Silicon MLX，
+最后回退 CPU。显式选择不可用后端会报错，不会静默降级。CUDA 与 CPU 共用 ONNX
+快照，MLX 则选择单独固定的 safetensors 快照。Matcha 只支持 CPU 和 CUDA，因此
+自动选择时不会进入 MLX。
+
+用户选择配置后，Tauri 会在应用配置前先做预检。包含 managed 服务的配置会打开阻塞
+式进度窗口；原生进度事件会报告模型校验、逐文件下载字节数、服务启动和就绪状态。
+Python 后端通过健康检查前，界面其余区域保持不可交互；成功后进度窗口自动关闭。
+启动失败时，窗口会保留错误信息和关闭操作。
+
+ONNX 模式下，Tauri 通过随包的原生 `sherpa-onnx-offline-websocket-server` 启动
+SenseVoice 和 Qwen3-ASR 0.6B INT8，通过独立 Rust sherpa-onnx HTTP sidecar 启动
+Matcha，并通过另一项 Rust sidecar 启动 MOSS。Qwen 在 macOS 上自动优先选择
+Core ML；若 Core ML 启动失败则回退 CPU，并保留未完成文件供 HTTP Range 续传。
+MLX 模式下，每项受支持服务分别启动一个 Swift sidecar；Qwen 不使用该 sidecar。
+它等待 TCP/readiness 就绪边界，再把真实临时 loopback
+地址和解析后的 AppData 音色路径深度合并进 Python 启动 overlay；外部配置因此不含
+运行时端口。安装、模型进程或 Python 启动任一步骤失败时，刚启动的全部子进程都会
+被停止，并恢复此前配置。managed 子进程意外退出后，后端连接也会立即变为不可用。
+
+完整本地示例见
+[`../examples/local_models_moss_tts.json`](../examples/local_models_moss_tts.json)。
+其中 LLM 与 `server_configs/sample.json` 一致，但 `api_key` 特意留空。SenseVoice
+继续通过现有离线 WebSocket 客户端接收 16 kHz PCM；MOSS 参考音频和生成结果均使用
+48 kHz。
+[`../examples/local_models_mlx.json`](../examples/local_models_mlx.json) 则显式选择
+MLX。[`../examples/local_models_matcha.json`](../examples/local_models_matcha.json)
+则选择中英双语 Matcha HTTP 客户端；sidecar 会把原生 16 kHz 输出重采样为 App
+统一的 48 kHz 单声道 PCM16。
+[`../examples/local_models_qwen3_asr_0_6b_int8.json`](../examples/local_models_qwen3_asr_0_6b_int8.json)
+则仅选择固定版本的 Qwen3-ASR 0.6B INT8 编码器和解码器。
+
+## 配置
+
+release 包不包含默认 XTalk 模型配置。原生文件选择器接收一个外部 JSON 文件；
+Tauri 要求根节点为对象、限制大小不超过 1 MiB、规范化路径，并且只在 AppConfig
+中持久化该路径。配置内容和 provider 凭据仍保留在外部文件中。更换配置时先验证
+新文件，再停止当前 sidecar、启动新 sidecar、持久化成功的选择，最后让 WebView
+重新探测本地服务。
+
+启动消息选择该 JSON 配置，也可以携带顶层 fallback 和 JSON overlay。fallback
+只填充所选配置中完全缺失的 key；显式模型槽位作为完整值保留。随后以 overlay 为
+最高优先级执行通用深度合并。Python 端仍不检查模型类型名称，唯一强制项是把
+`service_config.data_dir` 指向 AppData。配置中的模型缺失、未知或参数错误仍作为
+XTalk 原始配置错误返回。
+
+模型集成测试以 `server_configs/sample.json` 为基础。可选回合检测测试从外部临时
+配置注入完整标准 `type`/`params` 对象。桌面 VAD fallback 使未修改的 sample 配置
+也能完成语音回合。私有模型仓库和凭据属于测试输入，不进入提交的应用配置。
+
+由于核心模型发现机制是动态的，冻结构建会收集已安装的公共 `xtalk.models` 命名空间
+及其包数据。所需可选依赖组通过 `--xtalk-extra` 显式传入构建过程，不在应用行为中
+引入模型类型分支。
+
+## 内置与用户工具
+
+两种来源的目录都包含 Python 文件和 `xtalk_tool.json`。`display_name` 可以是单个
+字符串，也可以是语言字典；`ui` 为可选配置：
+
+```json
+{
+  "display_name": {
+    "zh": "计时器",
+    "en": "Timer"
+  },
+  "entrypoint": "timer_tool:create_tools",
+  "ui": {
+    "entrypoint": "ui/index.html",
+    "update_every_s": 0.5
+  }
+}
+```
+
+对于用户工具，Tauri 生成内部标识，将目录递归复制到
+`AppData/tools/<id>/`，并在 `AppData/tools/registry.json` 中保存该标识和启用状态。
+内置工具保留在只读的 `resources/tools/` 包资源中，由
+`resources/tools/builtin_tools.json` 建立索引；来源、删除权限和默认启用状态属于
+App 元数据，不进入 manifest。内置工具 ID 使用 `builtin:<id>` 命名空间，其启用
+覆盖保存到 `AppData/tool_preferences.json`。
+
+原生删除命令会自行解析工具来源并拒绝内置 ID，删除保护不依赖 WebView。两种来源
+中的可选工具都可以禁用；catalog 标记为必需的内置工具不可禁用。Python sidecar 使用
+同一套 `module:factory` 入口加载每个已启用目录；
+用户工具与内置工具导出同名时优先使用用户实现。工厂必须返回一个列表，其中元素
+可直接交给 `XtalkBuilder.add_agent_tools()`。
+
+配置中的 Agent 会在读取该注册表后构建，因此工具变更通过受控重启 sidecar 生效。
+单个开发者工厂加载失败时会被忽略，不会阻止其余本地服务启动。
+
+当前时间和联网搜索也完全走这套内置工具路径，adapter 不再通过私有分支注册它们。
+当前时间在 catalog 中声明 `can_disable=false`；即使旧偏好文件把它写成关闭，Rust
+注册表与 Python loader 也会强制启用。联网搜索默认关闭，直接使用 XTalk 公开的
+Serper 异步工具工厂。
+
+工具的外部凭据属于 App 元数据，不属于工具 manifest。
+`resources/credentials.json` 把稳定的凭据 ID 绑定到环境变量别名、依赖它的内置工具
+ID，以及注入 sidecar 时使用的规范环境变量名。受信任的 Rust 层先解析环境变量，
+再读取操作系统凭据管理器；各目标分别使用 macOS Keychain、Windows Credential
+Manager 和 Linux Secret Service。WebView 只能得到 `configured`、来源与存储可用
+状态；密钥仅作为保存命令的输入，绝不从原生层返回。
+
+sidecar 启动或重启时，Rust 只为已启用的工具解析所需凭据，并直接加入子进程环境。
+密钥不会进入逐行 JSON 启动消息、命令行参数、AppData、工具 manifest 或日志。
+缺少可解析凭据时原生层会拒绝启用对应工具；删除系统凭据后，如果不存在优先级更高
+的环境变量，还会关闭依赖工具。系统凭据服务不支持或不可用的平台仍可通过环境变量
+使用工具；App 不提供易失的“仅本次运行”凭据模式。
+
+Codex 内置工具由一个 catalog 条目和一个 manifest 表示，其工厂一次返回查询、新建、
+继续、列出模型、切换模型和删除六个原生异步工具。因此它只能整体启用或禁用，不存在
+按导出工具保存的偏好；默认状态为禁用。所有业务线程与 turn 都通过官方 Python SDK 使用
+`Sandbox.full_access` 与 SDK 的无提示审批模式，`cwd` 可以是任意真实存在的本地
+目录，并在每次 turn 显式重用该 session 保存的模型与推理强度。条件式路由规则直接
+写入工具描述，不向 Agent 的 developer instructions 注入 Codex 专用指令。
+
+Python SDK 随 App 打包，但明确排除 `openai-codex-cli-bin`。首次使用时，内置工具从
+继承的 `PATH` 以及常见包管理器安装位置解析用户安装的 Codex，并要求
+`codex --version` 探测成功。验证后的绝对路径通过 `CodexConfig.codex_bin` 传给
+SDK；如果命中 npm shim，还会把该目录前置到子进程 `PATH`，确保对应的 Node.js 可被
+找到。已验证的位置会在 sidecar 进程生命周期内缓存；只有该可执行文件消失或失去
+执行权限后才重新查找。没有可用候选时，工具返回明确的安装提示。
+
+App 侧 session 索引是
+`AppData/tool-data/codex/codex_sessions.sqlite3`。其中只保存 SDK thread ID、精简标题与
+摘要、工作目录、模型、推理强度、状态和时间戳；真实 thread 对话记录仍由 SDK 负责。
+自然语言查询先把活动索引机械限制到最多 30 个候选，再仅把该 JSON 快照交给使用严格
+输出 schema 的临时 ephemeral 查询线程；返回 ID 必须是候选 ID 的子集。删除操作先
+归档 SDK thread，再在 App 索引中将其移出活动池；每个 session 的异步锁会串行化
+继续、改配置和归档操作。
+
+已订阅异步工具的进度遵循默认 Agent 对话循环：用户结束说话后，每次订阅更新都会
+唤醒一次自然语言报告；用户仍在说话时忽略中间更新，只延后最终结果。Tool UI broker
+通过独立通道保留每个仍在运行的状态以及有界的不可变 emit 历史，并通过受认证的
+App HTTP 快照重放；即使工具执行早于 WebView 开始轮询，界面仍会显示 live 与
+history 工具卡片。
+
+可选 UI 入口是最大一 MiB 的自包含 HTML，与 Python 工具入口保持分离。UI 通过注册
+`window.xtalkToolUI.status(callback)` 和/或
+`window.xtalkToolUI.emit(callback)` 声明能力；没有注册某个 hook，就表示该工具没有
+对应的 live UI 或 history UI。`update_every_s` 控制 live 状态轮询，默认为一秒；
+`-1` 表示禁用周期轮询，其余取值范围为 0.1 到 3600 秒。
+
+App 在注册表加载时仅包装原生 `AsyncTool` 类。包装层保持原生命周期调用和返回值
+不变，只观察 `astatus()`，再通过受启动 token 保护的 loopback HTTP 快照发布只读
+事件。持久化聊天会话处于活动状态时，WebView 每 350 ms 轮询一次该端点；旧的 App
+WebSocket 端点继续保留，供兼容客户端使用。live 事件跟随正在运行的调用；原工具的
+initial emit 和每次 update emit 都会产生独立的 history 事件，其中保存当次 emit
+消息和当时的 status。history 快照不会变化，每个会话最多保留 200 条，并按持久化
+session ID 保存到 WebView AppData。broker 还会在当前进程内为每个会话保留最近
+200 条 emit 用于重连恢复；WebView 通过稳定的调用 ID 和序号去重。live 状态只保存
+在内存中。完成和取消都会发布终态 history 事件；取消事件使用
+`outcome="cancelled"`。即使最终 status 观察被错过，任一终态事件也会移除对应
+live 卡片。
+
+对话顶部不再重复显示 XTalk 产品名。没有支持 live UI 的工具运行时，顶部中心保持
+空白；有工具运行时显示一条默认收起的紧凑状态栏，其中包含运行数量和最新状态。
+用户点击后可展开查看所有当前 live UI。live 卡片不再插入消息时间线，history 卡片
+仍固定在对应 emit 的历史位置；同一次调用的终态 emit 会替换此前卡片，避免工具完成
+或取消后残留 Running 卡片。live 面板和消息时间线都使用增量 DOM 协调，在状态更新期间
+保留 iframe 的浏览上下文，避免画面闪烁。
+
+每张卡片使用独立的 `sandbox="allow-scripts"` iframe。注入的 CSP 阻止外部资源和
+网络 API，bridge 还会拦截链接和表单行为；frame 的不透明 origin 不具备 Tauri
+权限。frame 只能接收 status/emit 数据并报告期望高度，不能调用、停止或以其他方式
+操作工具。host 会等文档完成 capability 握手后再发送待处理数据，并保留事件直到
+frame 按 `callId` 和 `sequence` 确认接收；有限的短间隔重试可避免 WKWebView 初始
+的 `about:blank` load 或 ready 边界竞态提前消耗事件。为保留 App 顶层的严格
+CSP，host 会把
+每个准备好的文档放在一个
+仅在后端进程存活期间有效且可幂等读取的高熵 loopback ticket 后面，以兼容
+WKWebView 的内部重载；ticket 只保存在容量受限的内存中，启动 token 不会进入
+iframe URL 或文档。host 控制卡片完整可用宽度，并把 live
+卡片高度限制在 120–420 px、
+history 卡片限制在 80–600 px；两者还同时受窗口高度 60% 的上限约束。
+
+## 关闭
+
+未启用语音唤醒时，关闭主窗口会执行完整退出流程。启用后，关闭请求会把窗口隐藏
+到系统托盘，并释放当前会话使用的麦克风。托盘中的“退出”会停止唤醒词进程，再调用
+受认证的 Python sidecar shutdown endpoint 并在有限时间内等待；若优雅关闭失败，只
+终止 App 自己启动的子进程。随后按启动顺序的逆序停止 managed 模型进程。
+
+## Phase 0 限制
+
+- 外部模型配置必须一直保留在所选路径。若未来进入平台沙箱分发，还需要保存安全
+  作用域书签，才能继续使用这种路径持久化方式。
+- 开发环境和常规 bundle 中，PyInstaller `onedir` 支持文件与 sidecar 相邻；macOS
+  app bundle 按 bootloader 要求将其放入 `Contents/Frameworks`。运行时验证会拒绝
+  不完整布局。
+- 工具额外依赖管理、本地增强器和 provider 设置属于后续阶段；开发者工具目录当前
+  可使用冻结 sidecar 中已经存在的 Python 包。

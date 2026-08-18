@@ -1,10 +1,9 @@
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterable, TypedDict, AsyncIterator, Callable, Any, Union, TypeVar
+from typing import Iterable, TypedDict, AsyncIterator, Any, Union, TypeVar
 
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolCall
-from langchain_core.tools import BaseTool
 
 from .tools.utils import ToolCallResult
 from ..registry import model_type
@@ -54,6 +53,7 @@ class ChatHistory:
 
         self._messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
         self._playback_ai_meta: dict[int, PlaybackAIMessageMeta] = {}
+        self._playback_ai_indexes_by_response: dict[str, int] = {}
 
     @property
     def messages(self) -> list[BaseMessage]:
@@ -72,7 +72,13 @@ class ChatHistory:
 
         self._messages.append(message)
 
-    def append_or_update_ai_message(self, full_text: str, *, final: bool) -> None:
+    def append_or_update_ai_message(
+        self,
+        full_text: str,
+        *,
+        final: bool,
+        response_id: str | None = None,
+    ) -> None:
         """Append or merge one playback-managed assistant message.
 
         Parameters
@@ -81,8 +87,19 @@ class ChatHistory:
             The cumulative assistant text confirmed by playback.
         final:
             Whether this update closes the playback-managed assistant message.
+        response_id:
+            Stable identifier for the assistant response. When present, updates
+            replace the full text of that exact response instead of inferring a
+            continuation from message position and text prefixes.
         """
 
+        if response_id:
+            self._append_or_update_identified_ai_message(
+                response_id,
+                full_text,
+                final=final,
+            )
+            return
         if not full_text:
             return
 
@@ -112,6 +129,31 @@ class ChatHistory:
                 return
 
         self._append_playback_ai_message(full_text, final=final)
+
+    def _append_or_update_identified_ai_message(
+        self,
+        response_id: str,
+        full_text: str,
+        *,
+        final: bool,
+    ) -> None:
+        """Apply one cumulative update to the identified assistant response."""
+
+        existing_index = self._playback_ai_indexes_by_response.get(response_id)
+        if existing_index is not None:
+            message = self._messages[existing_index]
+            meta = self._playback_ai_meta[existing_index]
+            if not isinstance(message, AIMessage) or (meta.final and not final):
+                return
+            message.content = full_text
+            meta.final = final
+            meta.prefix = None
+            return
+
+        if not full_text:
+            return
+        message_index = self._append_playback_ai_message(full_text, final=final)
+        self._playback_ai_indexes_by_response[response_id] = message_index
 
     def _append_playback_ai_message(self, content: str, *, final: bool) -> int:
         """Append one playback-managed assistant message."""
@@ -313,13 +355,3 @@ class Agent(ABC):
             Conversation history or ``None``.
         """
         return None
-
-    def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None:
-        """Attach tools to the agent.
-
-        Parameters
-        ----------
-        tools : list[BaseTool | Callable[[], BaseTool]]
-            Tool instances or factories that produce tool instances.
-        """
-        pass

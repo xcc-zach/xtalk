@@ -140,7 +140,7 @@ Closes the active runtime connection and audio resources.
 
 > **getSessions**(): `Promise`&lt;`SessionSummary`[]&gt;
 
-Defined in: session/types.ts:143
+Defined in: session/types.ts:152
 
 Fetches available persisted sessions for the current user.
 
@@ -252,11 +252,36 @@ Opens the session runtime and performs authentication if needed.
 
 ***
 
+### sendText()
+
+> **sendText**(`text`): `Promise`&lt;`void`&gt;
+
+Defined in: session/types.ts:141
+
+Submits a finalized text turn through the connected realtime session.
+
+The promise resolves after a `finish_asr` action echoes the normalized
+text with `origin` set to `text`.
+
+#### Parameters
+
+##### text
+
+`string`
+
+User-authored text for the next turn.
+
+#### Returns
+
+`Promise`&lt;`void`&gt;
+
+***
+
 ### switchSession()
 
 > **switchSession**(`sessionId`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:149
+Defined in: session/types.ts:158
 
 Switches the active conversation to a persisted session or starts a new one.
 
@@ -278,7 +303,7 @@ Target session identifier, or `null` to start a new session.
 
 > **uploadFile**(`file`, `endpoint?`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:139
+Defined in: session/types.ts:148
 
 Uploads a file into the current session context.
 

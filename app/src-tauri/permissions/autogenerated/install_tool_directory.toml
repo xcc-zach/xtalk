@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-tool-directory"
+description = "Enables the install_tool_directory command without any pre-configured scope."
+commands.allow = ["install_tool_directory"]
+
+[[permission]]
+identifier = "deny-install-tool-directory"
+description = "Denies the install_tool_directory command without any pre-configured scope."
+commands.deny = ["install_tool_directory"]

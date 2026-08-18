@@ -4,14 +4,14 @@ EnhancerManager
 
 Backend audio enhancer: when the frontend keeps raw audio (pure_frontend mode),
 this manager runs the configured speech enhancer to denoise/enhance frames.
-It also serializes downstream audio-frame handling so bursty frame arrival does
-not become concurrent VAD/ASR/turn-detector processing.
+It also serializes downstream enhanced-audio handling so bursty frame arrival
+does not become concurrent VAD/speaker/turn-detector processing.
 
 Flow:
 - Subscribe to `AudioFrameReceived`.
 - If a speech enhancer exists, call `enhance()`; otherwise pass through.
 - Queue raw frames and process them in order on a single worker.
-- Publish `EnhancedAudioFrameReceived` for ASR/VAD.
+- Publish `EnhancedAudioFrameReceived` for VAD, speaker, and turn detection.
 - Flush buffered enhancer state on `VADSpeechEnd`.
 
 Notes:
@@ -31,7 +31,7 @@ from typing import Any, Optional
 import numpy as np
 
 from ...models import Models, SpeechEnhancer
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     EnhancedAudioFrameReceived,
@@ -358,7 +358,7 @@ class EnhancerManager(Manager):
                 audio_data=audio_data,
                 sample_rate=sample_rate,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     # ----------------------------

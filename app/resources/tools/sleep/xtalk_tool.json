@@ -1,0 +1,7 @@
+{
+  "display_name": {
+    "zh": "沉睡模式",
+    "en": "Sleep Mode"
+  },
+  "entrypoint": "sleep_tool:create_tools"
+}

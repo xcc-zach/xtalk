@@ -1,4 +1,4 @@
-*Experimental functionality*
+*Experimental feature*
 
 X-Talk can bridge multiple frontend sessions into one shared browser-side audio bus so that bots hear a continuous audio stream instead of only microphone input.
 
