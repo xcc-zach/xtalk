@@ -54,13 +54,15 @@ class ByteQueue:
                 self._buffer = self._buffer[bytes_to_return:]
             return result
 
-    async def wait_on_new_bytes(self):
-        """Wait until new bytes come"""
-        self._new_bytes_event.clear()
-        await self._new_bytes_event.wait()
+    async def wait_on_new_bytes(self) -> None:
+        """Wait until new bytes arrive or the wait is interrupted."""
 
-    async def interrupt_wait(self):
+        await self._new_bytes_event.wait()
+        self._new_bytes_event.clear()
+
+    async def interrupt_wait(self) -> None:
         """Interrupt any waiting on new bytes."""
+
         self._new_bytes_event.set()
 
     async def size(self):
