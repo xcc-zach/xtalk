@@ -7,17 +7,13 @@ locally because Phase 0 does not yet define release artifact locations.
 A release manifest must contain the version, filename, source label, and
 SHA-256 of both the XTalk wheel and the `xtalk-client` package.
 
-`audio-models.lock.json` is checked in with the application. It pins the
-upstream revision, download URL, package-relative filename, license, and
-SHA-256 for each local audio model that must be available without a runtime
-download.
-
-`managed-models.lock.json` is also checked in, but its files are not bundled.
+`managed-models.lock.json` is checked in, but its model files are not bundled.
 It pins every path, byte size, SHA-256, and immutable HTTPS URL needed by the
-optional SenseVoice, Qwen3-ASR, and MOSS services. Tauri validates this
-manifest and installs only services selected through a supported `managed://`
-URL. CPU, CUDA, and Qwen Core ML use pinned ONNX snapshots; Apple Silicon MLX
-uses separately pinned safetensor snapshots selected with `?backend=mlx`.
+required Silero VAD model and optional local-model services. Tauri downloads
+and verifies Silero before backend startup, and installs the other services
+only when selected through a supported `managed://` URL. CPU, CUDA, and Qwen
+Core ML use pinned ONNX snapshots; Apple Silicon MLX uses separately pinned
+safetensor snapshots selected with `?backend=mlx`.
 
 `native-runtimes.lock.json` pins the official shared sherpa-onnx archive for
 each supported macOS, Linux, and Windows x64/ARM64 target. Each archive carries

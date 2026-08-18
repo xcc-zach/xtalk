@@ -117,10 +117,10 @@ the picker:
 XTALK_APP_CONFIG_PATH=/absolute/path/to/server_configs/sample.json npm run tauri dev
 ```
 
-Every launch also resolves the bundled `models/audio/silero_vad.onnx` resource
-and sends a top-level VAD fallback to the sidecar. The selected configuration
-wins when it already declares `vad`; otherwise the fallback loads `SileroVAD`
-from the packaged absolute model path.
+On first use, the shell downloads the locked Silero VAD model into the
+application data directory and verifies its size and SHA-256. Later launches
+reuse the cached file. The shell sends a top-level VAD fallback to the sidecar;
+the selected configuration wins when it already declares `vad`.
 
 The selected path and launch token are sent to the sidecar only in its first
 stdin JSON line. They are never added to process arguments or diagnostic
