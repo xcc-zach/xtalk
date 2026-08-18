@@ -28,10 +28,7 @@ from config_path import require_test_config_path, resolve_test_config_path
 APP_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = APP_ROOT.parent
 VAD_MODEL = Path(
-    os.environ.get(
-        "XTALK_TEST_VAD_MODEL_PATH",
-        str(APP_ROOT / "resources" / "models" / "audio" / "silero_vad.onnx"),
-    )
+    os.environ.get("XTALK_TEST_VAD_MODEL_PATH", "silero_vad.onnx")
 ).expanduser().resolve()
 VOICE_FIXTURE = (
     APP_ROOT

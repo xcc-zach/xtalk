@@ -276,16 +276,8 @@ def test_resolve_app_relative_rejects_escape() -> None:
         module.resolve_app_relative("../server_configs/sample.json")
 
 
-def test_checked_in_audio_model_manifest_matches_packaged_model() -> None:
-    """Verify the pinned Silero model record and packaged file digest."""
-
-    module = load_script("verify_resources")
-
-    module.verify_audio_model_manifest()
-
-
-def test_managed_model_manifest_pins_optional_downloads() -> None:
-    """Validate managed model URLs, sizes, and SHA-256 records."""
+def test_managed_model_manifest_pins_runtime_downloads() -> None:
+    """Validate required and optional model download records."""
 
     module = load_script("verify_resources")
 

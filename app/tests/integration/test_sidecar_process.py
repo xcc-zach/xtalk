@@ -18,7 +18,6 @@ from config_path import require_test_config_path
 
 APP_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = APP_ROOT.parent
-VAD_MODEL = APP_ROOT / "resources" / "models" / "audio" / "silero_vad.onnx"
 LAUNCH_TOKEN = "sidecar-integration-token-at-least-32-bytes"
 
 
@@ -171,7 +170,11 @@ def request_json(
     return payload
 
 
-def _exercise_sidecar(config_path: Path, tmp_path: Path) -> None:
+def _exercise_sidecar(
+    config_path: Path,
+    tmp_path: Path,
+    vad_model: Path | None = None,
+) -> None:
     """Start one sidecar configuration and stop it through the control API."""
 
     overlay = json.loads(os.environ.get("XTALK_TEST_CONFIG_OVERLAY", "{}"))
@@ -183,14 +186,16 @@ def _exercise_sidecar(config_path: Path, tmp_path: Path) -> None:
         "config_path": str(config_path),
         "data_dir": str(tmp_path),
         "origins": ["tauri://localhost"],
-        "config_fallbacks": {
-            "vad": {
-                "type": "SileroVAD",
-                "params": {"model_path": str(VAD_MODEL)},
-            },
-        },
+        "config_fallbacks": {},
         "config_overlay": overlay,
     }
+    if vad_model is not None:
+        launch["config_fallbacks"] = {
+            "vad": {
+                "type": "SileroVAD",
+                "params": {"model_path": str(vad_model)},
+            },
+        }
     environment = dict(os.environ)
     python_path = os.pathsep.join(
         [
@@ -304,5 +309,11 @@ def test_sample_sidecar_ready_health_and_shutdown(tmp_path: Path) -> None:
     if os.environ.get("XTALK_RUN_MODEL_TESTS") != "1":
         pytest.skip("set XTALK_RUN_MODEL_TESTS=1 to start the configured sidecar")
 
+    model_value = os.environ.get("XTALK_TEST_VAD_MODEL_PATH")
+    if not model_value:
+        pytest.skip("set XTALK_TEST_VAD_MODEL_PATH to a downloaded Silero model")
+    vad_model = Path(model_value).expanduser().resolve()
+    if not vad_model.is_file():
+        pytest.skip(f"Silero VAD model is unavailable: {vad_model}")
     config_path = require_test_config_path()
-    _exercise_sidecar(config_path, tmp_path)
+    _exercise_sidecar(config_path, tmp_path, vad_model)

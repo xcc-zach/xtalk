@@ -14,15 +14,9 @@ from backend.xtalk_adapter import build_xtalk_runtime
 from config_path import require_test_config_path
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-VAD_MODEL = (
-    REPOSITORY_ROOT
-    / "app"
-    / "resources"
-    / "models"
-    / "audio"
-    / "silero_vad.onnx"
-)
+VAD_MODEL = Path(
+    os.environ.get("XTALK_TEST_VAD_MODEL_PATH", "silero_vad.onnx")
+).expanduser().resolve()
 
 
 def build_launch_config(tmp_path: Path, config_path: Path) -> StartupConfig:
@@ -94,6 +88,8 @@ def test_configured_runtime_builds_from_sample(tmp_path: Path) -> None:
 
     if os.environ.get("XTALK_RUN_MODEL_TESTS") != "1":
         pytest.skip("set XTALK_RUN_MODEL_TESTS=1 to instantiate configured models")
+    if not VAD_MODEL.is_file():
+        pytest.skip(f"Silero VAD model is unavailable: {VAD_MODEL}")
     config_path = require_test_config_path()
     effective = build_effective_config(build_launch_config(tmp_path, config_path))
     runtime = build_xtalk_runtime(effective)
