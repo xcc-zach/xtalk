@@ -46,6 +46,7 @@ const MOSS_TTS_MLX_ID: &str = "moss-tts-nano-mlx";
 const MATCHA_TTS_ID: &str = "matcha-icefall-zh-en";
 const MTD_ID: &str = "moss-transcribe-diarize";
 const CAMPPLUS_ID: &str = "campplus";
+const SILERO_VAD_ID: &str = "silero-vad";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
 const QWEN3_ASR_06B_INT8_URL: &str = "managed://qwen3-asr-0.6b-int8";
@@ -300,20 +301,7 @@ impl ManagedServices {
 
         let install_root = data_dir.join("models").join("managed");
         fs::create_dir_all(&install_root)?;
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(DOWNLOAD_TIMEOUT)
-            .user_agent("XTalk-Desktop/0.1")
-            .redirect(Policy::custom(|attempt| {
-                if attempt.url().scheme() != "https" {
-                    attempt.stop()
-                } else if attempt.previous().len() >= 10 {
-                    attempt.error("too many managed model download redirects")
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()?;
+        let client = download_client()?;
 
         let result = services
             .start_requested(app, &request, &manifest, &install_root, &client)
@@ -838,6 +826,57 @@ impl ManagedServices {
         stop_managed_children(children);
         Ok(())
     }
+}
+
+/// Downloads, verifies, and caches the Silero VAD model required by the backend.
+pub(crate) async fn ensure_silero_vad_model(
+    app: &AppHandle,
+    data_dir: &Path,
+) -> Result<PathBuf, ManagedError> {
+    let manifest_path = app
+        .path()
+        .resolve(MANIFEST_RESOURCE, BaseDirectory::Resource)?;
+    let manifest: ManagedManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
+    if manifest.schema_version != 1 {
+        return Err(ManagedError::UnsupportedManifest);
+    }
+    let service = find_service(&manifest, SILERO_VAD_ID)?;
+    let total_bytes = service.files.iter().map(|file| file.size).sum();
+    emit_managed_progress(app, "checking", Some(service), 1, 1, 0, total_bytes, None);
+    let client = download_client()?;
+    let model_root = ensure_service_installed(
+        &client,
+        &data_dir.join("models").join("managed"),
+        service,
+        app,
+        1,
+        1,
+    )
+    .await?;
+    emit_managed_progress(app, "ready", Some(service), 1, 1, 0, 0, None);
+    emit_managed_progress(app, "complete", None, 1, 1, 0, 0, None);
+    let model_path = safe_join(&model_root, "silero_vad.onnx")?;
+    if !model_path.is_file() {
+        return Err(ManagedError::VerificationFailed(SILERO_VAD_ID.to_owned()));
+    }
+    Ok(model_path)
+}
+
+fn download_client() -> Result<Client, ManagedError> {
+    Ok(Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(DOWNLOAD_TIMEOUT)
+        .user_agent("XTalk-Desktop/0.1")
+        .redirect(Policy::custom(|attempt| {
+            if attempt.url().scheme() != "https" {
+                attempt.stop()
+            } else if attempt.previous().len() >= 10 {
+                attempt.error("too many managed model download redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()?)
 }
 
 #[cfg(unix)]
