@@ -2,6 +2,18 @@
   "schema_version": 1,
   "services": [
     {
+      "id": "silero-vad",
+      "version": "76e3dc408eb2a5c655c34e230d2d5459b4439daa",
+      "files": [
+        {
+          "path": "silero_vad.onnx",
+          "size": 2327524,
+          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/76e3dc408eb2a5c655c34e230d2d5459b4439daa/src/silero_vad/data/silero_vad.onnx"
+        }
+      ]
+    },
+    {
       "id": "qwen3-asr-0.6b-int8",
       "version": "de9e449eb376dcb472c1ce8141fbae8d524fabbd+c69fb1666ccb59a82c09840c511a6c894e6a2482",
       "files": [

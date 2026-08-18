@@ -28,7 +28,10 @@ use tokio::{
 
 use crate::{
     credentials::{self, CredentialError},
-    managed::{inspect_model_config, ManagedError, ManagedModelPlan, ManagedServices},
+    managed::{
+        ensure_silero_vad_model, inspect_model_config, ManagedError, ManagedModelPlan,
+        ManagedServices,
+    },
 };
 
 const SIDECAR_NAME: &str = "app-backend";
@@ -37,7 +40,6 @@ const PROTOCOL_VERSION: u16 = 1;
 const MODEL_CONFIG_SELECTION_FILE: &str = "model-config-selection.json";
 const MODEL_CONFIG_SELECTION_VERSION: u16 = 1;
 const MAX_MODEL_CONFIG_BYTES: u64 = 1024 * 1024;
-const VAD_MODEL_RESOURCE: &str = "models/audio/silero_vad.onnx";
 const DESKTOP_VAD_THRESHOLD: f64 = 0.7;
 const BUILTIN_TOOLS_RESOURCE: &str = "tools";
 const RECOMMENDED_MODEL_CONFIG_RESOURCE: &str = "examples/local_models_matcha.json";
@@ -297,13 +299,13 @@ impl BackendManager {
     /// Starts the packaged sidecar and completes its readiness handshake.
     async fn start(app: &AppHandle, config_path: PathBuf) -> Result<Arc<Self>, BackendError> {
         let token = generate_launch_token()?;
-        let vad_model_path = resolve_required_resource(app, VAD_MODEL_RESOURCE, false)?;
         let builtin_tools_root = resolve_required_resource(app, BUILTIN_TOOLS_RESOURCE, true)?;
         resolve_required_resource(app, SIDECAR_RUNTIME_RESOURCE, true)?;
         let sidecar_directory = sidecar_working_directory()?;
         validate_sidecar_runtime(&sidecar_directory)?;
         let data_dir = app.path().app_data_dir()?;
         std::fs::create_dir_all(&data_dir)?;
+        let vad_model_path = ensure_silero_vad_model(app, &data_dir).await?;
         let skipped_credential_environment = configured_credential_environment(&config_path)?;
         let credential_environment =
             credentials::sidecar_environment(app, skipped_credential_environment).await?;

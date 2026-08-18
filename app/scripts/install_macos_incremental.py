@@ -293,10 +293,6 @@ def resource_file_mappings() -> tuple[tuple[Path, Path], ...]:
             Path("licenses/moss-transcribe-cpp-LICENSE.txt"),
         ),
         (
-            Path("resources/models/audio/silero_vad.onnx"),
-            Path("models/audio/silero_vad.onnx"),
-        ),
-        (
             Path("examples/local_models_matcha.json"),
             Path("examples/local_models_matcha.json"),
         ),

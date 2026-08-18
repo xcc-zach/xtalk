@@ -66,7 +66,6 @@
       "../resources/tools/": "tools/",
       "../resources/managed-runtime/ort/": "managed-runtime/ort/",
       "../resources/managed-runtime/mlx-swift_Cmlx.bundle/": "mlx-swift_Cmlx.bundle/",
-      "../resources/models/audio/silero_vad.onnx": "models/audio/silero_vad.onnx",
       "../resources/models/wake-word/": "models/wake-word/",
       "binaries/app-backend-runtime/": "app-backend-runtime/"
     },

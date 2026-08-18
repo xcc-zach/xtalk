@@ -25,6 +25,7 @@ resources/managed-runtime/sherpa/*
 resources/models/wake-word/*.onnx
 resources/models/wake-word/tokens.txt
 resources/models/wake-word/en.phone
+resources/models/audio/*.onnx
 !resources/managed-runtime/ort/README.md
 src-tauri/gen/
 src-tauri/target/
