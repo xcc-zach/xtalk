@@ -322,7 +322,7 @@ let pendingWakeWordActivation = false;
 let wakeWordBackendRecovery = false;
 let backgroundingRequested = false;
 let pendingSleepRequest = false;
-let sleepOperation = false;
+let backgroundOperation = false;
 let recommendedConfigPath: string | null = null;
 let credentials: NativeCredentialDefinition[] = [];
 let selectedCredentialId: string | null = null;
@@ -1850,6 +1850,8 @@ function renderSnapshot(snapshot: DesktopSessionSnapshot): void {
   maybeCompleteSleepRequest(snapshot);
   if (
     !pendingWakeWordActivation &&
+    !sessionOperation &&
+    !backgroundOperation &&
     snapshot.connectionState === "disconnected" &&
     (previousConnectionState === "connected" ||
       previousConnectionState === "reconnecting")
@@ -3260,7 +3262,7 @@ async function initializeNativeWakeWord(): Promise<void> {
     backgroundingRequested = true;
     pendingWakeWordActivation = false;
     pendingSleepRequest = false;
-    void disconnectSession();
+    void enterSleepMode();
   });
   await refreshWakeWordSettings();
 }
@@ -3340,7 +3342,7 @@ async function connectSession(startNewConversation = false): Promise<void> {
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
     if (backgroundingRequested) {
-      void disconnectSession();
+      void enterSleepMode();
     }
   }
 }
@@ -3352,18 +3354,23 @@ async function disconnectSession(): Promise<void> {
     return;
   }
   if (!activeAdapter) {
-    backgroundingRequested = false;
-    await resumeWakeWordAfterConversation();
+    if (backgroundingRequested) {
+      void enterSleepMode();
+    } else {
+      await resumeWakeWordAfterConversation();
+    }
     return;
   }
   if (activeAdapter.snapshot.connectionState === "disconnected") {
-    backgroundingRequested = false;
-    await resumeWakeWordAfterConversation();
+    if (backgroundingRequested) {
+      void enterSleepMode();
+    } else {
+      await resumeWakeWordAfterConversation();
+    }
     return;
   }
 
   sessionOperation = true;
-  backgroundingRequested = false;
   showError(null);
   updateControls(activeAdapter.snapshot);
   try {
@@ -3371,10 +3378,13 @@ async function disconnectSession(): Promise<void> {
   } catch (error) {
     showError("voice.closeFailed", { error });
   } finally {
-    backgroundingRequested = false;
     sessionOperation = false;
     updateControls(activeAdapter.snapshot);
-    await resumeWakeWordAfterConversation();
+    if (backgroundingRequested) {
+      void enterSleepMode();
+    } else {
+      await resumeWakeWordAfterConversation();
+    }
   }
 }
 
@@ -3393,7 +3403,7 @@ function handleDesktopToolCall(toolCall: DesktopToolCall): void {
 function maybeCompleteSleepRequest(snapshot: DesktopSessionSnapshot): void {
   if (
     !pendingSleepRequest ||
-    sleepOperation ||
+    backgroundOperation ||
     snapshot.streamState !== "idle"
   ) {
     return;
@@ -3420,16 +3430,38 @@ function maybeCompleteSleepRequest(snapshot: DesktopSessionSnapshot): void {
 }
 
 async function enterSleepMode(): Promise<void> {
-  if (sleepOperation) {
+  backgroundingRequested = true;
+  pendingSleepRequest = false;
+  if (backgroundOperation || sessionOperation) {
     return;
   }
-  sleepOperation = true;
+  backgroundOperation = true;
+  sessionOperation = true;
+  const activeAdapter = adapter;
+  showError(null);
+  updateControls(activeAdapter?.snapshot ?? latestSnapshot);
   try {
+    if (
+      activeAdapter &&
+      activeAdapter.snapshot.connectionState !== "disconnected"
+    ) {
+      await activeAdapter.disconnect();
+    }
+    const settings = await resumeNativeWakeWord();
+    renderWakeWordSettings(settings);
+    if (!settings.enabled || settings.state !== "listening") {
+      throw new Error("wake-word detector did not enter listening state");
+    }
     await backgroundNativeMainWindow();
+    backgroundingRequested = false;
   } catch (error) {
+    backgroundingRequested = false;
+    await refreshWakeWordSettings().catch(() => undefined);
     showError("sleep.backgroundFailed", { error });
   } finally {
-    sleepOperation = false;
+    sessionOperation = false;
+    backgroundOperation = false;
+    updateControls(activeAdapter?.snapshot ?? latestSnapshot);
   }
 }
 
