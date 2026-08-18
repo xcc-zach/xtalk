@@ -9,7 +9,7 @@ from typing import Any
 
 from ...models import Agent, Models, SpeakerDiarization
 from ...models.agents import AgentContext
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRResultFinal,
     ASRResultPartial,
@@ -68,7 +68,7 @@ class LLMAgentContextManager(Manager):
     async def _handle_asr_result_final(self, event: ASRResultFinal) -> None:
         """Forward ``ASRResultFinal`` into the agent."""
 
-        if self.multi_speaker_enabled:
+        if self.multi_speaker_enabled and event.origin != "text":
             return
         await self._accept_event_context(event, context_type="asr_final")
 
@@ -156,7 +156,7 @@ class LLMAgentContextManager(Manager):
                     stream=self.llm_agent.async_accept(context),
                     persistent=context_type == "loop",
                 ),
-                wait_for_completion=True,
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         except Exception as e:
             logger.warning(

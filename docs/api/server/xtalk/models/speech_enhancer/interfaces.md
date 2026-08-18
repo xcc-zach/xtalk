@@ -19,7 +19,7 @@ Inputs and outputs use PCM 16-bit mono audio bytes at 16 kHz.
 #### enhance
 
 ```python
-def enhance(self, audio: bytes) -> bytes
+def enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Enhance an audio frame.
@@ -28,6 +28,10 @@ Enhance an audio frame.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### Returns
 
@@ -50,7 +54,7 @@ Flush any internally buffered audio.
 #### async_enhance
 
 ```python
-async def async_enhance(self, audio: bytes) -> bytes
+async def async_enhance(self, audio: bytes, far: bytes) -> bytes
 ```
 
 Asynchronously enhance audio.
@@ -59,6 +63,10 @@ Asynchronously enhance audio.
 
 - `audio` (`bytes`)
   PCM 16-bit mono audio bytes at 16 kHz.
+- `far` (`bytes`)
+  Far-end reference PCM 16-bit mono audio bytes at 16 kHz. The
+  upstream audio pipeline guarantees that it has the same byte length
+  as ``audio``.
 
 ##### Returns
 

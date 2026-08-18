@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "whiteboard",
+  "description": "Allows the global whiteboard window to read the backend connection for polling.",
+  "windows": [
+    "whiteboard"
+  ],
+  "permissions": [
+    "allow-get-backend-connection",
+    "core:window:allow-set-title"
+  ]
+}

@@ -2,9 +2,14 @@ export { Conversation };
 export type { ConversationMessage, ConversationState, ConversationUser };
 
 type ConversationMessage = {
+    /** Source role used for display and incremental update behavior. */
     role: "user" | "assistant" | "info";
+    /** Plain-text message body. */
     content: string;
+    /** Whether this message no longer accepts incremental updates. */
     final?: boolean;
+    /** Stable server identifier for an assistant response. */
+    responseId?: string;
 }
 
 type ConversationUser = {
@@ -54,6 +59,7 @@ type ConversationState = ReturnType<typeof defaultConversation>;
 class Conversation {
     private _state: ConversationState = defaultConversation();
     private messagePrefixes: Array<string | undefined> = [];
+    private assistantResponseIndexes = new Map<string, number>();
     private stateChangeCallbacks = new Set<(state: ConversationState) => void>();
     private fullAudioChunkCallback: (pcmChunkInt16: ArrayBuffer, sampleRate: number) => void = (_chunk, _sr) => { };
 
@@ -99,6 +105,12 @@ class Conversation {
             final: true,
         }));
         this.messagePrefixes = this._state.messages.map(() => undefined);
+        this.assistantResponseIndexes.clear();
+        this._state.messages.forEach((message, index) => {
+            if (message.role === "assistant" && message.responseId) {
+                this.assistantResponseIndexes.set(message.responseId, index);
+            }
+        });
         this._state.streamState = "idle";
         this._state.thought = "";
         this._state.caption = "";
@@ -125,15 +137,41 @@ class Conversation {
 
         if (lastMessage?.role === message.role && !lastMessage.final) {
             const prefix = this.messagePrefixes[lastIndex];
-            if (prefix && message.content.startsWith(prefix)) {
-                lastMessage.content = message.content.slice(prefix.length);
-            } else {
-                lastMessage.content = message.content;
+            const fullContent = `${prefix ?? ""}${lastMessage.content}`;
+            if (message.role === "assistant") {
+                if (message.content.startsWith(fullContent)) {
+                    lastMessage.content = prefix
+                        ? message.content.slice(prefix.length)
+                        : message.content;
+                    lastMessage.final = final;
+                    this.notifyStateChange();
+                    return;
+                }
+                if (fullContent.startsWith(message.content)) {
+                    if (final) {
+                        lastMessage.final = true;
+                        this.messagePrefixes[lastIndex] = undefined;
+                    }
+                    this.notifyStateChange();
+                    return;
+                }
+
+                // A non-prefix assistant update belongs to a new turn. Preserve
+                // the playback-confirmed text from the previous turn instead of
+                // replacing it merely because its finish signal was delayed.
+                lastMessage.final = true;
                 this.messagePrefixes[lastIndex] = undefined;
+            } else {
+                if (prefix && message.content.startsWith(prefix)) {
+                    lastMessage.content = message.content.slice(prefix.length);
+                } else {
+                    lastMessage.content = message.content;
+                    this.messagePrefixes[lastIndex] = undefined;
+                }
+                lastMessage.final = final;
+                this.notifyStateChange();
+                return;
             }
-            lastMessage.final = final;
-            this.notifyStateChange();
-            return;
         }
 
         const previousSameRole = this.findPreviousSameRoleMessage(message.role);
@@ -163,6 +201,73 @@ class Conversation {
         });
         this.messagePrefixes.push(prefix);
         this.notifyStateChange();
+    }
+
+    /**
+     * Replace the cumulative text of one identified assistant response.
+     *
+     * A response ID remains stable across incremental and final updates, so
+     * interleaved tool responses never rely on prefix or adjacency inference.
+     *
+     * @param responseId Stable server-assigned assistant response identifier.
+     * @param content Full playback-confirmed response text.
+     * @param final Whether this update closes the response.
+     */
+    updateAssistantResponse(
+        responseId: string,
+        content: string,
+        final: boolean,
+    ): void {
+        if (!responseId) {
+            return;
+        }
+        const existingIndex = this.assistantResponseIndexes.get(responseId);
+        if (existingIndex !== undefined) {
+            const message = this._state.messages[existingIndex];
+            if (!message || message.role !== "assistant" || (message.final && !final)) {
+                return;
+            }
+            message.content = content;
+            message.final = final;
+            this.notifyStateChange();
+            return;
+        }
+        if (!content) {
+            return;
+        }
+        const messageIndex = this._state.messages.length;
+        this._state.messages.push({
+            role: "assistant",
+            responseId,
+            content,
+            final,
+        });
+        this.messagePrefixes.push(undefined);
+        this.assistantResponseIndexes.set(responseId, messageIndex);
+        this.notifyStateChange();
+    }
+
+    /**
+     * Mark unfinished messages as final after a turn boundary or stream failure.
+     *
+     * This prevents stale streaming cursors when the server cannot emit the
+     * normal role-specific finish action, for example after empty TTS output.
+     *
+     * @param role Optional role used to limit which pending messages are closed.
+     */
+    finalizePendingMessages(role?: ConversationMessage["role"]): void {
+        let changed = false;
+        for (let index = 0; index < this._state.messages.length; index++) {
+            const message = this._state.messages[index];
+            if (message && !message.final && (!role || message.role === role)) {
+                message.final = true;
+                this.messagePrefixes[index] = undefined;
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.notifyStateChange();
+        }
     }
 
     private findPreviousSameRoleMessage(

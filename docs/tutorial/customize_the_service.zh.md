@@ -1,13 +1,13 @@
-*实验中的API*
+*实验中的功能*
 
 > **Note**
 > 示例请参阅 [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py)。其中向 X-Talk 添加了一个哑的 `LLMOutputRefactorModel`，用于在发送到前端的最终 LLM 响应文本前附加 `Assistant response: `。
 
-您可能希望引入服务内自定义模型，并将其逻辑和其他流程绑定。
+您可能希望引入新类型模型，并将其逻辑和其他流程绑定。
 
 ## 引入新类型模型
 
-引入新模型有两种常见做法：
+引入新类型模型有两种常见做法：
 
 1. 直接在服务代码里定义模型，并手动放入 `Models`。[`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) 使用的是这种方式。
 2. 先定义新的模型类型，再注册具体模型实现，让模型可以通过配置文件创建。
@@ -36,6 +36,9 @@ class LLMOutputRefactorModel:
 内建模型仍然从配置文件创建：
 
 ```python
+from xtalk import Xtalk
+
+
 models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
 ```
 
@@ -44,8 +47,6 @@ models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
 ```python
 models.set(LLMOutputRefactorModel, LLMOutputRefactorModel())
 ```
-
-这里使用模型类本身作为 key。后续 `Manager` 也使用 `LLMOutputRefactorModel` 取回该模型。
 
 ### 做法二：引入新的模型类型，再引入新模型
 
@@ -103,38 +104,35 @@ class PrefixLLMOutputRefactor(LLMOutputRefactor):
 models = Xtalk.create_models_from_config(config_path_or_dict=args.config)
 ```
 
-使用这种方式时，后续 `Manager` 应该通过模型类型接口取模型：
-
-```python
-refactor_model = self.models.get(LLMOutputRefactor)
-```
-
-如果只想临时覆盖配置创建出的实例，也可以继续使用同一个模型类型接口作为 key：
-
-```python
-models.set(LLMOutputRefactor, PrefixLLMOutputRefactor())
-```
-
 ## 创建自定义事件
 
 改写后的文本需要传给前端输出组件，因此示例创建了一个新的事件类型：
 
 ```python
+from xtalk import create_event_class
+
+
 LLMOutputRefactoredFinal = create_event_class(
     name="LLMOutputRefactoredFinal",
-    fields={"text": ""},
+    fields={"response_id": "", "text": ""},
 )
 ```
 
-该事件只携带一个 `text` 字段，用于保存改写后的最终回复。
+该事件携带原回复的 `response_id` 和改写后的 `text`，使前端能够把结束事件关联到正确的回复。
 
 ## 定义自定义 Manager
 
-`LLMOutputRefactorManager` 监听 `LLMAgentResponseFinish`，取出自定义模型，改写文本后发布 `LLMOutputRefactoredFinal`：
+`LLMOutputRefactorManager` 监听 TTS 播放完成后发布的 `ResponseFinish`，取出自定义模型，改写文本后发布 `LLMOutputRefactoredFinal`：
 
 下面的代码继续沿用做法一中的 `LLMOutputRefactorModel`。如果采用做法二，应把 `self.models.get(LLMOutputRefactorModel)` 换成 `self.models.get(LLMOutputRefactor)`。
 
 ```python
+from typing import Any
+
+from xtalk import EventBus, Manager, Models
+from xtalk.events import ResponseFinish
+
+
 class LLMOutputRefactorManager(Manager):
     def __init__(
         self,
@@ -146,13 +144,14 @@ class LLMOutputRefactorManager(Manager):
         self.event_bus = event_bus
         self.models = models
 
-    @Manager.event_handler(LLMAgentResponseFinish)
-    async def handle_llm_response_finish(self, event: LLMAgentResponseFinish):
+    @Manager.event_handler(ResponseFinish)
+    async def handle_response_finish(self, event: ResponseFinish):
         refactor_model = self.models.get(LLMOutputRefactorModel)
         if refactor_model:
             refactored_output = refactor_model.refactor(event.text)
             new_event = LLMOutputRefactoredFinal(
                 session_id=event.session_id,
+                response_id=event.response_id,
                 text=refactored_output,
             )
             await self.event_bus.publish(new_event)
@@ -168,20 +167,26 @@ class LLMOutputRefactorManager(Manager):
 创建服务时直接传入 `models`，然后注册自定义 `Manager`：
 
 ```python
+from xtalk import DefaultService
+
+
 custom_service = DefaultService(models=models)
 custom_service.register_manager(LLMOutputRefactorManager)
 ```
 
-这样每个会话都会创建一个 `LLMOutputRefactorManager`，并共享由服务管理的模型容器。
+这样每个会话都会创建一个 `LLMOutputRefactorManager`，并使用该会话克隆出的模型容器。
 
 ## 调整已有事件订阅
 
-默认情况下，`OutputGateway` 会处理原始的 `LLMAgentResponseFinish`。示例希望前端收到改写后的文本，因此先取消旧订阅：
+默认情况下，`OutputGateway` 会处理原始的 `ResponseFinish`。示例希望前端收到改写后的文本，因此先取消旧订阅：
 
 ```python
+from xtalk.serving.module_types import OutputGateway
+
+
 custom_service.unsubscribe_event(
     event_listener_cls=OutputGateway,
-    event_type=LLMAgentResponseFinish,
+    event_type=ResponseFinish,
 )
 ```
 
@@ -195,7 +200,7 @@ async def output_gateway_llm_output_refactored_final_handler(
     await self.send_signal(
         {
             "action": "finish_resp",
-            "data": {"text": event.text},
+            "data": {"response_id": event.response_id, "text": event.text},
         }
     )
 
@@ -212,6 +217,9 @@ custom_service.subscribe_event(
 最后把自定义服务传给 `Xtalk`，再挂载到 FastAPI：
 
 ```python
+from fastapi import FastAPI
+
+
 xtalk_instance = Xtalk(service_prototype=custom_service)
 
 app = FastAPI(title="Xtalk Server")

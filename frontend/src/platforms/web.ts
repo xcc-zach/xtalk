@@ -776,16 +776,26 @@ function createPausableTimeout(
     };
 }
 class WebOutputAudioSession extends BaseOutputAudioSession {
+    private static readonly AUDIO_FADE_IN_SECONDS = 0.004;
     private audioContext: AudioContext | null = null;
+    private outputGain: GainNode | null = null;
     private audioBufferSources: AudioBufferSourceNode[] = [];
     private audioBufferSourceTimes = new Map<
         AudioBufferSourceNode,
-        { start: number; end: number }
+        { start: number; end: number; responseId: string }
+    >();
+    private audioBufferCompletionTimers = new Map<
+        AudioBufferSourceNode,
+        number
     >();
     private audioTimeToPlay = 0;
     private audioChunkStartedTimeouts: ReturnType<typeof createPausableTimeout>[] = [];
-    private audioChunksPaused: ArrayBuffer[] = [];
+    private audioChunksPaused: Array<{ responseId: string; chunk: ArrayBuffer }> = [];
+    private activeResponseId: string | null = null;
     private serverTtsFinished = false;
+    private pausedByServer = false;
+    private drainingPausedChunks = false;
+    private needsFadeIn = false;
     constructor(private config: OutputAudioSessionConfig) {
         super();
     }
@@ -794,6 +804,14 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             throw new Error('Session already started');
         }
         this.audioContext = new window.AudioContext({ sampleRate: this.config.sampleRate });
+        this.outputGain = this.audioContext.createGain();
+        this.outputGain.gain.value = 0;
+        this.outputGain.connect(this.audioContext.destination);
+        this.audioContext.onstatechange = () => {
+            if (this.audioContext?.state === "running" && !this.pausedByServer) {
+                void this.drainPausedChunks();
+            }
+        };
         await this.audioContext.resume();
     }
     async close(): Promise<void> {
@@ -801,40 +819,58 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             throw new Error('Session not started');
         }
         await this.stop();
+        this.audioContext.onstatechange = null;
+        this.outputGain?.disconnect();
+        this.outputGain = null;
         this.audioContext.close();
         this.audioContext = null;
         this.audioTimeToPlay = 0;
+    }
+    /** Open the single client playback stream for one server response. */
+    startTTS(responseId: string): void {
+        if (!responseId) {
+            throw new Error("TTS response ID missing");
+        }
+        if (this.activeResponseId && this.activeResponseId !== responseId) {
+            throw new Error("Another TTS response is still active");
+        }
+        this.activeResponseId = responseId;
+        this.serverTtsFinished = false;
+        this.needsFadeIn = true;
     }
     async pause(): Promise<void> {
         if (!this.audioContext) {
             throw new Error('Session not started');
         }
-        if (this.audioContext.state == 'suspended') {
+        if (this.pausedByServer) {
             throw new Error('Session already paused');
         }
+        this.pausedByServer = true;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.pause();
         });
-        await this.audioContext.suspend();
+        if (this.audioContext.state === "running") {
+            await this.audioContext.suspend();
+        }
     }
     async resume(): Promise<void> {
         if (!this.audioContext) {
             throw new Error('Session not started');
         }
-        if (this.audioContext.state == 'running') {
+        if (this.audioContext.state == 'running' && !this.pausedByServer) {
             throw new Error('Session not paused');
         }
+        this.pausedByServer = false;
         this.audioChunkStartedTimeouts.forEach(timeout => {
             timeout.resume();
         });
         await this.audioContext.resume();
-        // Play the paused chunks immediately
-        for (const chunk of this.audioChunksPaused) {
-            await this.pushAudioChunk(chunk);
-        }
-        this.audioChunksPaused.length = 0;
+        await this.drainPausedChunks();
     }
-    async stop(): Promise<{ unconfirmedPlayedMs: number }> {
+    async stop(responseId?: string): Promise<{ unconfirmedPlayedMs: number }> {
+        if (responseId && responseId !== this.activeResponseId) {
+            return { unconfirmedPlayedMs: 0 };
+        }
         const currentTime = this.audioContext?.currentTime ?? 0;
         let unconfirmedPlayedMs = 0;
         this.audioChunkStartedTimeouts.forEach(timeout => {
@@ -853,34 +889,73 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
             try { source.stop(); } catch { }
             try { source.disconnect(); } catch { }
         });
+        this.audioBufferCompletionTimers.forEach(timerId => {
+            window.clearTimeout(timerId);
+        });
+        this.audioBufferCompletionTimers.clear();
         this.audioBufferSources.length = 0;
         this.audioBufferSourceTimes.clear();
         this.audioTimeToPlay = 0;
         this.audioChunksPaused.length = 0;
         this.serverTtsFinished = false;
+        this.pausedByServer = false;
+        this.activeResponseId = null;
+        this.needsFadeIn = false;
+        if (this.audioContext && this.outputGain) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+        }
+        if (responseId && this.audioContext?.state === "suspended") {
+            await this.audioContext.resume();
+        }
         // DO NOT suspend to avoid pop sounds after restart
         // await this.audioContext?.suspend();
         return { unconfirmedPlayedMs };
     }
-    async notifyTTSFinished(): Promise<void> {
+    async notifyTTSFinished(responseId: string): Promise<void> {
+        if (responseId !== this.activeResponseId) {
+            return;
+        }
         this.serverTtsFinished = true;
         await this.maybeNotifyPlaybackFinished();
     }
     private async maybeNotifyPlaybackFinished(): Promise<void> {
-        if (!this.serverTtsFinished || this.audioBufferSources.length !== 0) {
+        if (
+            !this.serverTtsFinished
+            || this.audioBufferSources.length !== 0
+            || this.audioChunksPaused.length !== 0
+        ) {
+            return;
+        }
+        const responseId = this.activeResponseId;
+        if (!responseId) {
             return;
         }
         this.serverTtsFinished = false;
-        await this.allChunksPlayedCallback();
+        this.activeResponseId = null;
+        await this.allChunksPlayedCallback(responseId);
     }
     async pushAudioChunk(pcm_chunk_int16: ArrayBuffer): Promise<void> {
-        if (!this.audioContext) {
+        if (!this.audioContext || !this.outputGain) {
             throw new Error('Session not started');
         }
-        // If suspended, meaning that the session is paused; cache the incoming audio for future
-        if (this.audioContext.state === 'suspended') {
-            this.audioChunksPaused.push(pcm_chunk_int16);
+        const responseId = this.activeResponseId;
+        if (!responseId) {
+            throw new Error("Received TTS audio without an active response");
+        }
+        if (this.pausedByServer) {
+            this.audioChunksPaused.push({ responseId, chunk: pcm_chunk_int16 });
             return;
+        }
+        if (!this.isAudioContextRunning()) {
+            await this.audioContext.resume();
+            if (!this.isAudioContextRunning()) {
+                // WebKit may temporarily interrupt an AudioContext when the
+                // output device changes. Retain the chunk and drain it from the
+                // state-change callback instead of losing the server ack.
+                this.audioChunksPaused.push({ responseId, chunk: pcm_chunk_int16 });
+                return;
+            }
         }
         const int16 = new Int16Array(pcm_chunk_int16);
         if (int16.length === 0) return;
@@ -894,16 +969,11 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         buffer.getChannelData(0).set(float32);
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+        source.connect(this.outputGain);
 
         // Mount onended callback before starting
         source.onended = () => {
-            this.chunkPlayedCallback(int16.buffer);
-            // Remove this source from the list
-            const idx = this.audioBufferSources.indexOf(source);
-            if (idx !== -1) this.audioBufferSources.splice(idx, 1);
-            this.audioBufferSourceTimes.delete(source);
-            void this.maybeNotifyPlaybackFinished();
+            void this.completeAudioSource(source, int16.buffer);
         };
 
         // Add to buffer sources list before starting
@@ -914,21 +984,36 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         if (this.audioTimeToPlay < currentTime) {
             this.audioTimeToPlay = currentTime;
         }
+        if (this.needsFadeIn) {
+            this.outputGain.gain.cancelScheduledValues(currentTime);
+            this.outputGain.gain.setValueAtTime(0, currentTime);
+            this.outputGain.gain.linearRampToValueAtTime(
+                1,
+                currentTime + WebOutputAudioSession.AUDIO_FADE_IN_SECONDS,
+            );
+            this.needsFadeIn = false;
+        }
         const chunkStartTime = this.audioTimeToPlay;
         const chunkEndTime = chunkStartTime + buffer.duration / source.playbackRate.value;
         this.audioBufferSourceTimes.set(source, {
             start: chunkStartTime,
             end: chunkEndTime,
+            responseId,
         });
         source.start(chunkStartTime);
+        this.scheduleAudioSourceCompletionCheck(
+            source,
+            int16.buffer,
+            chunkEndTime,
+        );
 
         // Mount onstarted
         const msForChunkStart = (this.audioTimeToPlay - currentTime) * 1000;
         if (msForChunkStart <= 0) {
-            this.chunkStartedCallback(int16.buffer);
+            this.chunkStartedCallback(responseId, int16.buffer);
         } else {
             const timeout = createPausableTimeout(() => {
-                this.chunkStartedCallback(int16.buffer);
+                this.chunkStartedCallback(responseId, int16.buffer);
                 // Remove this timeout from the list
                 const idx = this.audioChunkStartedTimeouts.indexOf(timeout);
                 if (idx !== -1) this.audioChunkStartedTimeouts.splice(idx, 1);
@@ -937,5 +1022,97 @@ class WebOutputAudioSession extends BaseOutputAudioSession {
         }
         // Update time to play for next chunk
         this.audioTimeToPlay += buffer.duration / source.playbackRate.value;
+    }
+
+    private async drainPausedChunks(): Promise<void> {
+        if (
+            this.drainingPausedChunks
+            || this.pausedByServer
+            || this.audioContext?.state !== "running"
+        ) {
+            return;
+        }
+        this.drainingPausedChunks = true;
+        try {
+            while (
+                !this.pausedByServer
+                && this.audioContext?.state === "running"
+                && this.audioChunksPaused.length > 0
+            ) {
+                const pausedAudio = this.audioChunksPaused.shift();
+                if (
+                    pausedAudio
+                    && pausedAudio.responseId === this.activeResponseId
+                ) {
+                    await this.pushAudioChunk(pausedAudio.chunk);
+                }
+            }
+        } finally {
+            this.drainingPausedChunks = false;
+        }
+        await this.maybeNotifyPlaybackFinished();
+    }
+
+    private isAudioContextRunning(): boolean {
+        return this.audioContext?.state === "running";
+    }
+
+    private async completeAudioSource(
+        source: AudioBufferSourceNode,
+        pcmChunkInt16: ArrayBuffer,
+    ): Promise<void> {
+        const index = this.audioBufferSources.indexOf(source);
+        if (index < 0) {
+            return;
+        }
+        const timerId = this.audioBufferCompletionTimers.get(source);
+        if (timerId !== undefined) {
+            window.clearTimeout(timerId);
+            this.audioBufferCompletionTimers.delete(source);
+        }
+        source.onended = null;
+        this.audioBufferSources.splice(index, 1);
+        const timing = this.audioBufferSourceTimes.get(source);
+        this.audioBufferSourceTimes.delete(source);
+        try { source.disconnect(); } catch { }
+        if (timing) {
+            await this.chunkPlayedCallback(timing.responseId, pcmChunkInt16);
+        }
+        await this.maybeNotifyPlaybackFinished();
+    }
+
+    private scheduleAudioSourceCompletionCheck(
+        source: AudioBufferSourceNode,
+        pcmChunkInt16: ArrayBuffer,
+        chunkEndTime: number,
+    ): void {
+        const audioContext = this.audioContext;
+        if (!audioContext || !this.audioBufferSources.includes(source)) {
+            return;
+        }
+        const remainingMs = Math.max(
+            20,
+            (chunkEndTime - audioContext.currentTime) * 1000 + 20,
+        );
+        const timerId = window.setTimeout(() => {
+            this.audioBufferCompletionTimers.delete(source);
+            const currentContext = this.audioContext;
+            if (!currentContext || !this.audioBufferSources.includes(source)) {
+                return;
+            }
+            if (currentContext.currentTime + 0.005 >= chunkEndTime) {
+                // WebKit occasionally omits AudioBufferSourceNode.onended. The
+                // audio clock is authoritative, so release server backpressure
+                // once it has advanced past the scheduled end time.
+                void this.completeAudioSource(source, pcmChunkInt16);
+                return;
+            }
+            this.scheduleAudioSourceCompletionCheck(
+                source,
+                pcmChunkInt16,
+                chunkEndTime,
+            );
+        }, remainingMs);
+        this.audioBufferCompletionTimers.set(source, timerId);
     }
 }

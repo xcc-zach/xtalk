@@ -19,13 +19,22 @@ event-derived payload for that stream.
 - `type: str`
 - `data: dict[str, Any]`
 
+## AgentTurnBoundary
+
+```python
+@dataclass(frozen=True)
+class AgentTurnBoundary
+```
+
+Mark the end of one agent response segment.
+
 ## AgentOutput
 
 ```python
 AgentOutput
 ```
 
-**Value:** `Union[str, ToolCall, ToolCallResult]`
+**Value:** `Union[str, ToolCall, ToolCallResult, AgentTurnBoundary]`
 
 ## T
 
@@ -96,7 +105,7 @@ Append one message to the history unchanged.
 #### append_or_update_ai_message
 
 ```python
-def append_or_update_ai_message(self, full_text: str, *, final: bool) -> None
+def append_or_update_ai_message(self, full_text: str, *, final: bool, response_id: str | None = None) -> None
 ```
 
 Append or merge one playback-managed assistant message.
@@ -107,6 +116,10 @@ Append or merge one playback-managed assistant message.
   The cumulative assistant text confirmed by playback.
 - `final:`
   Whether this update closes the playback-managed assistant message.
+- `response_id:`
+  Stable identifier for the assistant response. When present, updates
+  replace the full text of that exact response instead of inferring a
+  continuation from message position and text prefixes.
 
 ## Agent
 
@@ -236,16 +249,3 @@ Return the serialized conversation history when available.
 
 - `str | None`
   Conversation history or ``None``.
-
-#### add_tools
-
-```python
-def add_tools(self, tools: list[BaseTool | Callable[[], BaseTool]]) -> None
-```
-
-Attach tools to the agent.
-
-##### Parameters
-
-- `tools` (`list[BaseTool | Callable[[], BaseTool]]`)
-  Tool instances or factories that produce tool instances.

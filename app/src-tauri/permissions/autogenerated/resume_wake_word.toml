@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-wake-word"
+description = "Enables the resume_wake_word command without any pre-configured scope."
+commands.allow = ["resume_wake_word"]
+
+[[permission]]
+identifier = "deny-resume-wake-word"
+description = "Denies the resume_wake_word command without any pre-configured scope."
+commands.deny = ["resume_wake_word"]

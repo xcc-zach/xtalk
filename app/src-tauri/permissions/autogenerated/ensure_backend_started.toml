@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ensure-backend-started"
+description = "Enables the ensure_backend_started command without any pre-configured scope."
+commands.allow = ["ensure_backend_started"]
+
+[[permission]]
+identifier = "deny-ensure-backend-started"
+description = "Denies the ensure_backend_started command without any pre-configured scope."
+commands.deny = ["ensure_backend_started"]

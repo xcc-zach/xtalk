@@ -6,8 +6,12 @@ import unittest
 from collections.abc import Callable
 
 from xtalk.models import Models
-from xtalk.serving.event_bus import EventBus
-from xtalk.serving.events import ResponseUpdate, TTSStreamingTextAccepted
+from xtalk.serving.event_bus import EventBus, EventDispatchMode
+from xtalk.serving.events import (
+    ResponseUpdate,
+    TTSStarted,
+    TTSStreamingTextAccepted,
+)
 from xtalk.serving.modules.tts_manager import TTSManager
 from xtalk.serving.modules.tts_playback_manager import (
     TTSPlaybackManager,
@@ -39,6 +43,8 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
         event_bus = EventBus(enable_history=True)
         manager = TTSManager(event_bus, "session", Models())
+        manager._response_id = "response-1"
+        manager._delivery_started = True
         manager._streaming_audio_duration_ms = 725.0
         manager._streaming_tts = _FakeStreamingTTS(
             lambda: setattr(manager, "_streaming_audio_duration_ms", 950.0)
@@ -56,12 +62,17 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
         event_bus = EventBus(enable_history=True)
         manager = TTSPlaybackManager(event_bus, "session")
         await event_bus.publish(
+            TTSStarted(session_id="session", response_id="response-1"),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
+        await event_bus.publish(
             TTSStreamingTextAccepted(
                 session_id="session",
+                response_id="response-1",
                 text="你",
                 prepared_audio_ms=0.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         segment = manager._streaming_segment
         self.assertIsNotNone(segment)
@@ -77,10 +88,11 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
         await event_bus.publish(
             TTSStreamingTextAccepted(
                 session_id="session",
+                response_id="response-1",
                 text="好",
                 prepared_audio_ms=1200.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
         self.assertEqual(manager._reported_text, "你")
@@ -104,12 +116,17 @@ class StreamingPlaybackAlignmentTests(unittest.IsolatedAsyncioTestCase):
         event_bus = EventBus(enable_history=True)
         manager = TTSPlaybackManager(event_bus, "session")
         await event_bus.publish(
+            TTSStarted(session_id="session", response_id="response-1"),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+        )
+        await event_bus.publish(
             TTSStreamingTextAccepted(
                 session_id="session",
+                response_id="response-1",
                 text="你，hello",
                 prepared_audio_ms=0.0,
             ),
-            wait_for_completion=True,
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         segment = manager._streaming_segment
         self.assertIsNotNone(segment)

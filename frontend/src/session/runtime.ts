@@ -146,7 +146,7 @@ function createSessionRuntimeController(
             }
         });
 
-        currentOutputAudioSession.onChunkStarted(async (audioChunk) => {
+        currentOutputAudioSession.onChunkStarted(async (responseId, audioChunk) => {
             const callback = outputAudioChunkCallback;
             currentObserverTaskScheduler.schedule(() => {
                 callback(audioChunk, outputConfig.sampleRate);
@@ -161,22 +161,22 @@ function createSessionRuntimeController(
                 );
             }
         });
-        currentOutputAudioSession.onChunkPlayed(async () => {
+        currentOutputAudioSession.onChunkPlayed(async (responseId) => {
             if (currentWebSocket.ready()) {
                 await actionHandler.handleAction(
                     "client_audio_chunk_played",
-                    null,
+                    { response_id: responseId },
                     currentWebSocket,
                     conversation,
                     currentOutputAudioSession,
                 );
             }
         });
-        currentOutputAudioSession.onAllChunksPlayed(async () => {
+        currentOutputAudioSession.onAllChunksPlayed(async (responseId) => {
             if (currentWebSocket.ready()) {
                 await actionHandler.handleAction(
                     "client_audio_playback_finished",
-                    null,
+                    { response_id: responseId },
                     currentWebSocket,
                     conversation,
                     currentOutputAudioSession,

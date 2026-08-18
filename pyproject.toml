@@ -97,6 +97,10 @@ sherpa-onnx-asr = [
   "numpy",
   "websockets",
 ]
+agentic-asr = [
+  "numpy",
+  "websockets",
+]
 ct-punt = [
   "torch",
   "torchaudio",

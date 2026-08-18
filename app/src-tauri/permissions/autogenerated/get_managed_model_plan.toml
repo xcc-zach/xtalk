@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-managed-model-plan"
+description = "Enables the get_managed_model_plan command without any pre-configured scope."
+commands.allow = ["get_managed_model_plan"]
+
+[[permission]]
+identifier = "deny-get-managed-model-plan"
+description = "Denies the get_managed_model_plan command without any pre-configured scope."
+commands.deny = ["get_managed_model_plan"]

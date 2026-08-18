@@ -1,4 +1,4 @@
-*Experimental functionality*
+*Experimental feature*
 
 X-Talk provides a single script, [`scripts/test.py`](https://github.com/xcc-zach/xtalk/blob/main/scripts/test.py), for both test-set generation and automated backend evaluation.
 
@@ -72,7 +72,7 @@ Equivalent full-service form:
 }
 ```
 
-`type` should match the Python class name of the TTS model, and `params` should match that class's initialization arguments. See [Supported Models](../docs/supported_models.md) for available TTS backends and their optional dependencies.
+`type` should match the Python class name of the TTS model, and `params` should match that class's initialization arguments. See [Supported Models](../technical_reference/supported_models.md) for available TTS backends and their optional dependencies.
 
 For `IndexTTS`, each `voices` entry needs:
 

@@ -265,7 +265,7 @@ register or override managers for custom behavior.
 
 ### 类字段
 
-- `MANAGER_CLASSES: list[Type[Manager]]` = `[ASRManager, LLMAgentContextManager, LLMAgentConsumptionManager, DirectAudioManager, TTSManager, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, EmbeddingsManager, RecordingManager, TurnDetectorManager]`
+- `MANAGER_CLASSES: list[Type[Manager]]` = `[ASRManager, MultiSpeakerTurnContextManager, LLMAgentContextManager, LLMAgentConsumptionManager, TTSManager, TTSResponseCoordinator, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, EmbeddingsManager, RecordingManager, TurnDetectorManager]`
 
 ### 方法
 
@@ -482,7 +482,7 @@ Unsubscribe a handler from an event type.
 _定义于 [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)。_
 
 ```python
-async def publish(self, event: Event, wait_for_completion: bool = False) -> bool
+async def publish(self, event: Event, mode: Union[EventDispatchMode, str] = EventDispatchMode.RETURN_AFTER_DISPATCH) -> bool
 ```
 
 Publish an event to all matching handlers.
@@ -491,8 +491,10 @@ Publish an event to all matching handlers.
 
 - `event` (`Event`)
   Event instance to dispatch.
-- `wait_for_completion` (`bool, optional`)
-  Whether to await handler completion before returning.
+- `mode` (`EventDispatchMode | str, optional`)
+  Return and propagation behavior. Long canonical strings and the
+  short aliases ``dispatch``, ``wait``, and ``wait_stoppable`` are
+  accepted.
 
 ##### 返回
 
@@ -558,3 +560,67 @@ async def shutdown(self) -> None
 ```
 
 Shut down the event bus and release resources.
+
+## EventDispatchMode
+
+_定义于 [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)。_
+
+```python
+class EventDispatchMode(str, Enum)
+```
+
+Control when :meth:`EventBus.publish` returns to its caller.
+
+``RETURN_AFTER_DISPATCH`` preserves the default background-dispatch
+behavior. The two waiting modes execute handlers in descending priority
+order; only ``WAIT_UNTIL_COMPLETE_OR_STOPPED`` observes an explicit
+:class:`EventPropagation.STOP` result.
+
+### 类字段
+
+- `RETURN_AFTER_DISPATCH` = `'return_after_dispatch'`
+- `WAIT_UNTIL_COMPLETE` = `'wait_until_complete'`
+- `WAIT_UNTIL_COMPLETE_OR_STOPPED` = `'wait_until_complete_or_stopped'`
+
+### 方法
+
+#### parse
+
+_定义于 [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)。_
+
+```python
+def parse(cls, value: Union['EventDispatchMode', str]) -> 'EventDispatchMode'
+```
+
+Normalize an enum member or supported long/short string.
+
+##### 参数
+
+- `value` (`EventDispatchMode | str`)
+  Dispatch mode enum, canonical value, or short alias. Supported
+  aliases are ``dispatch``, ``wait``, and ``wait_stoppable``.
+
+##### 返回
+
+- `EventDispatchMode`
+  Canonical dispatch mode.
+
+##### 抛出
+
+- `ValueError`
+  Raised when *value* is not a supported dispatch mode.
+
+## EventPropagation
+
+_定义于 [`xtalk.serving.event_bus`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/event_bus.py)。_
+
+```python
+class EventPropagation(str, Enum)
+```
+
+Describe whether a waiting event dispatch should continue.
+
+### 类字段
+
+- `CONTINUE` = `'continue'`
+- `STOP` = `'stop'`

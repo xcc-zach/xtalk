@@ -1,0 +1,28 @@
+{
+  "asr": {
+    "type": "SherpaOnnxASR",
+    "params": {
+      "base_url": "managed://sensevoice-small",
+      "mode": "offline"
+    }
+  },
+  "llm_agent": {
+    "type": "DefaultAgent",
+    "params": {
+      "model": {
+        "api_key": "",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "extra_body": {
+          "thinking": {"type": "disabled"}
+        }
+      }
+    }
+  },
+  "tts": {
+    "type": "SherpaOnnxTTS",
+    "params": {
+      "base_url": "managed://matcha-icefall-zh-en"
+    }
+  }
+}
