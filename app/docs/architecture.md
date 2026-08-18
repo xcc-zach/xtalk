@@ -140,17 +140,18 @@ microphone permission even when the user subsequently types.
 The WebView requests browser-native echo cancellation, automatic gain control,
 and noise suppression, then sends 16 kHz mono PCM through the public
 `xtalk-client` WebSocket with frontend VAD and the custom FastEnhancer disabled.
-Tauri resolves the bundled `models/audio/silero_vad.onnx` resource, and the
-sidecar loads it through the ordinary public XTalk model configuration. The
-desktop fallback uses a `0.7` speech-probability threshold to reduce ambient
-noise triggers; an explicitly configured VAD still takes precedence.
+Tauri downloads the pinned Silero VAD model into the application data directory
+on first use, verifies its size and SHA-256, and reuses the cached file on later
+launches. The sidecar loads it through the ordinary public XTalk model
+configuration. The desktop fallback uses a `0.7` speech-probability threshold
+to reduce ambient noise triggers; an explicitly configured VAD still takes
+precedence.
 Server-originated speech boundaries then start and finish the configured remote
 ASR turn.
 
-The model is pinned by upstream commit and SHA-256 in
-`resources/manifests/audio-models.lock.json`. The resource verifier rejects a
-missing or changed file, and the installed application never downloads this
-base runtime asset.
+The model is pinned by upstream commit, byte size, immutable HTTPS URL, and
+SHA-256 in `resources/manifests/managed-models.lock.json`. A failed download or
+verification prevents backend startup instead of loading untrusted bytes.
 
 ## Voice wake
 

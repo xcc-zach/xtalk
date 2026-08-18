@@ -5,7 +5,7 @@ This directory contains the isolated XTalk desktop application described in
 a Tauri WebView, a Python sidecar, explicit loopback security, and adapters that
 consume XTalk's public APIs. It also includes realtime SDK text input, the
 asynchronous timer used by the sample-app acceptance flow, and the first Phase
-1 local-audio slice: a bundled backend Silero VAD.
+1 local-audio slice: a runtime-managed backend Silero VAD.
 
 ## Development prerequisites
 
@@ -97,8 +97,9 @@ python scripts/verify_resources.py
 
 This copies immutable artifacts into ignored `app/resources/artifacts/` and
 writes an ignored SHA-256 lock manifest. The checked-in
-`resources/manifests/audio-models.lock.json` separately pins and verifies the
-bundled Silero ONNX resource. No core source directory is modified.
+`resources/manifests/managed-models.lock.json` pins the Silero ONNX resource;
+the application downloads and verifies it on first use. No core source
+directory is modified.
 
 Build the target-specific sidecar from the wheel and name any required optional
 dependency groups explicitly. For example, the sample configuration requires

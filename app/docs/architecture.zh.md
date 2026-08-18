@@ -108,14 +108,15 @@ app 通过公共 runtime builder 注册已启用的内置与用户工具。随�
 
 WebView 请求浏览器原生回声消除、自动增益控制与降噪，然后通过公开
 `xtalk-client` WebSocket 发送 16 kHz 单声道 PCM；前端 VAD 与自定义
-FastEnhancer 保持关闭。Tauri 解析随包的 `models/audio/silero_vad.onnx` 资源，
-sidecar 再通过 XTalk 普通公开模型配置加载它。桌面端回退配置使用 `0.7` 的语音
-概率阈值以减少环境噪声误触发；用户显式配置的 VAD 仍然优先。由服务端产生的语音
-开始、结束边界负责启动和结束配置中的远程 ASR 回合。
+FastEnhancer 保持关闭。首次使用时，Tauri 会将固定版本的 Silero VAD 模型下载到
+应用数据目录，校验文件大小与 SHA-256，并在后续启动时复用缓存文件。sidecar 再通过
+XTalk 普通公开模型配置加载它。桌面端回退配置使用 `0.7` 的语音概率阈值以减少环境
+噪声误触发；用户显式配置的 VAD 仍然优先。由服务端产生的语音开始、结束边界负责
+启动和结束配置中的远程 ASR 回合。
 
-模型的上游 commit 与 SHA-256 固定在
-`resources/manifests/audio-models.lock.json`。资源校验会拒绝缺失或被修改的文件；
-安装后的应用不会为这项基础运行资源执行在线下载。
+模型的上游 commit、文件大小、不可变 HTTPS URL 与 SHA-256 固定在
+`resources/manifests/managed-models.lock.json`。下载或校验失败时，后端会拒绝启动，
+而不会加载不可信的模型文件。
 
 ## 语音唤醒
 
