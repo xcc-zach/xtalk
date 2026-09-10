@@ -1,5 +1,4 @@
 import argparse
-import asyncio
 import logging
 import mimetypes
 from pathlib import Path
@@ -40,7 +39,7 @@ class EchoAgent(Agent):
     def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
         """Synchronously bridge ``async_accept()`` for compatibility."""
 
-        yield from self._sync_iter_from_async(self.async_accept(context))
+        yield from self.sync_iter_from_async(self.async_accept(context))
 
     async def async_accept(
         self,
@@ -48,12 +47,9 @@ class EchoAgent(Agent):
     ) -> AsyncIterator[AgentOutput]:
         """Emit the finalized ASR text for ``asr_final`` contexts."""
 
-        if str(context.get("type", "") or "") != "asr_final":
+        if context["type"] != "asr_final":
             return
-        payload = context.get("data") or {}
-        if not isinstance(payload, dict):
-            return
-        text = str(payload.get("text", ""))
+        text = context["data"]["text"]
         if text:
             yield text
 
@@ -67,34 +63,6 @@ class EchoAgent(Agent):
         """Create a fresh stateless echo agent."""
 
         return EchoAgent()
-
-    def _sync_iter_from_async(
-        self,
-        async_iter: AsyncIterator[AgentOutput],
-    ) -> Iterable[AgentOutput]:
-        """Convert an async iterator into a synchronous generator."""
-
-        loop = asyncio.new_event_loop()
-        try:
-            while True:
-                try:
-                    item = loop.run_until_complete(async_iter.__anext__())
-                except StopAsyncIteration:
-                    break
-                yield item
-        finally:
-            aclose = getattr(async_iter, "aclose", None)
-            if callable(aclose):
-                try:
-                    loop.run_until_complete(aclose())
-                except Exception:
-                    pass
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            except Exception:
-                pass
-            loop.close()
-
 
 xtalk_instance = Xtalk.configure(args.config).set_model(EchoAgent).build()
 xtalk_instance.mount_routes(app)
