@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple")
     parser.add_argument("--sherpa-server", required=True, type=Path)
+    parser.add_argument("--sherpa-online-server", required=True, type=Path)
     parser.add_argument("--sherpa-keyword-spotter", type=Path)
     parser.add_argument("--sherpa-kws-model-dir", type=Path)
     parser.add_argument("--sherpa-library-dir", required=True, type=Path)
@@ -559,6 +560,10 @@ def main() -> int:
     args = parse_args()
     target = resolve_target_triple(args.target_triple)
     sherpa_server = require_file(args.sherpa_server, "sherpa server")
+    sherpa_online_server = require_file(
+        args.sherpa_online_server,
+        "sherpa online server",
+    )
     wake_inputs_supplied = (
         args.sherpa_keyword_spotter is not None
         and args.sherpa_kws_model_dir is not None
@@ -637,6 +642,13 @@ def main() -> int:
     )
     copy_file(sherpa_server, staged_sherpa_server)
     add_macos_managed_runtime_rpath(staged_sherpa_server, target)
+    staged_sherpa_online_server = (
+        TAURI_BINARIES
+        / f"sherpa-onnx-online-websocket-server-{target}"
+        f"{'.exe' if 'windows' in target else ''}"
+    )
+    copy_file(sherpa_online_server, staged_sherpa_online_server)
+    add_macos_managed_runtime_rpath(staged_sherpa_online_server, target)
     staged_keyword_spotter = (
         TAURI_BINARIES
         / f"sherpa-onnx-keyword-spotter-microphone-{target}"

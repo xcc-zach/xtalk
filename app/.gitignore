@@ -17,6 +17,7 @@ src-tauri/binaries/matcha-model-runtime-*
 src-tauri/binaries/mtd-model-runtime-*
 src-tauri/binaries/mlx-model-runtime-*
 src-tauri/binaries/sherpa-onnx-offline-websocket-server-*
+src-tauri/binaries/sherpa-onnx-online-websocket-server-*
 src-tauri/binaries/sherpa-onnx-keyword-spotter-microphone-*
 resources/managed-runtime/ort-tts/*
 resources/managed-runtime/ort/*

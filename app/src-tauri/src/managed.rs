@@ -36,9 +36,12 @@ const MTD_SIDECAR_NAME: &str = "mtd-model-runtime";
 const MTD_EVENT_LOG_FILENAME: &str = "mtd-diarization.jsonl";
 const MLX_SIDECAR_NAME: &str = "mlx-model-runtime";
 const SHERPA_SIDECAR_NAME: &str = "sherpa-onnx-offline-websocket-server";
+const SHERPA_ONLINE_SIDECAR_NAME: &str = "sherpa-onnx-online-websocket-server";
 const SENSEVOICE_ID: &str = "sensevoice-small";
 const SENSEVOICE_MLX_ID: &str = "sensevoice-small-mlx";
 const QWEN3_ASR_06B_INT8_ID: &str = "qwen3-asr-0.6b-int8";
+const STREAMING_ZIPFORMER_ID: &str = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30";
+const XTURNIX_ID: &str = "xturnix-zh-base";
 const REFINER_ID: &str = "agentic-asr-refiner";
 const REFINER_MLX_ID: &str = "agentic-asr-refiner-mlx";
 const MOSS_TTS_ID: &str = "moss-tts-nano";
@@ -50,6 +53,10 @@ const SILERO_VAD_ID: &str = "silero-vad";
 const MANAGED_ROOT: &str = "managed://";
 const SENSEVOICE_URL: &str = "managed://sensevoice-small";
 const QWEN3_ASR_06B_INT8_URL: &str = "managed://qwen3-asr-0.6b-int8";
+const STREAMING_ZIPFORMER_URL: &str =
+    "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30";
+const STREAMING_ZIPFORMER_MODEL_DIR: &str = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30";
+const XTURNIX_URL: &str = "managed://xturnix-zh-base";
 const REFINER_URL: &str = "managed://agentic-asr-refiner";
 const MOSS_TTS_URL: &str = "managed://moss-tts-nano";
 const MATCHA_TTS_URL: &str = "managed://matcha-icefall-zh-en";
@@ -104,6 +111,8 @@ struct ManagedServicesInner {
 struct ManagedRequest {
     sensevoice: Option<ManagedBackend>,
     qwen3_asr_06b_int8: Option<ManagedQwenBackend>,
+    streaming_zipformer: bool,
+    xturnix: bool,
     refiner: Option<ManagedBackend>,
     agentic_asr: bool,
     moss_tts: Option<ManagedBackend>,
@@ -272,6 +281,8 @@ impl ManagedServices {
         let request = parse_managed_request(config_path)?;
         let active = request.sensevoice.is_some()
             || request.qwen3_asr_06b_int8.is_some()
+            || request.streaming_zipformer
+            || request.xturnix
             || request.refiner.is_some()
             || request.mtd.is_some()
             || request.campplus.is_some()
@@ -326,6 +337,8 @@ impl ManagedServices {
         let mut overlay = json!({});
         let service_count = usize::from(request.sensevoice.is_some())
             + usize::from(request.qwen3_asr_06b_int8.is_some())
+            + usize::from(request.streaming_zipformer)
+            + usize::from(request.xturnix)
             + usize::from(request.refiner.is_some())
             + usize::from(request.mtd.is_some())
             + usize::from(request.campplus.is_some())
@@ -482,6 +495,114 @@ impl ManagedServices {
                     }
                 });
             }
+        }
+
+        if request.streaming_zipformer {
+            service_index += 1;
+            let service_manifest = find_service(manifest, STREAMING_ZIPFORMER_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = start_streaming_zipformer(app, &model_root).await?;
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["asr"] = json!({
+                "params": {
+                    "base_url": format!("ws://127.0.0.1:{port}"),
+                    "mode": "streaming"
+                }
+            });
+        }
+
+        if request.xturnix {
+            if !mlx_is_available() {
+                return Err(ManagedError::UnsupportedMlxPlatform);
+            }
+            service_index += 1;
+            let service_manifest = find_service(manifest, XTURNIX_ID)?;
+            emit_managed_progress(
+                app,
+                "checking",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                service_manifest.files.iter().map(|file| file.size).sum(),
+                None,
+            );
+            let model_root = ensure_service_installed(
+                client,
+                install_root,
+                service_manifest,
+                app,
+                service_index,
+                service_count,
+            )
+            .await?;
+            emit_managed_progress(
+                app,
+                "starting",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            let started = start_mlx(app, XTURNIX_ID, &model_root).await?;
+            let port = started.port;
+            self.accept(started).await;
+            emit_managed_progress(
+                app,
+                "ready",
+                Some(service_manifest),
+                service_index,
+                service_count,
+                0,
+                0,
+                None,
+            );
+            overlay["turn_detector"] = json!({
+                "params": {
+                    "base_url": format!("http://127.0.0.1:{port}")
+                }
+            });
         }
 
         if let Some(requested_backend) = request.refiner {
@@ -924,6 +1045,12 @@ pub(crate) fn inspect_model_config(config_path: &Path) -> Result<ManagedModelPla
     if request.qwen3_asr_06b_int8.is_some() {
         services.push(QWEN3_ASR_06B_INT8_ID.to_owned());
     }
+    if request.streaming_zipformer {
+        services.push(STREAMING_ZIPFORMER_ID.to_owned());
+    }
+    if request.xturnix {
+        services.push(XTURNIX_ID.to_owned());
+    }
     if request.refiner.is_some() {
         services.push(REFINER_ID.to_owned());
     }
@@ -952,6 +1079,11 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
         if let Some(base_url) = model_param(&config, "asr", "asr_base_url")? {
             parse_managed_asr(base_url, &mut request)?;
         }
+        if request.streaming_zipformer {
+            return Err(ManagedError::InvalidConfiguration(
+                "managed streaming Zipformer is not supported by AgenticASR".to_owned(),
+            ));
+        }
         if let Some(base_url) = model_param(&config, "asr", "refiner_base_url")? {
             request.refiner = parse_managed_backend(base_url, REFINER_URL, "Refiner")?;
         }
@@ -967,8 +1099,22 @@ fn parse_managed_request(config_path: &Path) -> Result<ManagedRequest, ManagedEr
         }
     } else if let Some(base_url) = model_param(&config, "asr", "base_url")? {
         parse_managed_asr(base_url, &mut request)?;
-        if request.sensevoice.is_some() || request.qwen3_asr_06b_int8.is_some() {
+        if request.sensevoice.is_some()
+            || request.qwen3_asr_06b_int8.is_some()
+            || request.streaming_zipformer
+        {
             require_model_type(&config, "asr", "SherpaOnnxASR")?;
+        }
+    }
+
+    if let Some(model) = model_param(&config, "turn_detector", "model")? {
+        if is_service_url(model, XTURNIX_URL) {
+            request.xturnix = parse_managed_xturnix(model)?;
+            require_model_type(&config, "turn_detector", "XTurnix")?;
+        } else if model.starts_with(MANAGED_ROOT) {
+            return Err(ManagedError::InvalidConfiguration(format!(
+                "unsupported managed turn detector model `{model}`"
+            )));
         }
     }
 
@@ -1009,12 +1155,36 @@ fn parse_managed_asr(base_url: &str, request: &mut ManagedRequest) -> Result<(),
         request.sensevoice = parse_managed_backend(base_url, SENSEVOICE_URL, "ASR")?;
     } else if is_service_url(base_url, QWEN3_ASR_06B_INT8_URL) {
         request.qwen3_asr_06b_int8 = parse_managed_qwen_backend(base_url)?;
+    } else if is_service_url(base_url, STREAMING_ZIPFORMER_URL) {
+        request.streaming_zipformer = parse_managed_streaming_zipformer(base_url)?;
     } else if base_url.starts_with(MANAGED_ROOT) {
         return Err(ManagedError::InvalidConfiguration(format!(
             "unsupported managed ASR URL `{base_url}`"
         )));
     }
     Ok(())
+}
+
+fn parse_managed_streaming_zipformer(base_url: &str) -> Result<bool, ManagedError> {
+    match base_url {
+        value if value == STREAMING_ZIPFORMER_URL => Ok(true),
+        value if value == format!("{STREAMING_ZIPFORMER_URL}?backend=cpu") => Ok(true),
+        value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
+            format!("unsupported managed streaming Zipformer URL `{base_url}`"),
+        )),
+        _ => Ok(false),
+    }
+}
+
+fn parse_managed_xturnix(model: &str) -> Result<bool, ManagedError> {
+    match model {
+        value if value == XTURNIX_URL => Ok(true),
+        value if value == format!("{XTURNIX_URL}?backend=mlx") => Ok(true),
+        value if value.starts_with(MANAGED_ROOT) => Err(ManagedError::InvalidConfiguration(
+            format!("unsupported managed XTurnix model `{model}`"),
+        )),
+        _ => Ok(false),
+    }
 }
 
 fn is_service_url(base_url: &str, service_url: &str) -> bool {
@@ -1651,6 +1821,11 @@ async fn send_download_request(
     resume_from: u64,
 ) -> Result<Response, ManagedError> {
     let primary = client.get(url);
+    let primary = if let Some(token) = hugging_face_token(url) {
+        primary.bearer_auth(token)
+    } else {
+        primary
+    };
     let primary = if resume_from > 0 {
         primary.header(RANGE, format!("bytes={resume_from}-"))
     } else {
@@ -1678,6 +1853,18 @@ async fn send_download_request(
             primary: primary_error,
             mirror,
         })
+}
+
+fn hugging_face_token(url: &str) -> Option<String> {
+    if !url.starts_with(HUGGING_FACE_ORIGIN) {
+        return None;
+    }
+    ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter_map(|value| value.into_string().ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
 }
 
 fn hugging_face_mirror_url(url: &str) -> Option<String> {
@@ -2068,6 +2255,44 @@ async fn start_qwen3_asr_06b_int8(
     })
 }
 
+async fn start_streaming_zipformer(
+    app: &AppHandle,
+    model_root: &Path,
+) -> Result<StartedService, ManagedError> {
+    let port = reserve_loopback_port()?;
+    let runtime_dir = app
+        .path()
+        .resolve(ONNX_RUNTIME_RESOURCE, BaseDirectory::Resource)?;
+    find_ort_library(&runtime_dir)?;
+    let model_dir = model_root.join(STREAMING_ZIPFORMER_MODEL_DIR);
+    let mut command = app.shell().sidecar(SHERPA_ONLINE_SIDECAR_NAME)?.args([
+        format!("--port={port}"),
+        "--num-work-threads=3".to_owned(),
+        "--num-threads=2".to_owned(),
+        "--provider=cpu".to_owned(),
+        format!(
+            "--encoder={}",
+            model_dir.join("encoder.int8.onnx").display()
+        ),
+        format!("--decoder={}", model_dir.join("decoder.onnx").display()),
+        format!("--joiner={}", model_dir.join("joiner.int8.onnx").display()),
+        format!("--tokens={}", model_dir.join("tokens.txt").display()),
+        "--decoding-method=greedy_search".to_owned(),
+        "--max-active-paths=4".to_owned(),
+    ]);
+    command = configure_library_path(command, &runtime_dir);
+    let (mut events, child) = command.spawn()?;
+    if let Err(error) = wait_for_tcp_ready(&mut events, port).await {
+        let _ = child.kill();
+        return Err(error);
+    }
+    Ok(StartedService {
+        port,
+        child,
+        events,
+    })
+}
+
 fn onnx_backend_name(backend: ManagedBackend) -> &'static str {
     match backend {
         ManagedBackend::Cpu => "cpu",
@@ -2277,7 +2502,7 @@ mod tests {
         write_install_marker, ManagedArchiveFormat, ManagedArchiveManifest, ManagedBackend,
         ManagedCampPlusBackend, ManagedMtdBackend, ManagedQwenBackend, ManagedServiceManifest,
         ManagedVoice, CAMPPLUS_ID, DEFAULT_MOSS_VOICE_URL, MATCHA_TTS_ID, MOSS_TTS_ID, MTD_ID,
-        QWEN3_ASR_06B_INT8_ID, REFINER_ID, SENSEVOICE_ID,
+        QWEN3_ASR_06B_INT8_ID, REFINER_ID, SENSEVOICE_ID, STREAMING_ZIPFORMER_ID, XTURNIX_ID,
     };
     use bzip2::{write::BzEncoder, Compression};
     use serde_json::json;
@@ -2445,6 +2670,160 @@ mod tests {
         )
         .expect("write invalid config");
         assert!(parse_managed_request(&config_path).is_err());
+    }
+
+    #[test]
+    fn parses_cpu_only_streaming_zipformer() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {
+                        "base_url": "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+                        "mode": "streaming"
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert!(request.streaming_zipformer);
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [STREAMING_ZIPFORMER_ID]);
+
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {
+                        "base_url": "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30?backend=cpu"
+                    }
+                }
+            }))
+            .expect("serialize explicit CPU config"),
+        )
+        .expect("write explicit CPU config");
+        assert!(
+            parse_managed_request(&config_path)
+                .expect("parse explicit CPU config")
+                .streaming_zipformer
+        );
+
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "SherpaOnnxASR",
+                    "params": {
+                        "base_url": "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30?backend=cuda"
+                    }
+                }
+            }))
+            .expect("serialize invalid config"),
+        )
+        .expect("write invalid config");
+        assert!(parse_managed_request(&config_path).is_err());
+    }
+
+    #[test]
+    fn rejects_streaming_zipformer_for_agentic_asr() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "asr": {
+                    "type": "AgenticASR",
+                    "params": {
+                        "asr_base_url": "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+                        "refiner_base_url": "managed://agentic-asr-refiner",
+                        "asr_mode": "streaming"
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        assert!(parse_managed_request(&config_path).is_err());
+    }
+
+    #[test]
+    fn parses_xturnix_model_as_a_managed_service() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "turn_detector": {
+                    "type": "XTurnix",
+                    "params": {
+                        "model": "managed://xturnix-zh-base",
+                        "timeout": 2.0,
+                        "max_model_len": 2048
+                    }
+                }
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+
+        let request = parse_managed_request(&config_path).expect("parse config");
+        assert!(request.xturnix);
+        let plan = inspect_model_config(&config_path).expect("inspect config");
+        assert_eq!(plan.services, [XTURNIX_ID]);
+
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&json!({
+                "turn_detector": {
+                    "type": "XTurnix",
+                    "params": {
+                        "model": "managed://xturnix-zh-base?backend=mlx"
+                    }
+                }
+            }))
+            .expect("serialize explicit MLX config"),
+        )
+        .expect("write explicit MLX config");
+        assert!(
+            parse_managed_request(&config_path)
+                .expect("parse explicit MLX config")
+                .xturnix
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_managed_xturnix_configurations() {
+        let directory = TestDirectory::create();
+        let config_path = directory.path().join("config.json");
+        for config in [
+            json!({
+                "turn_detector": {
+                    "type": "XTurnix",
+                    "params": {"model": "managed://xturnix-zh-base?backend=cpu"}
+                }
+            }),
+            json!({
+                "turn_detector": {
+                    "type": "TurnSense",
+                    "params": {"model": "managed://xturnix-zh-base"}
+                }
+            }),
+        ] {
+            fs::write(
+                &config_path,
+                serde_json::to_vec(&config).expect("serialize invalid config"),
+            )
+            .expect("write invalid config");
+            assert!(parse_managed_request(&config_path).is_err());
+        }
     }
 
     #[test]

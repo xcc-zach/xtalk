@@ -29,14 +29,20 @@ CAMPPLUS_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_campplus.json"
 QWEN3_ASR_EXAMPLE_PATH = (
     APP_ROOT / "examples" / "local_models_qwen3_asr_0_6b_int8.json"
 )
+STREAMING_ZIPFORMER_EXAMPLE_PATH = (
+    APP_ROOT / "examples" / "local_models_streaming_zipformer.json"
+)
+XTURNIX_EXAMPLE_PATH = APP_ROOT / "examples" / "local_models_xturnix.json"
 REQUIRED_MANAGED_MODEL_IDS = {
     "agentic-asr-refiner",
     "agentic-asr-refiner-mlx",
     "campplus",
     "matcha-icefall-zh-en",
     "qwen3-asr-0.6b-int8",
+    "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
     "sensevoice-small",
     "sensevoice-small-mlx",
+    "xturnix-zh-base",
     "moss-tts-nano",
     "moss-tts-nano-mlx",
     "moss-transcribe-diarize",
@@ -455,6 +461,62 @@ def verify_qwen3_asr_packaging() -> None:
         raise ValueError("Tauri bundle must package the Qwen3-ASR INT8 example")
 
 
+def verify_streaming_zipformer_packaging() -> None:
+    """Require the streaming Zipformer sidecar and example in Tauri bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the streaming Zipformer example is absent.
+    ValueError
+        Raised when Tauri does not package the sidecar and example.
+    """
+
+    if not STREAMING_ZIPFORMER_EXAMPLE_PATH.is_file():
+        raise FileNotFoundError(STREAMING_ZIPFORMER_EXAMPLE_PATH)
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bundle = tauri_config.get("bundle", {})
+    external_binaries = bundle.get("externalBin", [])
+    resources = bundle.get("resources", {})
+    if "binaries/sherpa-onnx-online-websocket-server" not in external_binaries:
+        raise ValueError("Tauri bundle must package the Sherpa online sidecar")
+    if (
+        resources.get("../examples/local_models_streaming_zipformer.json")
+        != "examples/local_models_streaming_zipformer.json"
+    ):
+        raise ValueError("Tauri bundle must package the streaming Zipformer example")
+
+
+def verify_xturnix_packaging() -> None:
+    """Require the managed XTurnix example in Tauri bundles.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the XTurnix example is absent.
+    ValueError
+        Raised when Tauri does not package the example at its runtime path.
+    """
+
+    if not XTURNIX_EXAMPLE_PATH.is_file():
+        raise FileNotFoundError(XTURNIX_EXAMPLE_PATH)
+    tauri_config = json.loads(
+        (APP_ROOT / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resources = tauri_config.get("bundle", {}).get("resources", {})
+    if (
+        resources.get("../examples/local_models_xturnix.json")
+        != "examples/local_models_xturnix.json"
+    ):
+        raise ValueError("Tauri bundle must package the XTurnix example")
+
+
 def verify_no_bundled_default_config() -> None:
     """Reject a release bundle that contains a default model configuration."""
 
@@ -640,6 +702,8 @@ def main() -> int:
     verify_mtd_packaging()
     verify_campplus_packaging()
     verify_qwen3_asr_packaging()
+    verify_streaming_zipformer_packaging()
+    verify_xturnix_packaging()
     verify_builtin_tools_and_credentials()
     print("resource verification passed")
     return 0
