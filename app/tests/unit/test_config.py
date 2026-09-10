@@ -248,6 +248,42 @@ def test_build_effective_config_forces_writable_data_dir(tmp_path: Path) -> None
     assert startup.data_dir.is_dir()
 
 
+def test_build_effective_config_consumes_managed_xturnix_model(
+    tmp_path: Path,
+) -> None:
+    """Keep the App-only model selector away from the XTurnix constructor."""
+
+    startup = _startup(
+        tmp_path,
+        config={
+            "turn_detector": {
+                "type": "XTurnix",
+                "params": {
+                    "model": "managed://xturnix-zh-base",
+                    "timeout": 2.0,
+                    "max_model_len": 2048,
+                },
+            }
+        },
+        overlay={
+            "turn_detector": {
+                "params": {"base_url": "http://127.0.0.1:32123"}
+            }
+        },
+    )
+
+    effective = build_effective_config(startup)
+
+    assert effective["turn_detector"] == {
+        "type": "XTurnix",
+        "params": {
+            "base_url": "http://127.0.0.1:32123",
+            "timeout": 2.0,
+            "max_model_len": 2048,
+        },
+    }
+
+
 def test_build_effective_config_fills_only_missing_top_level_keys(
     tmp_path: Path,
 ) -> None:

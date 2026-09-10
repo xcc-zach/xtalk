@@ -262,6 +262,23 @@ def deep_merge_config(
     return merged
 
 
+def _consume_managed_model_selectors(config: dict[str, Any]) -> None:
+    """Remove App-only managed selectors before Python model construction."""
+
+    detector = config.get("turn_detector")
+    if not isinstance(detector, dict) or detector.get("type") != "XTurnix":
+        return
+    params = detector.get("params")
+    if not isinstance(params, dict):
+        return
+    model = params.get("model")
+    if model in {
+        "managed://xturnix-zh-base",
+        "managed://xturnix-zh-base?backend=mlx",
+    }:
+        params.pop("model")
+
+
 def load_config_object(path: Path) -> dict[str, Any]:
     """Load one XTalk JSON configuration object.
 
@@ -327,6 +344,7 @@ def build_effective_config(startup: StartupConfig) -> dict[str, Any]:
         config_with_fallbacks,
         startup.config_overlay,
     )
+    _consume_managed_model_selectors(effective_config)
 
     service_config_value = effective_config.get("service_config", {})
     if not isinstance(service_config_value, dict):

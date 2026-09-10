@@ -491,8 +491,11 @@ def unique_match(
     return matches[0]
 
 
-def locate_runtime_inputs(root: Path, target: str) -> tuple[Path, Path, Path]:
-    """Locate server, sherpa library directory, and versioned ORT library.
+def locate_runtime_inputs(
+    root: Path,
+    target: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Locate Sherpa servers, its library directory, and versioned ORT.
 
     Parameters
     ----------
@@ -503,16 +506,31 @@ def locate_runtime_inputs(root: Path, target: str) -> tuple[Path, Path, Path]:
 
     Returns
     -------
-    tuple[pathlib.Path, pathlib.Path, pathlib.Path]
-        WebSocket server, shared-library directory, and ONNX Runtime 1.27.
+    tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]
+        Offline WebSocket server, online WebSocket server, shared-library
+        directory, and ONNX Runtime 1.27.
     """
 
-    server_name = (
+    offline_server_name = (
         "sherpa-onnx-offline-websocket-server.exe"
         if "windows" in target
         else "sherpa-onnx-offline-websocket-server"
     )
-    server = unique_match(root, lambda path: path.name == server_name, "sherpa server")
+    online_server_name = (
+        "sherpa-onnx-online-websocket-server.exe"
+        if "windows" in target
+        else "sherpa-onnx-online-websocket-server"
+    )
+    offline_server = unique_match(
+        root,
+        lambda path: path.name == offline_server_name,
+        "sherpa offline server",
+    )
+    online_server = unique_match(
+        root,
+        lambda path: path.name == online_server_name,
+        "sherpa online server",
+    )
     if "windows" in target:
         c_api_name = "sherpa-onnx-c-api.dll"
         ort_name = "onnxruntime.dll"
@@ -543,7 +561,7 @@ def locate_runtime_inputs(root: Path, target: str) -> tuple[Path, Path, Path]:
         )
     if ort.parent != c_api.parent:
         raise ValueError("sherpa and ONNX Runtime libraries are not colocated")
-    return server, c_api.parent, ort
+    return offline_server, online_server, c_api.parent, ort
 
 
 def prepare_runtime(
@@ -573,7 +591,10 @@ def prepare_runtime(
     archive = download_verified(record, cache)
     extracted = cache / f"extracted-{target}-{record['sha256'][:12]}"
     extract_regular_files(archive, extracted)
-    server, sherpa_directory, ort = locate_runtime_inputs(extracted, target)
+    offline_server, online_server, sherpa_directory, ort = locate_runtime_inputs(
+        extracted,
+        target,
+    )
     mtd_source = assemble_mtd_source(cache)
     command = [
         sys.executable,
@@ -581,7 +602,9 @@ def prepare_runtime(
         "--target-triple",
         target,
         "--sherpa-server",
-        str(server),
+        str(offline_server),
+        "--sherpa-online-server",
+        str(online_server),
         "--sherpa-library-dir",
         str(sherpa_directory),
         "--ort-library",

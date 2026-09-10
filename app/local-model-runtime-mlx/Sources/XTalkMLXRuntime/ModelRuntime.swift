@@ -13,6 +13,7 @@ actor ModelRuntime {
     private let senseVoice: SenseVoiceModel?
     private let mossTTS: MossTTSNanoModel?
     private let refiner: ModelContainer?
+    private let xturnix: ModelContainer?
 
     init(service: ManagedModelService, modelRoot: URL) async throws {
         self.service = service
@@ -21,18 +22,99 @@ actor ModelRuntime {
             senseVoice = try SenseVoiceModel.fromDirectory(modelRoot)
             mossTTS = nil
             refiner = nil
+            xturnix = nil
         case .mossTTSNano:
             senseVoice = nil
             mossTTS = try await MossTTSNanoModel.fromModelDirectory(modelRoot)
             refiner = nil
+            xturnix = nil
         case .agenticASRRefiner:
             senseVoice = nil
             mossTTS = nil
             refiner = try await loadModelContainer(
                 from: modelRoot,
-                using: RefinerTokenizerLoader()
+                using: LocalTokenizerLoader()
+            )
+            xturnix = nil
+        case .xturnixZHBase:
+            senseVoice = nil
+            mossTTS = nil
+            refiner = nil
+            xturnix = try await loadModelContainer(
+                from: modelRoot,
+                using: LocalTokenizerLoader()
             )
         }
+    }
+
+    /// Tokenize one vLLM-compatible XTurnix prompt or chat request.
+    func tokenizeXTurnix(
+        prompt: String?,
+        messages: [XTurnixMessage]?,
+        addSpecialTokens: Bool,
+        addGenerationPrompt: Bool,
+        enableThinking: Bool
+    ) async throws -> [Int] {
+        guard let xturnix else {
+            throw ModelRuntimeError.wrongService
+        }
+        return try await xturnix.perform { context in
+            if let prompt {
+                return context.tokenizer.encode(
+                    text: prompt,
+                    addSpecialTokens: addSpecialTokens
+                )
+            }
+            guard let messages, !messages.isEmpty else {
+                throw ModelRuntimeError.emptyXTurnixInput
+            }
+            let inputMessages: [[String: any Sendable]] = messages.map { message in
+                ["role": message.role, "content": message.content]
+            }
+            return try context.tokenizer.applyChatTemplate(
+                messages: inputMessages,
+                tools: nil,
+                additionalContext: [
+                    "add_generation_prompt": addGenerationPrompt,
+                    "enable_thinking": enableThinking,
+                ]
+            )
+        }
+    }
+
+    /// Select one constrained XTurnix action token from a chat prompt.
+    func predictXTurnixAction(
+        messages: [XTurnixMessage],
+        allowedTokenIDs: [Int],
+        enableThinking: Bool
+    ) async throws -> String {
+        guard let xturnix else {
+            throw ModelRuntimeError.wrongService
+        }
+        let inputMessages: [Message] = messages.map { message in
+            ["role": message.role, "content": message.content]
+        }
+        let input = UserInput(
+            messages: inputMessages,
+            additionalContext: ["enable_thinking": enableThinking]
+        )
+        let prepared = try await xturnix.prepare(input: input)
+        let tokenID = try await xturnix.perform(
+            nonSendable: prepared
+        ) { context, prepared in
+            var iterator = try TokenIterator(
+                input: prepared,
+                model: context.model,
+                processor: nil,
+                sampler: XTurnixAllowedTokenSampler(tokenIDs: allowedTokenIDs),
+                maxTokens: 1
+            )
+            guard let tokenID = iterator.next() else {
+                throw ModelRuntimeError.emptyXTurnixOutput
+            }
+            return tokenID
+        }
+        return await xturnix.decode(tokenIds: [tokenID])
     }
 
     /// Refine one OpenAI-compatible chat request using greedy no-thinking decoding.
@@ -240,6 +322,34 @@ struct RefinerGenerationResult: Sendable {
     let finishReason: String
 }
 
+/// One chat message accepted by the managed XTurnix service.
+struct XTurnixMessage: Codable, Sendable {
+    let role: String
+    let content: String
+}
+
+private struct XTurnixAllowedTokenSampler: LogitSampler {
+    let tokenIDs: [Int]
+
+    func sample(logits: MLXArray) -> MLXArray {
+        let selected = logits
+            .take(MLXArray(tokenIDs), axis: -1)
+            .asType(.float32)
+        eval(selected)
+        let values = selected.asArray(Float.self)
+        return MLXArray([xturnixAllowedToken(values: values, tokenIDs: tokenIDs)])
+    }
+}
+
+/// Return the token ID with the largest constrained logit.
+func xturnixAllowedToken(values: [Float], tokenIDs: [Int]) -> Int {
+    precondition(values.count == tokenIDs.count && !tokenIDs.isEmpty)
+    let bestIndex = values.indices.dropFirst().reduce(values.startIndex) { best, index in
+        values[index] > values[best] ? index : best
+    }
+    return tokenIDs[bestIndex]
+}
+
 /// Strip any chat terminators emitted before the configured stop token is observed.
 func cleanRefinerOutput(_ text: String) -> String {
     text.replacingOccurrences(of: "<|im_end|>", with: "")
@@ -247,7 +357,7 @@ func cleanRefinerOutput(_ text: String) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-private struct RefinerTokenizerLoader: MLXLMCommon.TokenizerLoader {
+private struct LocalTokenizerLoader: MLXLMCommon.TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let tokenizer = try await Tokenizers.AutoTokenizer.from(
             modelFolder: directory
@@ -654,6 +764,8 @@ func mossTTSFrameLimit(for chunks: [String]) -> Int {
 
 enum ModelRuntimeError: Error, LocalizedError {
     case wrongService
+    case emptyXTurnixInput
+    case emptyXTurnixOutput
     case emptyText
     case emptyAudio
     case promptAudioTooLarge
@@ -662,6 +774,10 @@ enum ModelRuntimeError: Error, LocalizedError {
         switch self {
         case .wrongService:
             "Requested operation is unavailable for this MLX service"
+        case .emptyXTurnixInput:
+            "prompt or messages must not be empty"
+        case .emptyXTurnixOutput:
+            "XTurnix generation returned no action token"
         case .emptyText:
             "text must not be empty"
         case .emptyAudio:
