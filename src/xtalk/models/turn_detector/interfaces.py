@@ -108,6 +108,7 @@ class TurnDetector(ABC):
         assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
+        assistant_interrupted: bool = False,
     ) -> TurnDetectionResult:
         """Detect conversational turn state from audio and/or text context.
 
@@ -126,6 +127,9 @@ class TurnDetector(ABC):
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking. This is typically
             provided together with ``text``.
+        assistant_interrupted : bool, optional
+            Whether assistant speech has just been interrupted before normal
+            playback completion.
 
         Returns
         -------
@@ -141,6 +145,7 @@ class TurnDetector(ABC):
         assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
+        assistant_interrupted: bool = False,
     ) -> TurnDetectionResult:
         """Asynchronously detect conversational turn state.
 
@@ -158,6 +163,9 @@ class TurnDetector(ABC):
             provided without ``audio``, ``text``, or ``assistant_text``.
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking.
+        assistant_interrupted : bool, optional
+            Whether assistant speech has just been interrupted before normal
+            playback completion.
 
         Returns
         -------
@@ -172,6 +180,7 @@ class TurnDetector(ABC):
             assistant_text=assistant_text,
             speech_start=speech_start,
             speech_pause=speech_pause,
+            assistant_interrupted=assistant_interrupted,
         )
         result: TurnDetectionResult = await loop.run_in_executor(None, func)
         return result

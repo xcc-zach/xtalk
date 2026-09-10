@@ -10,7 +10,7 @@ Subscribes to:
 - ResponseFinish: feeds final played AI response text to turn detector
 - TTSChunkGenerated: sets turn detector to non-listening
 - TTSPlaybackFinished: resumes turn detector listening
-- TTSStopped: resumes turn detector listening
+- TTSStopped: resumes listening and notifies the turn detector of interruption
 
 Emits:
 - TurnDetectorStopSpeaking: when action is STOP_SPEAKING
@@ -163,6 +163,8 @@ class TurnDetectorManager(Manager):
             return
         # No lock needed: single bool assignment is atomic (GIL), no compound read-then-write
         self.turn_detector.listening = True
+        result = await self.turn_detector.async_detect(assistant_interrupted=True)
+        await self._handle_detection_result(result)
 
     async def _handle_detection_result(self, result: TurnDetectionResult) -> None:
         """Handle one turn detection result and emit the corresponding events."""
