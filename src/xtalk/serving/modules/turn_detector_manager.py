@@ -86,9 +86,13 @@ class TurnDetectorManager(Manager):
         except Exception as e:
             logger.error("[TurnDetectorManager] audio frame processing failed: %s", e)
 
-    @Manager.event_handler(ASRResultPartial)
+    @Manager.event_handler(ASRResultPartial, priority=70)
     async def _on_asr_partial(self, event: ASRResultPartial) -> None:
-        """Process partial ASR results through turn detector."""
+        """Detect turn boundaries before speaker preview and history gates.
+
+        Boundary detection must also close non-focus turns. Permission to
+        respond remains controlled by the final multi-speaker join.
+        """
         try:
             if self.turn_detector is None:
                 return
