@@ -64,6 +64,7 @@ def test_request_contract_and_first_speaker_commit_only_on_final() -> None:
         captured: list[dict[str, Any]] = []
 
         async def handler(request: web.Request) -> web.Response:
+            assert request.headers["Authorization"] == "Bearer test-key"
             captured.append(await _read_form(request))
             return web.json_response(
                 {
@@ -76,7 +77,7 @@ def test_request_contract_and_first_speaker_commit_only_on_final() -> None:
             )
 
         runner, base_url = await _start_server(handler)
-        client = CampPlusDiarization(base_url=base_url)
+        client = CampPlusDiarization(base_url=base_url, api_key="test-key").clone()
         try:
             partial = await client.decode_snapshot(
                 request_id="session/1/1/1/partial",
@@ -115,6 +116,47 @@ def test_request_contract_and_first_speaker_commit_only_on_final() -> None:
         assert final.metrics["centroid_updated"] is True
         assert final.metrics["committed_speakers"] == 1
         assert final.metrics["remote_request_id"] == "remote-campplus-id"
+
+    asyncio.run(scenario())
+
+
+def test_upload_window_keeps_latest_ten_seconds_and_original_timestamps() -> None:
+    """Bound partial and final payloads without shifting their source times."""
+
+    async def scenario() -> None:
+        captured: list[dict[str, Any]] = []
+
+        async def handler(request: web.Request) -> web.Response:
+            captured.append(await _read_form(request))
+            return web.json_response({"embedding": _embedding(0)})
+
+        runner, base_url = await _start_server(handler)
+        client = CampPlusDiarization(base_url=base_url).clone()
+        try:
+            for is_final in (False, True):
+                for sample_count in (16000, 160000, 160001, 400000, 960000):
+                    pcm16 = np.arange(sample_count, dtype=np.int64).astype("<i2").tobytes()
+                    result = await client.decode_snapshot(
+                        request_id=f"session/1/1/{sample_count}/{is_final}",
+                        pcm16=pcm16,
+                        sample_rate=16000,
+                        is_final=is_final,
+                    )
+                    expected_start = max(0, sample_count - 160000) / 16000
+                    expected_duration = min(sample_count, 160000) / 16000
+                    assert captured[-1]["audio"] == pcm16[-320000:]
+                    assert captured[-1]["is_final"] == str(is_final).lower()
+                    assert result.segments[0]["start_s"] == expected_start
+                    assert result.segments[0]["end_s"] == sample_count / 16000
+                    assert result.raw_text == (
+                        f"[{expected_start:.2f}][S01][{sample_count / 16000:.2f}]"
+                    )
+                    assert result.metrics["uploaded_audio_s"] == expected_duration
+                    assert result.metrics["trimmed_audio_s"] == expected_start
+                    assert result.metrics["input_audio_s"] == sample_count / 16000
+        finally:
+            await client.close()
+            await runner.cleanup()
 
     asyncio.run(scenario())
 
