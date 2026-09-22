@@ -254,6 +254,21 @@ Turn detector is used to determine whether the user has finished speaking and de
 
 </details>
 
+<details markdown="1">
+<summary>XTurnix</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/turn_detector/xturnix.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix.py)
+
+[Quick Start](https://github.com/xcc-zach/xturnix)
+
+In the local App, set `turn_detector.params.model` to
+`managed://xturnix-zh-base` to download and run the model as a managed service
+on Apple Silicon.
+
+</details>
+
 ### Speaker Diarization
 
 **Name in config**: `speaker_diarization`

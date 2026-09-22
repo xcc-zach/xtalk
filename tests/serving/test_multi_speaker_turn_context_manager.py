@@ -5,10 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
-from xtalk.models import Models, SpeakerDiarization
+from xtalk.models import Models, SpeakerDiarization, TurnDetector
 from xtalk.models.speaker_diarization.interfaces import DiarizationResult
+from xtalk.models.turn_detector.interfaces import (
+    TurnDetectionAction,
+    TurnDetectionResult,
+    TurnDetectionSemantic,
+)
 from xtalk.serving.event_bus import EventBus, EventDispatchMode
 from xtalk.serving.events import (
     ASRGateState,
@@ -20,12 +27,14 @@ from xtalk.serving.events import (
     SpeakerDiarizationTurnFinal,
     TurnASREndRequested,
     TurnASRStartRequested,
+    TurnDetectorStartGeneration,
     VADSpeechEnd,
 )
 from xtalk.serving.modules.multi_speaker_turn_context_manager import (
     MultiSpeakerTurnContextManager,
 )
 from xtalk.serving.modules.output_gateway import OutputGateway
+from xtalk.serving.modules.turn_detector_manager import TurnDetectorManager
 
 
 class _FakeDiarization:
@@ -91,6 +100,76 @@ class _RecordingWebSocket:
 
 class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
     """Verify generic scheduling and ASR/diarization joining."""
+
+    async def test_turn_detection_precedes_gates_without_bypassing_focus_policy(self) -> None:
+        """Detect pauses for all speakers while only admitting focus history."""
+        for speaker_id in ("S01", "S02"):
+            with self.subTest(speaker_id=speaker_id):
+                event_bus = EventBus(enable_history=True)
+                self.addAsyncCleanup(event_bus.shutdown)
+                detector = SimpleNamespace(
+                    listening=True,
+                    async_detect=AsyncMock(return_value=TurnDetectionResult(
+                        action=TurnDetectionAction.START_GENERATION,
+                        semantic=TurnDetectionSemantic.COMPLETE,
+                    )),
+                )
+                models = Models({
+                    SpeakerDiarization: _FakeDiarization(),
+                    TurnDetector: detector,
+                })
+                manager = MultiSpeakerTurnContextManager(
+                    event_bus=event_bus, session_id="session", models=models,
+                )
+                self.addAsyncCleanup(manager.shutdown)
+                turn_manager = TurnDetectorManager(
+                    event_bus=event_bus, session_id="session", models=models,
+                )
+                self.addAsyncCleanup(turn_manager.shutdown)
+                segments = [{
+                    "speaker_id": speaker_id, "text": "hello",
+                    "start_s": 0.0, "end_s": 1.0,
+                }]
+                manager._observe_diarization_segments(1, segments)
+                agent_partial = AsyncMock()
+                event_bus.subscribe(ASRResultPartial, agent_partial, priority=20)
+
+                await event_bus.publish(
+                    ASRResultPartial(
+                        session_id="session", turn_id=1, segment_id=1,
+                        text="hello", speech_pause=True,
+                    ),
+                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED,
+                )
+
+                detector.async_detect.assert_awaited_once_with(
+                    text="hello", speech_pause=True,
+                )
+                self.assertEqual(len(event_bus.get_history(
+                    event_type=TurnDetectorStartGeneration.TYPE,
+                )), 1)
+                agent_partial.assert_not_awaited()
+                self.assertEqual(event_bus.get_history(
+                    event_type=ASRResultPartial.TYPE,
+                ), [])
+
+                await manager._publish_ready(
+                    ASRResultFinal(session_id="session", turn_id=1, text="hello"),
+                    SpeakerDiarizationTurnFinal(
+                        session_id="session", turn_id=1,
+                        active_speaker_id=speaker_id, segments=segments,
+                    ),
+                )
+                ready = event_bus.get_history(event_type=MultiSpeakerTurnReady.TYPE)
+                accepted = event_bus.get_history(event_type=ASRResultFinal.TYPE)
+                if speaker_id == "S01":
+                    self.assertEqual(len(ready), 1)
+                    self.assertTrue(ready[0].should_respond)
+                    self.assertEqual(len(accepted), 1)
+                    self.assertIs(accepted[0].gate_state, ASRGateState.ACCEPTED)
+                else:
+                    self.assertEqual(ready, [])
+                    self.assertEqual(accepted, [])
 
     async def test_model_presence_controls_enablement(self) -> None:
         """Enable diarization only when its model is registered."""

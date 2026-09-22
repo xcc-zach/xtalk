@@ -18,7 +18,7 @@ from .interfaces import DiarizationResult, DiarizationSegment, SpeakerDiarizatio
 _SAMPLE_RATE = 16000
 _EMBEDDING_DIMENSIONS = 192
 _UNKNOWN_SPEAKER_ID = "S00"
-
+_MAX_AUDIO_DURATION_S = 10
 
 class CampPlusRequestCancelled(RuntimeError):
     """Signal that an obsolete CAM++ snapshot request was cancelled."""
@@ -80,6 +80,8 @@ class CampPlusDiarization(SpeakerDiarization):
         embedding.
     max_speakers : int, optional
         Maximum number of committed speakers retained by one session clone.
+    api_key : str, optional
+        Bearer token for the remote embedding service.
     """
 
     def __init__(
@@ -91,6 +93,7 @@ class CampPlusDiarization(SpeakerDiarization):
         new_speaker_confirmations: int = 2,
         centroid_update_alpha: float = 0.1,
         max_speakers: int = 16,
+        api_key: str = "",
     ) -> None:
         normalized_url = str(base_url).rstrip("/")
         if not normalized_url:
@@ -109,6 +112,7 @@ class CampPlusDiarization(SpeakerDiarization):
             raise ValueError("max_speakers must be at least 1")
 
         self.base_url = normalized_url
+        self.api_key = api_key.strip()
         self.request_timeout_s = float(request_timeout_s)
         self.similarity_threshold = float(similarity_threshold)
         self.min_audio_duration_s = float(min_audio_duration_s)
@@ -134,6 +138,7 @@ class CampPlusDiarization(SpeakerDiarization):
             new_speaker_confirmations=self.new_speaker_confirmations,
             centroid_update_alpha=self.centroid_update_alpha,
             max_speakers=self.max_speakers,
+            api_key=self.api_key,
         )
 
     async def decode_snapshot(
@@ -144,7 +149,7 @@ class CampPlusDiarization(SpeakerDiarization):
         sample_rate: int,
         is_final: bool,
     ) -> DiarizationResult:
-        """Extract one embedding and classify the current complete snapshot."""
+        """Classify at most the latest ten seconds with snapshot-local times."""
 
         if not request_id:
             raise ValueError("request_id must be non-empty")
@@ -155,7 +160,18 @@ class CampPlusDiarization(SpeakerDiarization):
         if len(pcm16) % 2:
             raise ValueError("PCM16 payload must contain complete samples")
 
+        input_duration_s = len(pcm16) / (sample_rate * 2)
+        max_audio_bytes = _MAX_AUDIO_DURATION_S * sample_rate * 2
+        trimmed_bytes = max(0, len(pcm16) - max_audio_bytes)
+        start_s = trimmed_bytes / (sample_rate * 2)
+        if trimmed_bytes:
+            pcm16 = pcm16[-max_audio_bytes:]
         duration_s = len(pcm16) / (sample_rate * 2)
+        window_metrics = {
+            "input_audio_s": input_duration_s,
+            "uploaded_audio_s": duration_s,
+            "trimmed_audio_s": start_s,
+        }
         if duration_s < self.min_audio_duration_s:
             return self._render_result(
                 duration_s=duration_s,
@@ -164,7 +180,10 @@ class CampPlusDiarization(SpeakerDiarization):
                     speaker_id=_UNKNOWN_SPEAKER_ID,
                     action="too_short",
                 ),
-                metrics={"request_id": request_id, "is_final": is_final},
+                start_s=start_s,
+                metrics={
+                    **window_metrics, "request_id": request_id, "is_final": is_final,
+                },
             )
 
         request_task = asyncio.create_task(
@@ -197,6 +216,7 @@ class CampPlusDiarization(SpeakerDiarization):
         if not _speech_accepted(payload, server_metrics):
             return self._render_result(
                 duration_s=duration_s,
+                start_s=start_s,
                 latency_ms=latency_ms,
                 decision=_SpeakerDecision(
                     speaker_id=_UNKNOWN_SPEAKER_ID,
@@ -204,6 +224,7 @@ class CampPlusDiarization(SpeakerDiarization):
                 ),
                 metrics={
                     **server_metrics,
+                    **window_metrics,
                     "request_id": request_id,
                     "remote_request_id": remote_request_id,
                     "is_final": is_final,
@@ -219,10 +240,12 @@ class CampPlusDiarization(SpeakerDiarization):
         )
         return self._render_result(
             duration_s=duration_s,
+            start_s=start_s,
             latency_ms=latency_ms,
             decision=decision,
             metrics={
                 **server_metrics,
+                **window_metrics,
                 "request_id": request_id,
                 "remote_request_id": remote_request_id,
                 "is_final": is_final,
@@ -381,6 +404,7 @@ class CampPlusDiarization(SpeakerDiarization):
         latency_ms: float,
         decision: _SpeakerDecision,
         metrics: dict[str, Any],
+        start_s: float = 0.0,
     ) -> DiarizationResult:
         """Render one clustering decision into the shared diarization contract."""
 
@@ -390,13 +414,13 @@ class CampPlusDiarization(SpeakerDiarization):
         if speaker_id is not None and duration_s > 0:
             segments.append(
                 {
-                    "start_s": 0.0,
-                    "end_s": duration_s,
+                    "start_s": start_s,
+                    "end_s": start_s + duration_s,
                     "speaker_id": speaker_id,
                     "text": "",
                 }
             )
-            raw_text = f"[0.00][{speaker_id}][{duration_s:.2f}]"
+            raw_text = f"[{start_s:.2f}][{speaker_id}][{start_s + duration_s:.2f}]"
         return DiarizationResult(
             raw_text=raw_text,
             segments=segments,
@@ -451,7 +475,8 @@ class CampPlusDiarization(SpeakerDiarization):
 
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=self.request_timeout_s)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            self._session = aiohttp.ClientSession(timeout=timeout, headers=headers)
         return self._session
 
 

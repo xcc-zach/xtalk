@@ -264,6 +264,7 @@ class TurnSense(TurnDetector):
         assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
+        assistant_interrupted: bool = False,
     ) -> TurnDetectionResult:
         """Synchronously run turn detection via the async implementation.
 
@@ -280,6 +281,9 @@ class TurnSense(TurnDetector):
             Whether VAD has just detected the start of speech.
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking.
+        assistant_interrupted : bool, optional
+            Whether assistant speech has just been interrupted. This
+            implementation currently ignores it.
 
         Returns
         -------
@@ -293,6 +297,7 @@ class TurnSense(TurnDetector):
                 assistant_text=assistant_text,
                 speech_start=speech_start,
                 speech_pause=speech_pause,
+                assistant_interrupted=assistant_interrupted,
             )
         )
 
@@ -303,6 +308,7 @@ class TurnSense(TurnDetector):
         assistant_text: Optional[str] = None,
         speech_start: bool = False,
         speech_pause: Optional[bool] = None,
+        assistant_interrupted: bool = False,
     ) -> TurnDetectionResult:
         """Asynchronously detect turn state using the TurnSense HTTP service.
 
@@ -320,6 +326,9 @@ class TurnSense(TurnDetector):
             Whether VAD has just detected the start of speech.
         speech_pause : bool | None, optional
             Whether the user appears to have paused speaking.
+        assistant_interrupted : bool, optional
+            Whether assistant speech has just been interrupted. This
+            implementation currently ignores it.
 
         Returns
         -------
@@ -344,7 +353,7 @@ class TurnSense(TurnDetector):
         stores a one-shot pending completion so that the next call observed in
         the listening state returns ``START_GENERATION`` with ``COMPLETE``.
         """
-        del text
+        del text, assistant_interrupted
         async with self.listening_lock():
             listening = self.listening
 

@@ -49,6 +49,7 @@
       "binaries/mtd-model-runtime",
       "binaries/mlx-model-runtime",
       "binaries/sherpa-onnx-offline-websocket-server",
+      "binaries/sherpa-onnx-online-websocket-server",
       "binaries/sherpa-onnx-keyword-spotter-microphone"
     ],
     "resources": {
@@ -61,6 +62,8 @@
       "icons/icon.icns": "icon-v3.icns",
       "../examples/local_models_matcha.json": "examples/local_models_matcha.json",
       "../examples/local_models_qwen3_asr_0_6b_int8.json": "examples/local_models_qwen3_asr_0_6b_int8.json",
+      "../examples/local_models_streaming_zipformer.json": "examples/local_models_streaming_zipformer.json",
+      "../examples/local_models_xturnix.json": "examples/local_models_xturnix.json",
       "../examples/local_models_campplus.json": "examples/local_models_campplus.json",
       "../examples/local_models_mtd.json": "examples/local_models_mtd.json",
       "../resources/tools/": "tools/",

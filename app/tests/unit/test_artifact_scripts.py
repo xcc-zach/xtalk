@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -553,23 +554,113 @@ def test_native_runtime_locates_colocated_macos_sherpa_and_ort(
     """Use the server and ORT from the same verified Sherpa archive."""
 
     module = load_script("download_managed_runtime")
-    server = tmp_path / "bin" / "sherpa-onnx-offline-websocket-server"
+    offline_server = tmp_path / "bin" / "sherpa-onnx-offline-websocket-server"
+    online_server = tmp_path / "bin" / "sherpa-onnx-online-websocket-server"
     library = tmp_path / "lib"
-    server.parent.mkdir()
+    offline_server.parent.mkdir()
     library.mkdir()
-    server.write_bytes(b"server")
+    offline_server.write_bytes(b"offline")
+    online_server.write_bytes(b"online")
     (library / "libsherpa-onnx-c-api.dylib").write_bytes(b"sherpa")
     ort = library / "libonnxruntime.1.27.0.dylib"
     ort.write_bytes(b"ort")
 
-    actual_server, actual_library, actual_ort = module.locate_runtime_inputs(
+    (
+        actual_offline_server,
+        actual_online_server,
+        actual_library,
+        actual_ort,
+    ) = module.locate_runtime_inputs(
         tmp_path,
         "aarch64-apple-darwin",
     )
 
-    assert actual_server == server
+    assert actual_offline_server == offline_server
+    assert actual_online_server == online_server
     assert actual_library == library
     assert actual_ort == ort
+
+
+def test_managed_runtime_stages_offline_and_online_sherpa_servers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stage both official Sherpa WebSocket servers for Tauri."""
+
+    module = load_script("prepare_managed_runtime")
+    target = "x86_64-unknown-linux-gnu"
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    offline_server = inputs / "sherpa-onnx-offline-websocket-server"
+    online_server = inputs / "sherpa-onnx-online-websocket-server"
+    local_runtime = inputs / "local-model-runtime"
+    matcha_runtime = inputs / "matcha-model-runtime"
+    mtd_runtime = inputs / "mtd-model-runtime"
+    mlx_runtime = inputs / "mlx-model-runtime"
+    for path in (
+        offline_server,
+        online_server,
+        local_runtime,
+        matcha_runtime,
+        mtd_runtime,
+        mlx_runtime,
+    ):
+        path.write_bytes(path.name.encode())
+
+    libraries = tmp_path / "libraries"
+    libraries.mkdir()
+    (libraries / "libsherpa-onnx-c-api.so").write_bytes(b"sherpa")
+    ort = libraries / "libonnxruntime.so.1.27.0"
+    ort.write_bytes(b"ort")
+    mtd_source = tmp_path / "mtd-source"
+    (mtd_source / "third_party" / "ggml").mkdir(parents=True)
+    (mtd_source / "third_party" / "ggml" / "CMakeLists.txt").write_text(
+        "cmake",
+        encoding="utf-8",
+    )
+
+    binaries = tmp_path / "binaries"
+    binaries.mkdir()
+    keyword_spotter = (
+        binaries / f"sherpa-onnx-keyword-spotter-microphone-{target}"
+    )
+    keyword_spotter.write_bytes(b"keyword")
+    wake_models = tmp_path / "wake-word"
+    wake_models.mkdir()
+    for filename in module.WAKE_WORD_MODEL_FILES:
+        (wake_models / filename).write_bytes(b"model")
+
+    monkeypatch.setattr(module, "TAURI_BINARIES", binaries)
+    monkeypatch.setattr(module, "MANAGED_RESOURCES", tmp_path / "resources")
+    monkeypatch.setattr(module, "WAKE_WORD_RESOURCES", wake_models)
+    monkeypatch.setattr(
+        module,
+        "parse_args",
+        lambda: Namespace(
+            target_triple=target,
+            sherpa_server=offline_server,
+            sherpa_online_server=online_server,
+            sherpa_keyword_spotter=None,
+            sherpa_kws_model_dir=None,
+            sherpa_library_dir=libraries,
+            ort_library=ort,
+            mtd_source_dir=mtd_source,
+            cuda_runtime_dir=None,
+            debug=False,
+        ),
+    )
+    monkeypatch.setattr(module, "build_local_runtime", lambda *_args: local_runtime)
+    monkeypatch.setattr(module, "build_matcha_runtime", lambda *_args: matcha_runtime)
+    monkeypatch.setattr(module, "build_mtd_runtime", lambda *_args: mtd_runtime)
+    monkeypatch.setattr(module, "built_rust_runtime", lambda *_args: mlx_runtime)
+
+    assert module.main() == 0
+    assert (
+        binaries / f"sherpa-onnx-offline-websocket-server-{target}"
+    ).read_bytes() == offline_server.read_bytes()
+    assert (
+        binaries / f"sherpa-onnx-online-websocket-server-{target}"
+    ).read_bytes() == online_server.read_bytes()
 
 
 def test_macos_packager_links_framework_metadata_to_resources(
@@ -1015,7 +1106,7 @@ def test_managed_runtime_declares_complete_wake_word_model_layout() -> None:
     assert (
         APP_ROOT / "resources" / "models" / "wake-word" / "keywords.txt"
     ).read_text(encoding="utf-8").strip() == (
-        "n ǐ h ǎo x iǎo k è :3.0 #0.25 @你好小克"
+        "n ǐ h ǎo x iǎo k è :3.0 #0.05 @你好小克"
     )
 
 
@@ -1208,6 +1299,45 @@ def test_qwen3_asr_example_selects_only_the_int8_managed_model() -> None:
         "params": {
             "base_url": "managed://qwen3-asr-0.6b-int8",
             "mode": "offline",
+        },
+    }
+
+
+def test_streaming_zipformer_example_uses_managed_online_sherpa() -> None:
+    """Keep the streaming example aligned with the online Sherpa protocol."""
+
+    example = json.loads(
+        (
+            APP_ROOT
+            / "examples"
+            / "local_models_streaming_zipformer.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert example["asr"] == {
+        "type": "SherpaOnnxASR",
+        "params": {
+            "base_url": "managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+            "mode": "streaming",
+        },
+    }
+
+
+def test_xturnix_example_uses_managed_turn_detector_model() -> None:
+    """Keep the XTurnix example on the App-managed model selector."""
+
+    example = json.loads(
+        (APP_ROOT / "examples" / "local_models_xturnix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert example["turn_detector"] == {
+        "type": "XTurnix",
+        "params": {
+            "model": "managed://xturnix-zh-base",
+            "timeout": 2.0,
+            "max_model_len": 2048,
         },
     }
 

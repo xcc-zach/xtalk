@@ -14,6 +14,7 @@ app/src-tauri/binaries/
 ├── mtd-model-runtime-<target-triple>[.exe]
 ├── mlx-model-runtime-<target-triple>[.exe]
 ├── sherpa-onnx-offline-websocket-server-<target-triple>[.exe]
+├── sherpa-onnx-online-websocket-server-<target-triple>[.exe]
 ├── sherpa-onnx-keyword-spotter-microphone-<target-triple>[.exe]
 └── app-backend-runtime/
     └── PyInstaller onedir runtime files
@@ -50,7 +51,9 @@ python ../scripts/download_managed_runtime.py \
 The script selects the Rust host target, downloads its official sherpa shared
 distribution, validates the SHA-256 from
 `resources/manifests/native-runtimes.lock.json`, and stages the included
-Sherpa server and ONNX Runtime 1.27 together. It also builds the Rust runtimes;
+Sherpa offline and online WebSocket servers with ONNX Runtime 1.27. The online
+server runs the CPU-only managed streaming Zipformer example. It also builds
+the Rust runtimes;
 the shared native ONNX sidecar serves CAM++ embeddings through
 `managed://campplus`, selecting CoreML on macOS and CPU or CUDA elsewhere;
 the managed MTD runtime is statically linked from the immutable

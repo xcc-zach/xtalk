@@ -250,6 +250,20 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 
 </details>
 
+<details markdown="1">
+<summary>XTurnix</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/turn_detector/xturnix.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix.py)
+
+[快速开始](https://github.com/xcc-zach/xturnix)
+
+在本地 App 中，可将 `turn_detector.params.model` 配置为
+`managed://xturnix-zh-base`，以在 Apple Silicon 上自动下载并作为受管服务运行。
+
+</details>
+
 ### 说话人分离
 
 **配置中的名称**：`speaker_diarization`
