@@ -113,9 +113,9 @@ python scripts/build_backend.py \
   --xtalk-extra silero-vad
 ```
 
-For a build that supports managed SenseVoice, Matcha, MOSS, and local
-background wake, download and stage the locked native runtime for the current
-platform:
+For a build that supports managed SenseVoice, streaming Zipformer, Matcha,
+MOSS, and local background wake, download and stage the locked native runtime
+for the current platform:
 
 ```bash
 python scripts/download_managed_runtime.py \
@@ -125,8 +125,9 @@ python scripts/download_managed_runtime.py \
 
 The script selects the Rust host triple, downloads the corresponding official
 sherpa-onnx shared archive, verifies its locked SHA-256, and uses the Sherpa
-server and ONNX Runtime 1.27 from that same archive. It then builds and stages
-the App's native sidecars. The supported macOS, Linux, and Windows x64/ARM64
+offline and online WebSocket servers and ONNX Runtime 1.27 from that same
+archive. It then builds and stages the App's native sidecars. The supported
+macOS, Linux, and Windows x64/ARM64
 archives are pinned in `resources/manifests/native-runtimes.lock.json`.
 The keyword-spotter executable and KWS model are explicit build inputs because
 they are not part of that shared runtime archive. Later packaging runs reuse
@@ -273,9 +274,9 @@ shasum -a 256 \
 ```
 
 The release contains ONNX Runtime 1.27, the native service executables, the
-frozen Python backend, and the Silero VAD model. SenseVoice Small,
-AgenticASR Refiner, matcha-icefall-zh-en, and MOSS-TTS-Nano weights are
-deliberately excluded; they
+frozen Python backend, and the Silero VAD model. SenseVoice Small, streaming
+Zipformer, AgenticASR Refiner, matcha-icefall-zh-en, MOSS-TTS-Nano, and XTurnix
+zh-base weights are deliberately excluded; they
 are downloaded and verified in AppData only after a selected configuration
 references their `managed://` URLs. Model configuration files and provider
 credentials are also external and must never be copied into the bundle.
@@ -337,6 +338,18 @@ example selects the managed Qwen3-ASR 0.6B INT8 snapshot. Its `auto` backend
 prefers Core ML on macOS and CUDA where available, then falls back to the native
 ARM/x64 CPU provider. Use `?backend=coreml`, `?backend=cuda`, or `?backend=cpu`
 to force a Qwen backend; Qwen does not accept `backend=mlx`.
+Use
+[`examples/local_models_streaming_zipformer.json`](examples/local_models_streaming_zipformer.json)
+for streaming Chinese ASR. Its managed URL is
+`managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`; it accepts only
+the default CPU selection or explicit `?backend=cpu`, and it cannot be used as
+the ASR stage of `AgenticASR`.
+Use [`examples/local_models_xturnix.json`](examples/local_models_xturnix.json)
+to run XTurnix through the App-managed `xcczach/xturnix-zh-base` snapshot. Its
+`turn_detector.params.model` value is `managed://xturnix-zh-base`; the service
+supports Apple Silicon MLX only. If the Hugging Face repository requires
+authentication, set `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` before launching
+XTalk.
 
 ## Built-in and user tool directories
 

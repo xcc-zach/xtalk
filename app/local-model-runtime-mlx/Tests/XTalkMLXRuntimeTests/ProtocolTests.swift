@@ -31,6 +31,48 @@ struct ProtocolTests {
         ])
         #expect(refinerOptions.service == .agenticASRRefiner)
         #expect(refinerOptions.service.sampleRate == 0)
+
+        let xturnixOptions = try RuntimeOptions.parse([
+            "--service", "xturnix-zh-base",
+            "--model-root", root.path,
+        ])
+        #expect(xturnixOptions.service == .xturnixZHBase)
+        #expect(xturnixOptions.service.sampleRate == 0)
+    }
+
+    @Test
+    func validatesConstrainedXTurnixChatRequests() throws {
+        let request = try JSONDecoder().decode(
+            XTurnixChatRequest.self,
+            from: Data(#"""
+            {
+                "model": "xturnix",
+                "messages": [{"role": "user", "content": "你好"}],
+                "temperature": 0,
+                "max_tokens": 1,
+                "allowed_token_ids": [151665, 151666],
+                "chat_template_kwargs": {"enable_thinking": false}
+            }
+            """#.utf8)
+        )
+        try validateXTurnixChatRequest(request)
+        #expect(request.chatTemplateOptions?.enableThinking == false)
+    }
+
+    @Test
+    func selectsHighestAllowedXTurnixToken() {
+        #expect(
+            xturnixAllowedToken(
+                values: [-2.5, 1.25],
+                tokenIDs: [151665, 151666]
+            ) == 151666
+        )
+        #expect(
+            xturnixAllowedToken(
+                values: [0.5, 0.5],
+                tokenIDs: [151665, 151666]
+            ) == 151665
+        )
     }
 
     @Test

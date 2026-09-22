@@ -190,16 +190,19 @@ fixed to 48 kHz mono PCM16.
 
 Apple Silicon packages also include the Swift sidecar in
 `app/local-model-runtime-mlx`. It uses pinned `mlx-audio-swift` APIs to load
-local SenseVoice and MOSS safetensor snapshots. It preserves the same offline
-ASR WebSocket packet and MOSS multipart HTTP contracts, so the Python model
-clients do not branch on the inference backend. Its MOSS response is likewise
-48 kHz mono PCM16.
+local SenseVoice and MOSS safetensor snapshots and `mlx-swift-lm` to load the
+XTurnix Qwen3 snapshot. It preserves the same offline ASR WebSocket packet,
+MOSS multipart HTTP, and XTurnix vLLM-compatible tokenize/chat contracts, so
+the Python model clients do not branch on the inference backend. Its MOSS
+response is likewise 48 kHz mono PCM16.
 
 ONNX Runtime is an application resource, not a user-installed dependency.
-SenseVoice, Matcha, and the Rust MOSS sidecar all resolve the same packaged
-ONNX Runtime 1.27 dynamic library; model weights remain outside the application
-bundle. A selected `managed://sensevoice-small`,
-`managed://matcha-icefall-zh-en`, or `managed://moss-tts-nano` URL makes Tauri
+SenseVoice, streaming Zipformer, Matcha, and the Rust MOSS sidecar all resolve
+the same packaged ONNX Runtime 1.27 dynamic library; model weights remain
+outside the application bundle. A selected `managed://sensevoice-small`,
+`managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`,
+`managed://matcha-icefall-zh-en`, `managed://moss-tts-nano`, or the XTurnix
+`turn_detector.params.model` value `managed://xturnix-zh-base` makes Tauri
 read the immutable `managed-models.lock.json`, download only that service's
 pinned files into `AppData/models/managed/<id>/<version>/`, verify file sizes
 and SHA-256 values, extract pinned archives without allowing path traversal,
@@ -211,7 +214,13 @@ Without a query, Tauri selects a packaged CUDA provider on an NVIDIA device,
 then Apple Silicon MLX, then CPU. An explicitly selected unavailable backend is
 an error instead of an implicit fallback. CUDA and CPU share the ONNX snapshot;
 MLX selects its separately pinned safetensor snapshot. Matcha supports CPU and
-CUDA only, so its automatic selection skips MLX.
+CUDA only, so its automatic selection skips MLX. The streaming Zipformer
+service is CPU-only: its URL accepts no query or only `?backend=cpu`. It is
+valid only for `SherpaOnnxASR`, not as the ASR stage of `AgenticASR`.
+XTurnix is Apple Silicon MLX-only and accepts either no query or
+`?backend=mlx`. Downloads from a private Hugging Face repository use
+`HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN`; credentials are sent only to
+`huggingface.co` and are not logged.
 
 After the user selects a configuration, Tauri inspects it before applying it.
 Configurations that request managed services open a blocking progress dialog.
@@ -222,8 +231,12 @@ automatically. A startup failure leaves the dialog open with the error and a
 close action.
 
 For ONNX, Tauri starts SenseVoice and Qwen3-ASR 0.6B INT8 through the packaged
-native `sherpa-onnx-offline-websocket-server`, Matcha through a dedicated Rust
-sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. Qwen auto-selects
+native `sherpa-onnx-offline-websocket-server`, streaming Zipformer through the
+official `sherpa-onnx-online-websocket-server`, Matcha through a dedicated Rust
+sherpa-onnx HTTP sidecar, and MOSS through its Rust sidecar. Both Sherpa servers
+come from the same pinned official archive and use its locked SHA-256. The
+streaming model archive is separately pinned by URL, size, and SHA-256 before
+safe extraction. Qwen auto-selects
 Core ML on macOS, falls back to CPU when Core ML startup fails, and preserves
 partial model downloads for HTTP range resumption. For MLX, Tauri starts one
 Swift sidecar per requested supported service; Qwen does not use that sidecar.
@@ -246,6 +259,12 @@ variant selects the Chinese-English Matcha HTTP client; the sidecar resamples
 its native 16 kHz output to the App-wide 48 kHz mono PCM16 format. The
 [`../examples/local_models_qwen3_asr_0_6b_int8.json`](../examples/local_models_qwen3_asr_0_6b_int8.json)
 variant selects only the pinned Qwen3-ASR 0.6B INT8 encoder and decoder.
+The
+[`../examples/local_models_streaming_zipformer.json`](../examples/local_models_streaming_zipformer.json)
+variant selects the pinned Chinese INT8 Zipformer and the streaming WebSocket
+client.
+The [`../examples/local_models_xturnix.json`](../examples/local_models_xturnix.json)
+variant selects the managed XTurnix turn detector through its `model` field.
 
 ## Configuration
 
