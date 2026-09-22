@@ -56,6 +56,30 @@
       ]
     },
     {
+      "id": "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+      "version": "2025-06-30",
+      "files": [
+        {
+          "path": "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2",
+          "size": 132634597,
+          "sha256": "5a2832047ea1f97dd0dc595b816c230c4bafad65cfc0341fa57517cadc50afd0",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2"
+        }
+      ],
+      "archives": [
+        {
+          "path": "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2",
+          "format": "tar-bz2"
+        }
+      ],
+      "required_paths": [
+        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/encoder.int8.onnx",
+        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/decoder.onnx",
+        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/joiner.int8.onnx",
+        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/tokens.txt"
+      ]
+    },
+    {
       "id": "sensevoice-small",
       "version": "2365baeacb507f821a0c8120fcee3d484dba7a07",
       "files": [
@@ -71,6 +95,55 @@
           "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
           "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt"
         }
+      ]
+    },
+    {
+      "id": "xturnix-zh-base",
+      "version": "a1762cb0ab57985ca05220a0fa23dfb7ebd1f099",
+      "files": [
+        {
+          "path": "model.safetensors",
+          "size": 1192135096,
+          "sha256": "e1826bcccfbb5f07c7e63c105da3bcf9138e6dafd6b933061039ec59d67161df",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/model.safetensors"
+        },
+        {
+          "path": "config.json",
+          "size": 1953,
+          "sha256": "fe9425ddfab91d0525bd86dc01c8a6bc13b842043ba13b5d61f8e1b9b90d8270",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/config.json"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 158,
+          "sha256": "343063f3494b20363ef85b5119c8cad1ab6227e285f27fa3a319263f2db08a7d",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/generation_config.json"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 11423897,
+          "sha256": "e1cdfc37289f88242660c6694e92e84dbbe3058b4cf45be593d784b658c0aa1d",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/tokenizer.json"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 6599,
+          "sha256": "5e661aaa48f1e56681a504cb4e28c2da0abfa03d4cb7aadbe30b80795b4a4a6d",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/tokenizer_config.json"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 4905,
+          "sha256": "5da44855ab7e0641774d5ed0ff0b4f89671d01df7d316e54d06557a962211cb4",
+          "url": "https://huggingface.co/xcczach/xturnix-zh-base/resolve/a1762cb0ab57985ca05220a0fa23dfb7ebd1f099/chat_template.jinja"
+        }
+      ],
+      "required_paths": [
+        "model.safetensors",
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "chat_template.jinja"
       ]
     },
     {

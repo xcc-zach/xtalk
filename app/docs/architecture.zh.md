@@ -148,14 +148,17 @@ Tauri 在 WebView 音频管线之外监管
 
 Apple Silicon 安装包还包含 `app/local-model-runtime-mlx` 中的 Swift sidecar。
 它通过固定版本的 `mlx-audio-swift` 从本地加载 SenseVoice 与 MOSS safetensors
-快照，并保持同一套离线 ASR WebSocket 数据包与 MOSS multipart HTTP 协议，因此
-Python 模型客户端不需要按推理后端分支。MLX 的 MOSS 输出同样固定为 48 kHz
+快照，并通过 `mlx-swift-lm` 加载 XTurnix Qwen3 快照。它保持同一套离线 ASR
+WebSocket 数据包、MOSS multipart HTTP 和 XTurnix vLLM 兼容 tokenize/chat 协议，
+因此 Python 模型客户端不需要按推理后端分支。MLX 的 MOSS 输出同样固定为 48 kHz
 单声道 PCM16。
 
-ONNX Runtime 是 App 资源，不要求用户另行安装。SenseVoice、Matcha 与 Rust MOSS
-sidecar 统一解析同一份随包 ONNX Runtime 1.27 动态库；模型权重不放进安装包。用户
-配置 `managed://sensevoice-small`、`managed://matcha-icefall-zh-en` 或
-`managed://moss-tts-nano` 后，Tauri 会读取不可变的
+ONNX Runtime 是 App 资源，不要求用户另行安装。SenseVoice、流式 Zipformer、
+Matcha 与 Rust MOSS sidecar 统一解析同一份随包 ONNX Runtime 1.27 动态库；模型
+权重不放进安装包。用户配置 `managed://sensevoice-small`、
+`managed://sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`、
+`managed://matcha-icefall-zh-en`、`managed://moss-tts-nano`，或在 XTurnix 的
+`turn_detector.params.model` 中配置 `managed://xturnix-zh-base` 后，Tauri 会读取不可变的
 `managed-models.lock.json`，仅下载对应服务的固定版本文件到
 `AppData/models/managed/<id>/<version>/`，校验文件大小和 SHA-256，以禁止目录逃逸
 的方式解压固定归档，再原子写入完成标记。此后每次启动仍会重新校验已安装快照。
@@ -164,7 +167,12 @@ managed URL 支持 `?backend=cpu`、`?backend=cuda` 和 `?backend=mlx`。不带�
 时，Tauri 依次选择 NVIDIA 设备上随包可用的 CUDA provider、Apple Silicon MLX，
 最后回退 CPU。显式选择不可用后端会报错，不会静默降级。CUDA 与 CPU 共用 ONNX
 快照，MLX 则选择单独固定的 safetensors 快照。Matcha 只支持 CPU 和 CUDA，因此
-自动选择时不会进入 MLX。
+自动选择时不会进入 MLX。流式 Zipformer 服务仅支持 CPU：URL 可以不带查询参数，
+或显式添加 `?backend=cpu`。它只能用于 `SherpaOnnxASR`，不能作为 `AgenticASR`
+的 ASR 阶段。
+XTurnix 仅支持 Apple Silicon MLX，其 URL 可以不带查询参数，或显式添加
+`?backend=mlx`。从私有 Hugging Face 仓库下载时可使用 `HF_TOKEN` 或
+`HUGGING_FACE_HUB_TOKEN`；凭据只会发送给 `huggingface.co`，且不会写入日志。
 
 用户选择配置后，Tauri 会在应用配置前先做预检。包含 managed 服务的配置会打开阻塞
 式进度窗口；原生进度事件会报告模型校验、逐文件下载字节数、服务启动和就绪状态。
@@ -172,8 +180,11 @@ Python 后端通过健康检查前，界面其余区域保持不可交互；成�
 启动失败时，窗口会保留错误信息和关闭操作。
 
 ONNX 模式下，Tauri 通过随包的原生 `sherpa-onnx-offline-websocket-server` 启动
-SenseVoice 和 Qwen3-ASR 0.6B INT8，通过独立 Rust sherpa-onnx HTTP sidecar 启动
-Matcha，并通过另一项 Rust sidecar 启动 MOSS。Qwen 在 macOS 上自动优先选择
+SenseVoice 和 Qwen3-ASR 0.6B INT8，通过官方
+`sherpa-onnx-online-websocket-server` 启动流式 Zipformer，通过独立 Rust
+sherpa-onnx HTTP sidecar 启动 Matcha，并通过另一项 Rust sidecar 启动 MOSS。两个
+Sherpa server 来自同一个固定版本的官方归档，并校验其锁定 SHA-256；流式模型归档
+则单独固定 URL、大小与 SHA-256，再以安全方式解压。Qwen 在 macOS 上自动优先选择
 Core ML；若 Core ML 启动失败则回退 CPU，并保留未完成文件供 HTTP Range 续传。
 MLX 模式下，每项受支持服务分别启动一个 Swift sidecar；Qwen 不使用该 sidecar。
 它等待 TCP/readiness 就绪边界，再把真实临时 loopback
@@ -192,6 +203,10 @@ MLX。[`../examples/local_models_matcha.json`](../examples/local_models_matcha.j
 统一的 48 kHz 单声道 PCM16。
 [`../examples/local_models_qwen3_asr_0_6b_int8.json`](../examples/local_models_qwen3_asr_0_6b_int8.json)
 则仅选择固定版本的 Qwen3-ASR 0.6B INT8 编码器和解码器。
+[`../examples/local_models_streaming_zipformer.json`](../examples/local_models_streaming_zipformer.json)
+则选择固定版本的中文 INT8 Zipformer 与流式 WebSocket 客户端。
+[`../examples/local_models_xturnix.json`](../examples/local_models_xturnix.json)
+则通过 `model` 字段选择受管 XTurnix 轮次检测模型。
 
 ## 配置
 

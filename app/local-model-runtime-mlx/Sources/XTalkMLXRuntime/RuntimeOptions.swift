@@ -4,6 +4,7 @@ enum ManagedModelService: String, Sendable {
     case senseVoice = "sensevoice-small"
     case mossTTSNano = "moss-tts-nano"
     case agenticASRRefiner = "agentic-asr-refiner"
+    case xturnixZHBase = "xturnix-zh-base"
 
     var engineName: String {
         "\(rawValue)-mlx"
@@ -15,7 +16,7 @@ enum ManagedModelService: String, Sendable {
             16_000
         case .mossTTSNano:
             48_000
-        case .agenticASRRefiner:
+        case .agenticASRRefiner, .xturnixZHBase:
             0
         }
     }

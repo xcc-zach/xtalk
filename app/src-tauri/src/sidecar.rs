@@ -52,6 +52,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_READY_LINE_BYTES: usize = 4 * 1024;
+const MAX_STARTUP_DIAGNOSTIC_CHARS: usize = 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024;
 
 /// Validates and inspects a selected model configuration for managed services.
@@ -579,10 +580,13 @@ pub(crate) enum BackendError {
     ReadyTimedOut,
     #[error("app-backend closed its event stream before readiness")]
     ReadyStreamClosed,
-    #[error("app-backend terminated before readiness (code {code:?}, signal {signal:?})")]
+    #[error(
+        "app-backend terminated before readiness (code {code:?}, signal {signal:?}){diagnostic}"
+    )]
     TerminatedBeforeReady {
         code: Option<i32>,
         signal: Option<i32>,
+        diagnostic: String,
     },
     #[error("app-backend emitted an invalid readiness line: {0}")]
     InvalidReady(String),
@@ -608,11 +612,14 @@ pub(crate) enum BackendError {
 
 async fn receive_ready(events: &mut Receiver<CommandEvent>) -> Result<ReadyMessage, BackendError> {
     timeout(READY_TIMEOUT, async {
+        let mut last_diagnostic = None;
         loop {
             match events.recv().await {
                 Some(CommandEvent::Stdout(line)) => return validate_ready_line(&line),
-                Some(CommandEvent::Stderr(_)) => {
-                    eprintln!("app-backend wrote to stderr before readiness; content suppressed");
+                Some(CommandEvent::Stderr(line)) => {
+                    if let Some(diagnostic) = startup_diagnostic(&line) {
+                        last_diagnostic = Some(diagnostic);
+                    }
                 }
                 Some(CommandEvent::Error(_)) => {
                     return Err(BackendError::InvalidReady(
@@ -623,6 +630,9 @@ async fn receive_ready(events: &mut Receiver<CommandEvent>) -> Result<ReadyMessa
                     return Err(BackendError::TerminatedBeforeReady {
                         code: payload.code,
                         signal: payload.signal,
+                        diagnostic: last_diagnostic
+                            .map(|line| format!(": {line}"))
+                            .unwrap_or_default(),
                     });
                 }
                 None => return Err(BackendError::ReadyStreamClosed),
@@ -636,6 +646,18 @@ async fn receive_ready(events: &mut Receiver<CommandEvent>) -> Result<ReadyMessa
     })
     .await
     .map_err(|_| BackendError::ReadyTimedOut)?
+}
+
+fn startup_diagnostic(stderr: &[u8]) -> Option<String> {
+    let decoded = String::from_utf8_lossy(stderr);
+    let line = decoded.lines().rev().find(|line| !line.trim().is_empty())?;
+    let sanitized: String = line
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\t')
+        .take(MAX_STARTUP_DIAGNOSTIC_CHARS)
+        .collect();
+    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 fn validate_ready_line(line: &[u8]) -> Result<ReadyMessage, BackendError> {
@@ -1050,8 +1072,9 @@ mod tests {
 
     use super::{
         build_config_fallbacks, configured_credential_environment, parse_http_response,
-        validate_health_response, validate_model_config_path, validate_ready_line, BackendError,
-        StartupMessage, DESKTOP_ANONYMOUS_USER_ID, DESKTOP_VAD_THRESHOLD, PROTOCOL_VERSION,
+        startup_diagnostic, validate_health_response, validate_model_config_path,
+        validate_ready_line, BackendError, StartupMessage, DESKTOP_ANONYMOUS_USER_ID,
+        DESKTOP_VAD_THRESHOLD, PROTOCOL_VERSION,
     };
 
     fn temporary_model_config(name: &str, contents: &[u8]) -> PathBuf {
@@ -1093,6 +1116,41 @@ mod tests {
         .expect_err("the sidecar cannot select a non-loopback host");
 
         assert!(matches!(error, BackendError::Json(_)));
+    }
+
+    #[test]
+    fn keeps_only_the_last_non_empty_startup_diagnostic_line() {
+        let diagnostic = startup_diagnostic(
+            b"provider warning\n\nSidecar failed (KeyError): XTurnix is unavailable\n",
+        )
+        .expect("the final diagnostic line must be retained");
+
+        assert_eq!(
+            diagnostic,
+            "Sidecar failed (KeyError): XTurnix is unavailable"
+        );
+    }
+
+    #[test]
+    fn removes_control_characters_from_startup_diagnostics() {
+        let diagnostic = startup_diagnostic(b"Sidecar failed:\x00 bad\x1b value\n")
+            .expect("printable diagnostic content must remain");
+
+        assert_eq!(diagnostic, "Sidecar failed: bad value");
+    }
+
+    #[test]
+    fn displays_the_captured_startup_diagnostic_on_termination() {
+        let error = BackendError::TerminatedBeforeReady {
+            code: Some(1),
+            signal: None,
+            diagnostic: ": Sidecar failed (KeyError): XTurnix is unavailable".to_owned(),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "app-backend terminated before readiness (code Some(1), signal None): Sidecar failed (KeyError): XTurnix is unavailable"
+        );
     }
 
     #[test]

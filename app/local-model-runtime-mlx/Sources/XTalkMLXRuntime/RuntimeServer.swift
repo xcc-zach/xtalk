@@ -6,6 +6,7 @@ import NIOWebSocket
 
 private let refinerModelID = "agentic-asr-refiner"
 private let refinerMaximumTokens = 512
+private let xturnixModelID = "xturnix"
 
 private struct RefinerChatRequest: Decodable, Sendable {
     let model: String
@@ -18,6 +19,50 @@ private struct RefinerChatRequest: Decodable, Sendable {
         case messages
         case maxTokens = "max_tokens"
         case temperature
+    }
+}
+
+struct XTurnixChatTemplateOptions: Decodable, Sendable {
+    let enableThinking: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case enableThinking = "enable_thinking"
+    }
+}
+
+struct XTurnixTokenizeRequest: Decodable, Sendable {
+    let model: String
+    let prompt: String?
+    let messages: [XTurnixMessage]?
+    let addSpecialTokens: Bool?
+    let addGenerationPrompt: Bool?
+    let chatTemplateOptions: XTurnixChatTemplateOptions?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case prompt
+        case messages
+        case addSpecialTokens = "add_special_tokens"
+        case addGenerationPrompt = "add_generation_prompt"
+        case chatTemplateOptions = "chat_template_kwargs"
+    }
+}
+
+struct XTurnixChatRequest: Decodable, Sendable {
+    let model: String
+    let messages: [XTurnixMessage]
+    let temperature: Float?
+    let maxTokens: Int?
+    let allowedTokenIDs: [Int]?
+    let chatTemplateOptions: XTurnixChatTemplateOptions?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+        case maxTokens = "max_tokens"
+        case allowedTokenIDs = "allowed_token_ids"
+        case chatTemplateOptions = "chat_template_kwargs"
     }
 }
 
@@ -157,6 +202,50 @@ final class RuntimeHTTPHandler:
                     || head.uri == "/chat/completions"
             {
                 handleRefinerChat(
+                    body: body,
+                    keepAlive: keepAlive,
+                    context: context
+                )
+                return
+            }
+            write(
+                .json(status: .notFound, ["error": "endpoint not found"]),
+                keepAlive: keepAlive,
+                context: context
+            )
+            return
+        }
+        if service == .xturnixZHBase {
+            if head.method == .GET,
+               head.uri == "/v1/models" || head.uri == "/models"
+            {
+                write(
+                    .json([
+                        "object": "list",
+                        "data": [[
+                            "id": xturnixModelID,
+                            "object": "model",
+                            "owned_by": "xtalk",
+                        ]],
+                    ]),
+                    keepAlive: keepAlive,
+                    context: context
+                )
+                return
+            }
+            if head.method == .POST, head.uri == "/tokenize" {
+                handleXTurnixTokenize(
+                    body: body,
+                    keepAlive: keepAlive,
+                    context: context
+                )
+                return
+            }
+            if head.method == .POST,
+               head.uri == "/v1/chat/completions"
+                    || head.uri == "/chat/completions"
+            {
+                handleXTurnixChat(
                     body: body,
                     keepAlive: keepAlive,
                     context: context
@@ -328,6 +417,108 @@ final class RuntimeHTTPHandler:
         }
     }
 
+    private func handleXTurnixTokenize(
+        body: Data,
+        keepAlive: Bool,
+        context: ChannelHandlerContext
+    ) {
+        let runtime = runtime
+        let boundContext = NIOLoopBound(
+            context,
+            eventLoop: context.eventLoop
+        )
+        context.eventLoop.makeFutureWithTask {
+            let request = try JSONDecoder().decode(
+                XTurnixTokenizeRequest.self,
+                from: body
+            )
+            try validateXTurnixModel(request.model)
+            guard (request.prompt == nil) != (request.messages == nil) else {
+                throw RuntimeServerError.invalidXTurnixTokenizeInput
+            }
+            let tokens = try await runtime.tokenizeXTurnix(
+                prompt: request.prompt,
+                messages: request.messages,
+                addSpecialTokens: request.addSpecialTokens ?? true,
+                addGenerationPrompt: request.addGenerationPrompt ?? false,
+                enableThinking: request.chatTemplateOptions?.enableThinking ?? false
+            )
+            return HTTPResult.json([
+                "count": tokens.count,
+                "tokens": tokens,
+            ])
+        }.whenComplete { result in
+            self.completeXTurnixRequest(
+                result,
+                keepAlive: keepAlive,
+                context: boundContext.value
+            )
+        }
+    }
+
+    private func handleXTurnixChat(
+        body: Data,
+        keepAlive: Bool,
+        context: ChannelHandlerContext
+    ) {
+        let runtime = runtime
+        let boundContext = NIOLoopBound(
+            context,
+            eventLoop: context.eventLoop
+        )
+        context.eventLoop.makeFutureWithTask {
+            let request = try JSONDecoder().decode(
+                XTurnixChatRequest.self,
+                from: body
+            )
+            try validateXTurnixChatRequest(request)
+            let content = try await runtime.predictXTurnixAction(
+                messages: request.messages,
+                allowedTokenIDs: request.allowedTokenIDs ?? [],
+                enableThinking: request.chatTemplateOptions?.enableThinking ?? false
+            )
+            let assistantMessage: [String: any Sendable] = [
+                "role": "assistant",
+                "content": content,
+            ]
+            let choice: [String: any Sendable] = [
+                "index": 0,
+                "message": assistantMessage,
+                "finish_reason": "length",
+            ]
+            return HTTPResult.json([
+                "id": "chatcmpl-\(UUID().uuidString)",
+                "object": "chat.completion",
+                "created": Int(Date().timeIntervalSince1970),
+                "model": xturnixModelID,
+                "choices": [choice],
+            ])
+        }.whenComplete { result in
+            self.completeXTurnixRequest(
+                result,
+                keepAlive: keepAlive,
+                context: boundContext.value
+            )
+        }
+    }
+
+    private func completeXTurnixRequest(
+        _ result: Result<HTTPResult, Error>,
+        keepAlive: Bool,
+        context: ChannelHandlerContext
+    ) {
+        switch result {
+        case .success(let response):
+            write(response, keepAlive: keepAlive, context: context)
+        case .failure(let error):
+            write(
+                .json(status: .badRequest, ["error": error.localizedDescription]),
+                keepAlive: keepAlive,
+                context: context
+            )
+        }
+    }
+
     private func write(
         _ result: HTTPResult,
         keepAlive: Bool,
@@ -480,6 +671,13 @@ enum RuntimeServerError: Error, LocalizedError {
     case invalidRefinerRole
     case invalidRefinerTokenLimit
     case invalidRefinerTemperature
+    case invalidXTurnixModel(String)
+    case invalidXTurnixTokenizeInput
+    case emptyXTurnixMessages
+    case invalidXTurnixRole
+    case invalidXTurnixTemperature
+    case invalidXTurnixTokenLimit
+    case invalidXTurnixAllowedTokens
 
     var errorDescription: String? {
         switch self {
@@ -499,7 +697,52 @@ enum RuntimeServerError: Error, LocalizedError {
             "max_tokens must be between 1 and \(refinerMaximumTokens)"
         case .invalidRefinerTemperature:
             "temperature must be a non-negative finite number"
+        case .invalidXTurnixModel(let model):
+            "Unknown XTurnix model \(model); expected \(xturnixModelID)"
+        case .invalidXTurnixTokenizeInput:
+            "exactly one of prompt or messages is required"
+        case .emptyXTurnixMessages:
+            "messages must not be empty"
+        case .invalidXTurnixRole:
+            "messages contain an unsupported role"
+        case .invalidXTurnixTemperature:
+            "temperature must be zero"
+        case .invalidXTurnixTokenLimit:
+            "max_tokens must be one"
+        case .invalidXTurnixAllowedTokens:
+            "allowed_token_ids must contain exactly two distinct non-negative IDs"
         }
+    }
+}
+
+func validateXTurnixModel(_ model: String) throws {
+    guard model == xturnixModelID else {
+        throw RuntimeServerError.invalidXTurnixModel(model)
+    }
+}
+
+func validateXTurnixChatRequest(_ request: XTurnixChatRequest) throws {
+    try validateXTurnixModel(request.model)
+    guard !request.messages.isEmpty else {
+        throw RuntimeServerError.emptyXTurnixMessages
+    }
+    guard request.messages.allSatisfy({
+        ["system", "user", "assistant"].contains($0.role)
+    }) else {
+        throw RuntimeServerError.invalidXTurnixRole
+    }
+    guard request.temperature == nil || request.temperature == 0 else {
+        throw RuntimeServerError.invalidXTurnixTemperature
+    }
+    guard request.maxTokens == nil || request.maxTokens == 1 else {
+        throw RuntimeServerError.invalidXTurnixTokenLimit
+    }
+    guard let allowedTokenIDs = request.allowedTokenIDs,
+          allowedTokenIDs.count == 2,
+          Set(allowedTokenIDs).count == 2,
+          allowedTokenIDs.allSatisfy({ $0 >= 0 })
+    else {
+        throw RuntimeServerError.invalidXTurnixAllowedTokens
     }
 }
 
