@@ -247,12 +247,8 @@ class TextInputManagerTests(unittest.IsolatedAsyncioTestCase):
         self.event_bus.subscribe(TurnASREndRequested, record_asr_end)
         self.event_bus.subscribe(TurnLLMAgentStopRequested, record_response_stop)
 
-        await manager._on_vad_start(
-            VADSpeechStart(session_id="session", origin="text")
-        )
-        await manager._on_vad_end(
-            VADSpeechEnd(session_id="session", origin="text")
-        )
+        await manager._on_vad_start(VADSpeechStart(session_id="session", origin="text"))
+        await manager._on_vad_end(VADSpeechEnd(session_id="session", origin="text"))
 
         self.assertEqual(transitions, ["response_stop:text_input"])
 
@@ -327,9 +323,7 @@ class TextInputManagerTests(unittest.IsolatedAsyncioTestCase):
         manager._frontend_vad_start_ts = 1.0
         manager._backend_vad_start_ts = 2.0
 
-        await manager._on_vad_start(
-            VADSpeechStart(session_id="session", origin="text")
-        )
+        await manager._on_vad_start(VADSpeechStart(session_id="session", origin="text"))
 
         self.assertIsNone(manager._frontend_vad_start_ts)
         self.assertIsNone(manager._backend_vad_start_ts)
@@ -337,3 +331,45 @@ class TextInputManagerTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_batch_vad_resumes_after_synthetic_text_turn():
+    """Discard queued acoustic input during text and resume batching afterwards."""
+    from unittest.mock import MagicMock
+
+    from xtalk.models.vad.interfaces import VAD
+
+    async def run():
+        detected = asyncio.Event()
+        model = MagicMock(spec=VAD)
+
+        async def infer(frames):
+            detected.set()
+            return [False] * len(frames)
+
+        model.async_detect_frames = AsyncMock(side_effect=infer)
+        bus = EventBus()
+        manager = VADManager(
+            bus, "batch-text", Models({VAD: model}), {"vad_batch_frames": 4}
+        )
+        try:
+            await manager._on_input_abort(
+                TurnInputAbortRequested(session_id="batch-text", origin="text")
+            )
+            audio = EnhancedAudioFrameReceived(
+                session_id="batch-text", audio_data=bytes(4096)
+            )
+            await manager._on_audio_frame(audio)
+            model.async_detect_frames.assert_not_called()
+            assert not manager._buf
+            await manager._on_text_vad_end(
+                VADSpeechEnd(session_id="batch-text", origin="text")
+            )
+            await manager._on_audio_frame(audio)
+            await asyncio.wait_for(detected.wait(), 1)
+            model.async_detect_frames.assert_awaited_once_with([bytes(1024)] * 4)
+        finally:
+            await manager.shutdown()
+            await bus.shutdown()
+
+    asyncio.run(run())
