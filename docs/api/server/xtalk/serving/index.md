@@ -18,7 +18,7 @@ Manage active Service instances for WebSocket sessions.
 _Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
-def __init__(self, models: Models | None = None, service_config: dict[str, Any] | None = None, service_prototype: Service | None = None, persistence_store: PersistenceStore | None = None)
+def __init__(self, models: Models | None = None, service_config: dict[str, Any] | None = None, service_prototype: Service | None = None)
 ```
 
 #### create_service
@@ -26,7 +26,7 @@ def __init__(self, models: Models | None = None, service_config: dict[str, Any] 
 _Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
-async def create_service(self, websocket: WebSocket, *, session_id: str | None = None, user_id: str | None = None) -> Service
+async def create_service(self, websocket: WebSocket, *, session_id: str | None = None) -> Service
 ```
 
 Create a new Service instance bound to the given WebSocket.
@@ -46,7 +46,7 @@ Remove and shut down the Service with the given session id.
 _Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
 
 ```python
-def get_service(self, session_id: str) -> Optional[Service]
+def get_service(self, session_id: str) -> Service | None
 ```
 
 #### get_service_count
@@ -56,16 +56,6 @@ _Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/
 ```python
 def get_service_count(self) -> int
 ```
-
-#### connect
-
-_Defined in [`xtalk.serving.service_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service_manager.py)._
-
-```python
-async def connect(self, websocket: WebSocket, already_accepted: bool = False, user_id: str | None = None) -> None
-```
-
-Start a new service and connect to it for the given WebSocket.
 
 ## Service
 
@@ -98,15 +88,51 @@ Orchestrate a session-scoped model container and manager stack.
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[Type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None)
+def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[type[EventListenerMixin], EventOverrides] | None = None)
 ```
+
+#### register_input_handler
+
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
+
+```python
+def register_input_handler(self, *, type: str, handler: InputHandler) -> None
+```
+
+Register or replace an external input handler.
+
+##### Parameters
+
+- `type` (`str`)
+  External event type.
+- `handler` (`callable`)
+  Async handler accepting the current gateway and complete message.
+
+#### register_output_handler
+
+_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
+
+```python
+def register_output_handler(self, *, source_event: type[Event], type: str, handler: OutputHandler) -> None
+```
+
+Register or replace an internal-event output mapping.
+
+##### Parameters
+
+- `source_event` (`type[Event]`)
+  Internal source event.
+- `type` (`str`)
+  Outbound event type.
+- `handler` (`callable`)
+  Synchronous or async payload builder, optionally returning None.
 
 #### unsubscribe_event
 
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def unsubscribe_event(self, *, event_listener_cls: Type[EventListenerMixin], event_type: Type[Event], method_name: str | None = None) -> None
+def unsubscribe_event(self, *, event_listener_cls: type[EventListenerMixin], event_type: type[Event], method_name: str | None = None) -> None
 ```
 
 Disable an automatic event subscription for a listener class.
@@ -126,7 +152,7 @@ Disable an automatic event subscription for a listener class.
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def subscribe_event(self, *, event_listener_cls: Type[EventListenerMixin], event_type: Type[Event], method_or_handler: str | Callable[[EventListenerMixin, Event], Any] | Callable[[Event], Any] | Callable[[EventListenerMixin, Event], Coroutine[Any, Any, Any]] | Callable[[Event], Coroutine[Any, Any, Any]], priority: int = 0, enabled_if: Callable[[EventListenerMixin], bool] | None = None) -> None
+def subscribe_event(self, *, event_listener_cls: type[EventListenerMixin], event_type: type[Event], method_or_handler: str | Callable[[EventListenerMixin, Event], Any] | Callable[[Event], Any] | Callable[[EventListenerMixin, Event], Coroutine[Any, Any, Any]] | Callable[[Event], Coroutine[Any, Any, Any]], priority: int = 0, enabled_if: Callable[[EventListenerMixin], bool] | None = None) -> None
 ```
 
 Register an additional event subscription override.
@@ -151,7 +177,7 @@ Register an additional event subscription override.
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def register_manager(self, manager_cls: Type[Manager])
+def register_manager(self, manager_cls: type[Manager])
 ```
 
 Register a manager class on the service.
@@ -166,7 +192,7 @@ Register a manager class on the service.
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def unregister_manager(self, manager_cls: Type[Manager])
+def unregister_manager(self, manager_cls: type[Manager])
 ```
 
 Remove a manager class from the service.
@@ -207,16 +233,6 @@ def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None
 ```
 
 Restore persisted conversation history into the session agent.
-
-#### send_session_attached
-
-_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
-
-```python
-async def send_session_attached(self) -> None
-```
-
-Notify the client that the session is attached.
 
 #### stop
 
@@ -265,7 +281,7 @@ register or override managers for custom behavior.
 
 ### Class Fields
 
-- `MANAGER_CLASSES: list[Type[Manager]]` = `[ASRManager, MultiSpeakerTurnContextManager, LLMAgentContextManager, LLMAgentConsumptionManager, TTSManager, TTSResponseCoordinator, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, EmbeddingsManager, RecordingManager, TurnDetectorManager]`
+- `MANAGER_CLASSES: ClassVar[list[type[Manager]]]` = `[ASRManager, MultiSpeakerTurnContextManager, LLMAgentContextManager, LLMAgentConsumptionManager, TTSManager, TTSResponseCoordinator, TTSPlaybackManager, CaptionerManager, RetrievalManager, TurnTakingManager, LatencyManager, VADManager, EnhancerManager, SpeakerManager, RecordingManager, TurnDetectorManager]`
 
 ### Methods
 
@@ -274,7 +290,7 @@ register or override managers for custom behavior.
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
 
 ```python
-def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[Type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None)
+def __init__(self, *, models: Models, service_config: dict[str, Any] | None = None, manager_classes: list[type[Manager]] | None = None, _websocket: WebSocket | None = None, _session_id: str | None = None, _event_overrides: dict[type[EventListenerMixin], EventOverrides] | None = None)
 ```
 
 ## Event

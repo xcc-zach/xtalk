@@ -94,6 +94,41 @@ def clone(self) -> 'DefaultAgent'
 def restore_history(self, messages: list[dict[str, Any]]) -> None
 ```
 
+Replace in-memory history with externally supplied messages.
+
+##### 参数
+
+- `messages` (`list[dict[str, Any]]`)
+  Ordered text messages supplied by the application.
+
+#### append_context
+
+```python
+def append_context(self, *, role: str, content: str) -> None
+```
+
+Append one context message without triggering a reply.
+
+##### 参数
+
+- `role` (`str`)
+  User, assistant, or system message role.
+- `content` (`str`)
+  Complete message text.
+
+#### update_instructions
+
+```python
+def update_instructions(self, *, instructions: str) -> None
+```
+
+Replace system instructions while retaining conversation messages.
+
+##### 参数
+
+- `instructions` (`str`)
+  System message used for subsequent model calls.
+
 #### get_chat_history
 
 ```python

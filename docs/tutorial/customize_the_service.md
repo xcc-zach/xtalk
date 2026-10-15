@@ -199,8 +199,8 @@ async def output_gateway_llm_output_refactored_final_handler(
 ):
     await self.send_signal(
         {
-            "action": "finish_resp",
-            "data": {"response_id": event.response_id, "text": event.text},
+            "type": "response.output_audio.playback.done",
+            "response_id": event.response_id, "text": event.text,
         }
     )
 
@@ -214,14 +214,12 @@ custom_service.subscribe_event(
 
 ## Start the Service
 
-Finally, pass the custom service to `Xtalk` and mount it on FastAPI:
+Finally, pass the custom service to `Xtalk` and create its ASGI application:
 
 ```python
-from fastapi import FastAPI
-
-
 xtalk_instance = Xtalk(service_prototype=custom_service)
 
-app = FastAPI(title="Xtalk Server")
-xtalk_instance.mount_routes(app)
+app = xtalk_instance.create_asgi_app()
 ```
+
+See the [Realtime API documentation](realtime_api.md) for instructions on starting the application.

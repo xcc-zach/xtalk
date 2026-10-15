@@ -35,6 +35,8 @@ _Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach
 def __init__(self, event_bus: EventBus, session_id: str, websocket: WebSocket, config: dict[str, Any] | None = None, models: Models | None = None)
 ```
 
+Initialize session-scoped transport and protocol state.
+
 #### send_signal
 
 _Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
@@ -43,22 +45,12 @@ _Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach
 async def send_signal(self, message: dict) -> None
 ```
 
-Send a JSON payload to the frontend.
+Send a complete external event through the ordered connection queue.
 
 ##### Parameters
 
 - `message` (`dict`)
-  JSON-serializable payload to send over the WebSocket.
-
-#### send_session_attached
-
-_Defined in [`xtalk.serving.modules.output_gateway`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/output_gateway.py)._
-
-```python
-async def send_session_attached(self) -> None
-```
-
-Send the attached session identifier to the frontend.
+  Event with a type and optional event ID.
 
 ## ASRManager
 
@@ -126,34 +118,6 @@ async def shutdown(self) -> None
 ```
 
 Shut down the manager.
-
-## EmbeddingsManager
-
-_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
-
-```python
-class EmbeddingsManager(Manager)
-```
-
-### Methods
-
-#### __init__
-
-_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
-
-```python
-def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None)
-```
-
-#### shutdown
-
-_Defined in [`xtalk.serving.modules.embeddings_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/embeddings_manager.py)._
-
-```python
-async def shutdown(self) -> None
-```
-
-Remove per-session embedding directory on shutdown.
 
 ## EnhancerManager
 
@@ -508,7 +472,20 @@ _Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xt
 class VADManager(Manager)
 ```
 
-Backend VAD manager.
+Smooth single-frame or ordered batch VAD decisions into speech events.
+
+### Parameters
+
+- `event_bus` (`EventBus`)
+  Session event bus.
+- `session_id` (`str`)
+  Owning session identifier.
+- `models` (`Models`)
+  Model container providing an optional VAD implementation.
+- `config` (`dict[str, Any] | None, optional`)
+  Service settings. Batch frames default to 1, preserving synchronous
+  event handling. Values above 1 enable a background worker; batch wait
+  defaults to 128 ms and queued capacity to 256 frames.
 
 ### Methods
 
@@ -517,8 +494,10 @@ Backend VAD manager.
 _Defined in [`xtalk.serving.modules.vad_manager`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/modules/vad_manager.py)._
 
 ```python
-def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: Optional[dict[str, Any]] = None) -> None
+def __init__(self, event_bus: EventBus, session_id: str, models: Models, config: dict[str, Any] | None = None) -> None
 ```
+
+Initialize frame sizing, smoothing, and optional batch scheduling.
 
 #### shutdown
 

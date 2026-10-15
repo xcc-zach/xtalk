@@ -23,8 +23,8 @@ Create `index.html`:
 
       const wsUrl =
         location.protocol === "https:"
-          ? `wss://${location.host}/ws`
-          : `ws://${location.host}/ws`;
+          ? `wss://${location.host}/v1/realtime?model=xtalk`
+          : `ws://${location.host}/v1/realtime?model=xtalk`;
 
       const session = createSession(wsUrl);
 
@@ -53,8 +53,8 @@ Using a CDN, create `index.html`:
 
       const wsUrl =
         location.protocol === "https:"
-          ? `wss://${location.host}/ws`
-          : `ws://${location.host}/ws`;
+          ? `wss://${location.host}/v1/realtime?model=xtalk`
+          : `ws://${location.host}/v1/realtime?model=xtalk`;
 
       const session = createSession(wsUrl);
 
@@ -75,20 +75,30 @@ Create `server.py`:
 ```python
 from pathlib import Path
 
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from xtalk import Xtalk
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Xtalk Server")
 xtalk_instance = Xtalk.from_config(str(BASE_DIR / "config.json"))
-xtalk_instance.mount_routes(app)
+realtime_app = xtalk_instance.create_asgi_app()
+
+@asynccontextmanager
+async def lifespan(app):
+    async with LifespanManager(realtime_app):
+        yield
+
+app = FastAPI(title="Xtalk Server", lifespan=lifespan)
 
 
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
     """Return the frontend page."""
     return FileResponse(BASE_DIR / "index.html")
+
+app.mount("/", realtime_app)
 ```
 
 Place `server.py`, `config.json`, and `index.html` in the same directory.
@@ -111,3 +121,6 @@ For a fuller example including static files, templates, upload UI, session switc
 - [`examples/sample_app/static/css/index.css`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/css/index.css)
 - [`examples/sample_app/static/js/index.js`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/js/index.js)
 - [`examples/sample_app/templates/index.html`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/templates/index.html)
+
+
+See [Realtime API](realtime_api.md) for lifecycle composition and host-owned authentication, knowledge indexing and recording storage. Install FastAPI and asgi-lifespan when using the framework example.

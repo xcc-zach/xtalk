@@ -133,7 +133,7 @@ Return the lock guarding listening state changes.
 #### detect
 
 ```python
-def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None, assistant_interrupted: bool = False) -> TurnDetectionResult
 ```
 
 Detect conversational turn state from audio and/or text context.
@@ -153,6 +153,9 @@ Detect conversational turn state from audio and/or text context.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking. This is typically
   provided together with ``text``.
+- `assistant_interrupted` (`bool, optional`)
+  Whether assistant speech has just been interrupted before normal
+  playback completion.
 
 ##### 返回
 
@@ -162,7 +165,7 @@ Detect conversational turn state from audio and/or text context.
 #### async_detect
 
 ```python
-async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None, assistant_interrupted: bool = False) -> TurnDetectionResult
 ```
 
 Asynchronously detect conversational turn state.
@@ -181,6 +184,9 @@ Asynchronously detect conversational turn state.
   provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking.
+- `assistant_interrupted` (`bool, optional`)
+  Whether assistant speech has just been interrupted before normal
+  playback completion.
 
 ##### 返回
 

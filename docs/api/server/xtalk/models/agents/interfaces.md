@@ -231,6 +231,39 @@ Restore persisted conversation messages into the agent state.
 - `messages` (`list[dict[str, Any]]`)
   Persisted chat messages ordered by session history.
 
+#### append_context
+
+```python
+def append_context(self, *, role: str, content: str) -> None
+```
+
+Append context without replacing existing conversation state.
+
+##### Parameters
+
+- `role` (`str`)
+  Message role: user, assistant, or system.
+- `content` (`str`)
+  Complete text to append without triggering generation.
+
+##### Raises
+
+- `NotImplementedError`
+  The agent does not implement context injection.
+
+#### update_instructions
+
+```python
+def update_instructions(self, *, instructions: str) -> None
+```
+
+Change the system instructions for subsequent turns.
+
+##### Parameters
+
+- `instructions` (`str`)
+  Replacement system instructions.
+
 #### get_chat_history
 
 ```python

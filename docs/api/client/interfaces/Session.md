@@ -6,7 +6,7 @@
 
 # Interface: Session
 
-Defined in: session/types.ts:86
+Defined in: session/types.ts:40
 
 Public session controller exposed by the frontend entrypoint.
 
@@ -16,7 +16,7 @@ Public session controller exposed by the frontend entrypoint.
 
 > **muted**: `boolean`
 
-Defined in: session/types.ts:126
+Defined in: session/types.ts:80
 
 Whether microphone capture is currently muted.
 
@@ -26,7 +26,7 @@ Whether microphone capture is currently muted.
 
 > `readonly` **state**: `object`
 
-Defined in: session/types.ts:104
+Defined in: session/types.ts:58
 
 Current conversation state snapshot.
 
@@ -37,6 +37,10 @@ Current conversation state snapshot.
 #### connectionState
 
 > **connectionState**: `"connected"` \| `"reconnecting"` \| `"disconnected"`
+
+#### generatedResponses
+
+> **generatedResponses**: `Record`&lt;`string`, \{ `final`: `boolean`; `text`: `string`; \}&gt;
 
 #### latency
 
@@ -94,17 +98,13 @@ Current conversation state snapshot.
 
 > **name**: `string`
 
-#### user
-
-> **user**: `ConversationUser` \| `null`
-
 ## Methods
 
 ### changeVoice()
 
 > **changeVoice**(`voiceName`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:132
+Defined in: session/types.ts:86
 
 Requests a voice change for subsequent assistant synthesis.
 
@@ -126,7 +126,7 @@ Target voice identifier.
 
 > **close**(): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:94
+Defined in: session/types.ts:48
 
 Closes the active runtime connection and audio resources.
 
@@ -136,25 +136,11 @@ Closes the active runtime connection and audio resources.
 
 ***
 
-### getSessions()
-
-> **getSessions**(): `Promise`&lt;`SessionSummary`[]&gt;
-
-Defined in: session/types.ts:152
-
-Fetches available persisted sessions for the current user.
-
-#### Returns
-
-`Promise`&lt;`SessionSummary`[]&gt;
-
-***
-
 ### onFullAudioChunk()
 
 > **onFullAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:122
+Defined in: session/types.ts:76
 
 Registers a callback for merged full-duplex PCM chunks.
 
@@ -176,7 +162,7 @@ Full audio listener.
 
 > **onInputAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:110
+Defined in: session/types.ts:64
 
 Registers a callback for microphone input PCM chunks.
 
@@ -198,7 +184,7 @@ Input audio listener.
 
 > **onOutputAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:116
+Defined in: session/types.ts:70
 
 Registers a callback for speaker output PCM chunks.
 
@@ -220,7 +206,7 @@ Output audio listener.
 
 > **onStateChange**(`callback`): `void`
 
-Defined in: session/types.ts:100
+Defined in: session/types.ts:54
 
 Registers a callback that runs whenever the conversation state changes.
 
@@ -242,9 +228,29 @@ State change listener.
 
 > **open**(): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:90
+Defined in: session/types.ts:44
 
-Opens the session runtime and performs authentication if needed.
+Opens the Realtime connection and its audio resources.
+
+#### Returns
+
+`Promise`&lt;`void`&gt;
+
+***
+
+### restoreHistory()
+
+> **restoreHistory**(`messages`): `Promise`&lt;`void`&gt;
+
+Defined in: session/types.ts:97
+
+Injects external text history without generating a reply.
+
+#### Parameters
+
+##### messages
+
+`object`[]
 
 #### Returns
 
@@ -256,12 +262,12 @@ Opens the session runtime and performs authentication if needed.
 
 > **sendText**(`text`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:141
+Defined in: session/types.ts:95
 
 Submits a finalized text turn through the connected realtime session.
 
-The promise resolves after a `finish_asr` action echoes the normalized
-text with `origin` set to `text`.
+The promise resolves after the matching `conversation.item.done` receipt.
+Validation failures and disconnection reject the promise.
 
 #### Parameters
 
@@ -270,56 +276,6 @@ text with `origin` set to `text`.
 `string`
 
 User-authored text for the next turn.
-
-#### Returns
-
-`Promise`&lt;`void`&gt;
-
-***
-
-### switchSession()
-
-> **switchSession**(`sessionId`): `Promise`&lt;`void`&gt;
-
-Defined in: session/types.ts:158
-
-Switches the active conversation to a persisted session or starts a new one.
-
-#### Parameters
-
-##### sessionId
-
-`string` \| `null`
-
-Target session identifier, or `null` to start a new session.
-
-#### Returns
-
-`Promise`&lt;`void`&gt;
-
-***
-
-### uploadFile()
-
-> **uploadFile**(`file`, `endpoint?`): `Promise`&lt;`void`&gt;
-
-Defined in: session/types.ts:148
-
-Uploads a file into the current session context.
-
-#### Parameters
-
-##### file
-
-`Blob`
-
-File blob to upload.
-
-##### endpoint?
-
-`string` \| `URL`
-
-Optional upload endpoint override.
 
 #### Returns
 

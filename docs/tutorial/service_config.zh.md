@@ -7,6 +7,10 @@
 ```json
 {
   "service_config": {
+    "realtime_api": {
+      "model": "xtalk",
+      "api_keys": []
+    },
     "enable_persistence": true,
     "recording": true,
     "send_full_audio_to_client": false,
@@ -27,12 +31,22 @@
 
 | 键名 | 类型 | 默认值 | 使用位置 | 作用 |
 | --- | --- | --- | --- | --- |
+| `realtime_api` | `object` | `{}` | `Xtalk` Realtime ASGI 应用 | 配置 Realtime API 的公开模型别名和可选 API Key 鉴权，详见下方说明。 |
 | `enable_persistence` | `bool` | `true` | `Xtalk`、`ServiceManager`、`PersistenceManager` | 控制是否启用会话历史持久化，并将数据写入 `<data_dir>/chat_history.sqlite3`。关闭后，内置登录和 WebSocket `attach_session` 握手仍可使用，但聊天记录只在当前活动连接的内存中保留，不支持历史会话恢复。 |
 | `data_dir` | `str` | `"data"` | `Service`、`EmbeddingsManager` | 会话级 embedding 数据的根目录。向量数据会持久化到 `<data_dir>/sessions/<session_id>/embeddings`，并在会话结束时删除对应会话目录。 |
 | `recording` | `bool` | `false` | `RecordingManager` | 开启会话录音并输出为双声道 WAV 文件。左声道是原始用户音频，右声道是实际播放的 TTS 音频。默认输出路径为 `logs/session_audio/<timestamp>.wav`。 |
 | `send_full_audio_to_client` | `bool` | `false` | `RecordingManager`、`OutputGateway`、前端 | 将拼装好的完整对话双声道 PCM 音频块通过 `full_audio_frame` 消息发给前端。数据格式为 48 kHz、16-bit、双声道 PCM，并以 base64 编码传输。 |
 | `forced_alignment` | `object` | `{}` | `TTSPlaybackManager` | 配置 TTS 播放过程中的强制对齐。仅在已配置 `forced_aligner` 模型时生效。 |
 | `multi_speaker` | `object` | `{}` | `MultiSpeakerTurnContextManager` | 配置说话人分离结果与 ASR 的合并、目标说话人响应策略和历史过滤。仅在已配置 `speaker_diarization` 模型时生效。 |
+
+### `realtime_api`
+
+| 键名 | 类型 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `model` | `str` | `"xtalk"` | Realtime API 的公开模型别名，用于 `GET /v1/models` 和 `WS /v1/realtime?model=xtalk`。必须为非空白字符串。 |
+| `api_keys` | `list[str]` | `[]` | 允许访问的 API Key 列表；空列表表示关闭 API Key 鉴权。每个 Key 必须为非空字符串。 |
+
+配置 `api_keys` 后，客户端使用 `Authorization: Bearer <key>`；浏览器可使用 `openai-insecure-api-key.<key>` WebSocket 子协议。
 
 ### `forced_alignment`
 

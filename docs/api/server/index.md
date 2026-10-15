@@ -3,6 +3,7 @@
 
 - [`xtalk`](xtalk/index.md)
 - [`xtalk.events`](xtalk/events.md)
+- [`xtalk.model_loader`](xtalk/model_loader.md)
 - [`xtalk.model_types`](xtalk/model_types.md)
 - [`xtalk.models`](xtalk/models/index.md)
 - [`xtalk.models.agents`](xtalk/models/agents/index.md)

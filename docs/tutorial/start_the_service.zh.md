@@ -23,8 +23,8 @@ npm install xtalk-client
 
       const wsUrl =
         location.protocol === "https:"
-          ? `wss://${location.host}/ws`
-          : `ws://${location.host}/ws`;
+          ? `wss://${location.host}/v1/realtime?model=xtalk`
+          : `ws://${location.host}/v1/realtime?model=xtalk`;
 
       const session = createSession(wsUrl);
 
@@ -53,8 +53,8 @@ npm install xtalk-client
 
       const wsUrl =
         location.protocol === "https:"
-          ? `wss://${location.host}/ws`
-          : `ws://${location.host}/ws`;
+          ? `wss://${location.host}/v1/realtime?model=xtalk`
+          : `ws://${location.host}/v1/realtime?model=xtalk`;
 
       const session = createSession(wsUrl);
 
@@ -75,20 +75,30 @@ npm install xtalk-client
 ```python
 from pathlib import Path
 
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from xtalk import Xtalk
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Xtalk Server")
 xtalk_instance = Xtalk.from_config(str(BASE_DIR / "config.json"))
-xtalk_instance.mount_routes(app)
+realtime_app = xtalk_instance.create_asgi_app()
+
+@asynccontextmanager
+async def lifespan(app):
+    async with LifespanManager(realtime_app):
+        yield
+
+app = FastAPI(title="Xtalk Server", lifespan=lifespan)
 
 
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
     """返回前端页面。"""
     return FileResponse(BASE_DIR / "index.html")
+
+app.mount("/", realtime_app)
 ```
 
 将 `server.py`、`config.json` 和 `index.html` 放在同一目录。

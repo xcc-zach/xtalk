@@ -181,11 +181,39 @@ Incremental user transcript produced by audio ASR or text input.
 - `TYPE: ClassVar[str]` = `'asr.result_partial'`
 - `text: str` = `''`
 - `display_text: str` = `''`
+- `item_id: str` = `''`
+- `delta: str` = `''`
+- `update_mode: str` = `'append'`
+- `revision: int` = `0`
 - `speech_pause: bool` = `False`
 - `origin: str` = `'asr'`
 - `turn_id: int` = `0`
 - `segment_id: int` = `0`
 - `gate_state: ASRGateState` = `ASRGateState.UNCHECKED`
+
+## ASRFailed
+
+_Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/events.py)._
+
+```python
+@dataclass
+class ASRFailed(Event)
+```
+
+Report a transcription failure associated with one input item.
+
+### Attributes
+
+- `item_id` (`str`)
+  Input item whose transcription failed.
+- `message` (`str`)
+  Provider failure message.
+
+### Class Fields
+
+- `TYPE: ClassVar[str]` = `'asr.failed'`
+- `item_id: str` = `''`
+- `message: str` = `''`
 
 ## ASRResultFinal
 
@@ -201,6 +229,7 @@ Final user transcript that is ready for response generation.
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'asr.result_final'`
+- `item_id: str` = `''`
 - `text: str` = `''`
 - `display_text: str` = `''`
 - `origin: str` = `'asr'`
@@ -278,6 +307,7 @@ class TTSPaused(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.paused'`
+- `response_id: str` = `''`
 
 ## TTSResumed
 
@@ -291,6 +321,7 @@ class TTSResumed(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'tts.resumed'`
+- `response_id: str` = `''`
 
 ## TTSFinished
 
@@ -320,6 +351,7 @@ class LLMAgentResponseUpdate(Event)
 - `TYPE: ClassVar[str]` = `'llm_agent.response_update'`
 - `response_id: str` = `''`
 - `text: str` = `''`
+- `delta: str` = `''`
 
 ## LLMAgentResponseFinish
 
@@ -640,6 +672,7 @@ class ErrorOccurred(Event)
 ### Class Fields
 
 - `TYPE: ClassVar[str]` = `'error.occurred'`
+- `response_id: str` = `''`
 - `error_type: str` = `''`
 - `error_message: str` = `''`
 
@@ -909,6 +942,7 @@ class TurnLLMAgentStopRequested(Event)
 
 - `TYPE: ClassVar[str]` = `'turn.llm_agent_stop_requested'`
 - `reason: str` = `''`
+- `response_id: str | None` = `None`
 
 ## TurnInputAbortRequested
 

@@ -4,7 +4,7 @@
 
 # xtalk-client
 
-用于创建和控制 X-Talk 会话的公开前端客户端 API。
+用于创建和控制 X-Talk 会话的公共前端 API。
 
 ## 接口
 

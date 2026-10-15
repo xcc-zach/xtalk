@@ -65,6 +65,7 @@ plugins:
             Quickstart: 快速开始
             'Technical Reference': 技术参考
             Recipe: 开发指南
+            Realtime API: 实时 API
             # Tabs under Tutorial
             'Basic Usage': 基础使用
             Other: 其他
@@ -82,6 +83,7 @@ plugins:
             'Text Input': 文本输入
             # Tabs under Technical Reference
             'Overall Architecture': 整体架构
+            'Realtime API Protocol': Realtime API协议
             'Supported Models': 支持的模型
             'ASR Design': ASR设计
             'TTS Design': TTS设计
@@ -115,6 +117,7 @@ nav:
           - 'Introduce an LLM Agent': tutorial/introduce_an_llm_agent.md
           - 'Introduce Tools': tutorial/tool_design.md
           - 'Text Input': tutorial/text_input.md
+          - 'Realtime API': tutorial/realtime_api.md
           - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
           - 'Service Configuration': tutorial/service_config.md
           - Logging: tutorial/logging.md
@@ -127,6 +130,7 @@ nav:
       - 'Voice Wake': app_tutorial/voice_wake.md
   - 'Technical Reference':
       - 'Overall Architecture': technical_reference/system_design.md
+      - 'Realtime API Protocol': technical_reference/realtime_api.md
       - 'Supported Models': technical_reference/supported_models.md
       - 'ASR Design': technical_reference/asr_design.md
       - 'TTS Design': technical_reference/tts_design.md

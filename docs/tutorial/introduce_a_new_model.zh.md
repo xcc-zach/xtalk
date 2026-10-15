@@ -100,8 +100,10 @@ xtalk_instance = (
     .set_model(EchoAgent)
     .build()
 )
-xtalk_instance.mount_routes(app)
+app = xtalk_instance.create_asgi_app()
 ```
+
+应用的启动参考[Realtime API文档](realtime_api.zh.md)。
 
 如果模型定义在单独文件中，需要先 import 该文件：
 

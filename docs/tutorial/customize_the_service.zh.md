@@ -199,8 +199,8 @@ async def output_gateway_llm_output_refactored_final_handler(
 ):
     await self.send_signal(
         {
-            "action": "finish_resp",
-            "data": {"response_id": event.response_id, "text": event.text},
+            "type": "response.output_audio.playback.done",
+            "response_id": event.response_id, "text": event.text,
         }
     )
 
@@ -214,14 +214,12 @@ custom_service.subscribe_event(
 
 ## 启动服务
 
-最后把自定义服务传给 `Xtalk`，再挂载到 FastAPI：
+最后把自定义服务传给 `Xtalk`，创建 ASGI 应用：
 
 ```python
-from fastapi import FastAPI
-
-
 xtalk_instance = Xtalk(service_prototype=custom_service)
 
-app = FastAPI(title="Xtalk Server")
-xtalk_instance.mount_routes(app)
+app = xtalk_instance.create_asgi_app()
 ```
+
+应用的启动参考[Realtime API文档](realtime_api.zh.md)。

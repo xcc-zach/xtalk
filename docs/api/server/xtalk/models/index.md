@@ -125,6 +125,43 @@ Restore persisted conversation messages into the agent state.
 - `messages` (`list[dict[str, Any]]`)
   Persisted chat messages ordered by session history.
 
+#### append_context
+
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
+
+```python
+def append_context(self, *, role: str, content: str) -> None
+```
+
+Append context without replacing existing conversation state.
+
+##### Parameters
+
+- `role` (`str`)
+  Message role: user, assistant, or system.
+- `content` (`str`)
+  Complete text to append without triggering generation.
+
+##### Raises
+
+- `NotImplementedError`
+  The agent does not implement context injection.
+
+#### update_instructions
+
+_Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
+
+```python
+def update_instructions(self, *, instructions: str) -> None
+```
+
+Change the system instructions for subsequent turns.
+
+##### Parameters
+
+- `instructions` (`str`)
+  Replacement system instructions.
+
 #### get_chat_history
 
 _Defined in [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)._
@@ -1380,7 +1417,7 @@ Return the lock guarding listening state changes.
 _Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
-def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+def detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None, assistant_interrupted: bool = False) -> TurnDetectionResult
 ```
 
 Detect conversational turn state from audio and/or text context.
@@ -1400,6 +1437,9 @@ Detect conversational turn state from audio and/or text context.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking. This is typically
   provided together with ``text``.
+- `assistant_interrupted` (`bool, optional`)
+  Whether assistant speech has just been interrupted before normal
+  playback completion.
 
 ##### Returns
 
@@ -1411,7 +1451,7 @@ Detect conversational turn state from audio and/or text context.
 _Defined in [`xtalk.models.turn_detector.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/interfaces.py)._
 
 ```python
-async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None) -> TurnDetectionResult
+async def async_detect(self, audio: Optional[bytes] = None, text: Optional[str] = None, assistant_text: Optional[str] = None, speech_start: bool = False, speech_pause: Optional[bool] = None, assistant_interrupted: bool = False) -> TurnDetectionResult
 ```
 
 Asynchronously detect conversational turn state.
@@ -1430,6 +1470,9 @@ Asynchronously detect conversational turn state.
   provided without ``audio``, ``text``, or ``assistant_text``.
 - `speech_pause` (`bool | None, optional`)
   Whether the user appears to have paused speaking.
+- `assistant_interrupted` (`bool, optional`)
+  Whether assistant speech has just been interrupted before normal
+  playback completion.
 
 ##### Returns
 
@@ -1463,6 +1506,26 @@ class VAD(ABC)
 Abstract base class for voice activity detection engines.
 
 ### Methods
+
+#### set_threshold
+
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
+
+```python
+def set_threshold(self, *, threshold: float) -> None
+```
+
+Configure a model-supported speech probability threshold.
+
+##### Parameters
+
+- `threshold` (`float`)
+  Probability threshold between zero and one.
+
+##### Raises
+
+- `NotImplementedError`
+  This boolean-only model cannot change its default threshold.
 
 #### is_speech
 
@@ -1513,6 +1576,60 @@ def reset(self) -> None
 ```
 
 Reset session-local VAD state and release external resources.
+
+#### detect_frames
+
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
+
+```python
+def detect_frames(self, frames: list[bytes]) -> list[bool]
+```
+
+Detect consecutive frames while preserving stream state and order.
+
+##### Parameters
+
+- `frames` (`list[bytes]`)
+  Ordered PCM16 mono frames using the single-frame audio contract.
+
+##### Returns
+
+- `list[bool]`
+  One speech decision per input frame, in input order. Empty input
+  returns an empty list without calling the model.
+
+##### Notes
+
+The fallback calls ``is_speech`` sequentially. Native batch clients
+may override this method without changing the single-frame interface.
+
+#### async_detect_frames
+
+_Defined in [`xtalk.models.vad.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/vad/interfaces.py)._
+
+```python
+async def async_detect_frames(self, frames: list[bytes]) -> list[bool]
+```
+
+Asynchronously detect ordered frames using sequential fallback calls.
+
+##### Parameters
+
+- `frames` (`list[bytes]`)
+  Ordered PCM16 mono frames using the single-frame audio contract.
+
+##### Returns
+
+- `list[bool]`
+  One speech decision per frame, in input order; empty input
+  returns an empty list without calling the model.
+
+##### Notes
+
+Calls ``async_is_speech`` sequentially to retain existing async
+implementations and recurrent state. Native async batch clients may
+override this method. Overriding only the synchronous batch method
+does not change this asynchronous fallback.
 
 #### clone
 
