@@ -329,16 +329,32 @@ class Agent(ABC):
         """
         pass
 
-    @abstractmethod
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Restore persisted conversation messages into the agent state.
+    def append_context(self, *, role: str, content: str) -> None:
+        """Append context without replacing existing conversation state.
 
         Parameters
         ----------
-        messages : list[dict[str, Any]]
-            Persisted chat messages ordered by session history.
+        role : str
+            Message role: user, assistant, or system.
+        content : str
+            Complete text to append without triggering generation.
+
+        Raises
+        ------
+        NotImplementedError
+            The agent does not implement context injection.
         """
-        pass
+        raise NotImplementedError("Configured agent does not support context injection")
+
+    def update_instructions(self, *, instructions: str) -> None:
+        """Change the system instructions for subsequent turns.
+
+        Parameters
+        ----------
+        instructions : str
+            Replacement system instructions.
+        """
+        raise NotImplementedError("Configured agent does not support instruction updates")
 
     def get_chat_history(self, with_system: bool = False) -> str | None:
         """Return the serialized conversation history when available.

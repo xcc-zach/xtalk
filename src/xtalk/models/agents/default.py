@@ -213,15 +213,28 @@ class DefaultAgent(Agent):
             proactive=self.proactive,
         )
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        self._chat_history = ChatHistory(system_prompt=self.system_prompt)
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                self._chat_history.append_message(HumanMessage(content=content))
-            elif role == "assistant":
-                self._chat_history.append_or_update_ai_message(content, final=True)
+    def append_context(self, *, role: str, content: str) -> None:
+        """Append one context message without triggering a reply.
+
+        Parameters
+        ----------
+        role : str
+            User, assistant, or system message role.
+        content : str
+            Complete message text.
+        """
+        message_type = {"user": HumanMessage, "assistant": AIMessage, "system": SystemMessage}
+        self._chat_history.append_message(message_type[role](content=content))
+
+    def update_instructions(self, *, instructions: str) -> None:
+        """Replace system instructions while retaining conversation messages.
+
+        Parameters
+        ----------
+        instructions : str
+            System message used for subsequent model calls.
+        """
+        self.messages[0].content = instructions
 
     def get_chat_history(self, with_system: bool = False) -> str | None:
         if not self.messages:

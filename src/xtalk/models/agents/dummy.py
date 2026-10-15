@@ -1,6 +1,6 @@
 """Lightweight dummy agent implementation for tests and sample wiring."""
 
-from typing import Any, AsyncIterator, Iterable
+from typing import AsyncIterator, Iterable
 
 from .interfaces import Agent, AgentContext, AgentOutput
 from ..registry import model
@@ -22,18 +22,6 @@ class DummyAgent(Agent):
     ) -> None:
         """Initialize the dummy agent."""
         self.default_response = default_response
-
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Ignore persisted history for the stateless dummy agent.
-
-        Parameters
-        ----------
-        messages : list[dict[str, Any]]
-            Persisted messages. Ignored by this implementation.
-        """
-
-        del messages
-        return None
 
     def accept(self, context: AgentContext) -> Iterable[AgentOutput]:
         """Synchronously bridge ``async_accept()`` for the stateless agent.
