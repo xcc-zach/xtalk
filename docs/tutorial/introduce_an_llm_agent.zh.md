@@ -75,7 +75,7 @@ yield AgentTurnBoundary()
 
 ## 2. 补全 Agent 接口
 
-自定义 Agent 需要继承 `Agent`，并实现 `accept()`、`clone()` 和 `restore_history()`。如果主要逻辑写在 `async_accept()` 中，`accept()` 可以使用继承的 `sync_iter_from_async()`。`@model` 用于将该实现注册为配置文件可以选择的模型：
+自定义 Agent 需要继承 `Agent`，并实现 `accept()` 和 `clone()`。如果主要逻辑写在 `async_accept()` 中，`accept()` 可以使用继承的 `sync_iter_from_async()`。`@model` 用于将该实现注册为配置文件可以选择的模型：
 
 ```python
 from typing import Any, AsyncIterator, Iterable
@@ -113,13 +113,9 @@ class EchoAgent(Agent):
 
         return EchoAgent()
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """恢复持久化历史。"""
-
-        self.messages = list(messages)
 ```
 
-`clone()` 必须返回可供新会话独立使用的实例，避免不同会话共享可变状态。上例中的 `restore_history()` 会复制传入的持久化消息，保存到当前会话的 `messages` 中。
+`clone()` 必须返回可供新会话独立使用的实例，避免不同会话共享可变状态。如果应用需要恢复对话，可以在会话中将之前的消息作为上下文发送。
 
 ## 3. 注册并启用 Agent
 
@@ -164,7 +160,7 @@ if context["type"] == "asr_partial":
 
 ## 5. 管理对话历史
 
-Agent 自己负责维护对话状态。前文的 `EchoAgent` 已经在 `restore_history()` 中保存持久化消息。如果还需要向 ASR 或其他组件提供文本形式的历史，可以实现 `get_chat_history()`：
+Agent 自己负责维护对话状态。如果还需要向 ASR 或其他组件提供文本形式的历史，可以实现 `get_chat_history()`：
 
 ```python
 def get_chat_history(self, with_system: bool = False) -> str | None:
@@ -178,10 +174,32 @@ def get_chat_history(self, with_system: bool = False) -> str | None:
 
 `get_chat_history()` 是可选接口。每轮识别开始时，ASR 会调用它获取当前对话历史，并将返回值作为 `chat_history` 传给 ASR 模型；不使用历史的 ASR 模型会忽略该值。`DefaultAgent` 还会处理 `response_update` 和 `response_finish`，以记录实际播放给用户的内容；自定义 Agent 只有需要这种语义时才需要处理它们。
 
-## 6. 工具调用
+## 6. 更新对话历史与系统提示
+
+自定义 Agent 可以实现 `append_context()` 和 `update_instructions()`，以支持客户端通过 WebSocket 更新当前会话。
+
+客户端发送 `conversation.item.create` 追加上下文消息时，若未要求生成回复，会调用 `append_context()`。该方法需要将消息加入 Agent 的对话历史，供后续回复使用，也可用于逐条恢复已有对话。消息角色支持 `user`、`assistant` 和 `system`：
+
+```python
+def append_context(self, *, role: str, content: str) -> None:
+    """追加一条上下文消息。"""
+    self.messages.append({"role": role, "content": content})
+```
+
+客户端发送包含 `instructions` 的 `session.update` 时，会调用 `update_instructions()`。该方法需要替换当前系统提示，并保留已有对话消息：
+
+```python
+def update_instructions(self, *, instructions: str) -> None:
+    """更新后续回复使用的系统提示。"""
+    self.instructions = instructions
+```
+
+上例假设 Agent 在初始化时创建了 `self.messages` 和 `self.instructions`，并在生成回复时使用它们。请根据自己的消息存储方式调整实现。通过 `append_context()` 追加 `system` 消息会在历史末尾增加一条消息；`update_instructions()` 则替换当前系统提示。未实现对应接口时，客户端的上下文追加或系统提示更新请求会被拒绝。
+
+## 7. 工具调用
 
 详见[引入工具](tool_design.zh.md)。
 
-## 7. 使用辅助能力
+## 8. 使用辅助能力
 
 `Agent` 提供 `content_to_text()`，用于把 LangChain 返回的字符串或内容块转换为纯文本。

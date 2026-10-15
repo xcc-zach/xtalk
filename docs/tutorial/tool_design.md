@@ -374,9 +374,6 @@ class ToolAgent(Agent):
     def clone(self) -> "ToolAgent":
         return ToolAgent(self.model, self.tools)
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        del messages
-
     async def shutdown(self) -> None:
         await self.engine.shutdown()
 ```

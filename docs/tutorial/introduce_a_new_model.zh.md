@@ -39,11 +39,6 @@ class EchoAgent(Agent):
         if text:
             yield text
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """忽略持久化的历史消息。"""
-
-        del messages
-
     def clone(self) -> "EchoAgent":
         """创建无状态 Agent 的新实例。"""
 

@@ -39,11 +39,6 @@ class EchoAgent(Agent):
         if text:
             yield text
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Ignore persisted history."""
-
-        del messages
-
     def clone(self) -> "EchoAgent":
         """Create a fresh stateless agent."""
 

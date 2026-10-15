@@ -75,7 +75,7 @@ yield AgentTurnBoundary()
 
 ## 2. Complete the Agent Interface
 
-A custom Agent inherits from `Agent` and implements `accept()`, `clone()`, and `restore_history()`. When the main logic lives in `async_accept()`, `accept()` can use the inherited `sync_iter_from_async()` helper. `@model` registers the implementation so it can be selected by configuration:
+A custom Agent inherits from `Agent` and implements `accept()` and `clone()`. When the main logic lives in `async_accept()`, `accept()` can use the inherited `sync_iter_from_async()` helper. `@model` registers the implementation so it can be selected by configuration:
 
 ```python
 from typing import Any, AsyncIterator, Iterable
@@ -113,13 +113,9 @@ class EchoAgent(Agent):
 
         return EchoAgent()
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Restore persisted history."""
-
-        self.messages = list(messages)
 ```
 
-`clone()` must return an instance that a new session can use independently, preventing mutable state from being shared across sessions. The `restore_history()` example copies persisted messages into the current session's `messages` list.
+`clone()` must return an instance that a new session can use independently, preventing mutable state from being shared across sessions. If an application needs to resume a conversation, it can send prior messages to the session as context.
 
 ## 3. Register and Enable the Agent
 
@@ -164,7 +160,7 @@ if context["type"] == "asr_partial":
 
 ## 5. Manage Conversation History
 
-The Agent owns its conversation state. The earlier `EchoAgent` already stores persisted messages in `restore_history()`. Implement `get_chat_history()` when ASR or another component needs a textual representation of that history:
+The Agent owns its conversation state. Implement `get_chat_history()` when ASR or another component needs a textual representation of that history:
 
 ```python
 def get_chat_history(self, with_system: bool = False) -> str | None:
@@ -178,10 +174,32 @@ def get_chat_history(self, with_system: bool = False) -> str | None:
 
 `get_chat_history()` is optional. At the start of each recognition turn, ASR calls it to obtain the current conversation history and passes the result to the ASR model as `chat_history`; ASR models that do not use history ignore the value. `DefaultAgent` also handles `response_update` and `response_finish` to record what was actually played to the user. A custom Agent only needs these contexts when it requires the same semantics.
 
-## 6. Tool Calls
+## 6. Update Conversation History and System Instructions
+
+A custom Agent can implement `append_context()` and `update_instructions()` to support clients updating the current session through WebSocket events.
+
+When a client sends `conversation.item.create` to append context without requesting a response, `append_context()` is called. This method should add the message to the Agent's conversation history for subsequent responses. It also supports restoring an existing conversation one message at a time. Supported roles are `user`, `assistant`, and `system`:
+
+```python
+def append_context(self, *, role: str, content: str) -> None:
+    """Append one context message."""
+    self.messages.append({"role": role, "content": content})
+```
+
+When a client sends `session.update` containing `instructions`, `update_instructions()` is called. This method should replace the current system instructions while retaining existing conversation messages:
+
+```python
+def update_instructions(self, *, instructions: str) -> None:
+    """Update the system instructions used for subsequent responses."""
+    self.instructions = instructions
+```
+
+These examples assume the Agent initializes `self.messages` and `self.instructions` and uses them when generating responses. Adapt the implementation to your own message storage. Appending a `system` message through `append_context()` adds a message at the end of the history; `update_instructions()` replaces the current system instructions. Client requests to append context or update instructions are rejected when the corresponding interface is not implemented.
+
+## 7. Tool Calls
 
 See [Introduce Tools](tool_design.md).
 
-## 7. Use Optional Helpers
+## 8. Use Optional Helpers
 
 `Agent` provides `content_to_text()` to convert strings or content blocks returned by LangChain into plain text.
