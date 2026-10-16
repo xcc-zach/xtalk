@@ -3,6 +3,10 @@ class VAD(ABC):
     """Abstract base class for voice activity detection engines."""
 
     @abstractmethod
+    def set_threshold(self, *, threshold: float) -> None:
+        ...
+
+    @abstractmethod
     def is_speech(self, frame: bytes) -> bool:
         ...
 
@@ -12,7 +16,7 @@ class VAD(ABC):
 
 ## `is_speech`实现的最佳实践
 
-框架中实际调用的是 `async_is_speech`。因此，如果底层实现本身是异步的，最佳实践是首先实现 `async_is_speech`，然后采用如下方式实现 `is_speech`：
+服务层在逐帧模式下调用 `async_is_speech`，在批量模式下调用 `async_detect_frames`；后者默认按顺序调用 `async_is_speech`。因此，如果底层实现本身是异步的，最佳实践是首先实现 `async_is_speech`，然后采用如下方式实现 `is_speech`：
 
 ```python
 import asyncio
@@ -44,7 +48,7 @@ def _run_coro(self, coro: "asyncio.Future[bool]") -> bool:
 `VADManager` 会消费 `EnhancedAudioFrameReceived` 事件，并在后端启用 VAD 时执行如下流程：
 
 - 将输入音频缓存并切分为固定长度 frame
-- 对每个 frame 调用一次 `async_is_speech`
+- 逐帧模式下调用 `async_is_speech`；批量模式下调用 `async_detect_frames`，按输入顺序获取每帧的布尔结果
 - 基于连续语音帧和连续静音帧数量推进状态机
 - 在满足阈值时发布 `VADSpeechStart` / `VADSpeechEnd`
 
@@ -92,6 +96,39 @@ Web 前端默认使用 Silero VAD v5。输入音频默认采用 16 kHz、PCM 16-
 X-Talk 支持前端 VAD。后端 `VAD` 主要用于前端无法运行 VAD，或你明确希望把 VAD 放到服务端执行的场景。
 
 通常不建议同时启用前端和后端 VAD，否则可能产生重复的 turn 事件。
+
+## 运行时调整阈值
+
+`set_threshold` 是抽象方法，所有 VAD 子类都必须实现；未实现时无法实例化。`threshold` 是逐帧语音概率的判定阈值，取值范围为 `[0, 1]`。
+
+不支持调整阈值的模型也必须显式实现该方法，并抛出 `NotImplementedError`，以明确表示该能力不受支持。
+
+## 通过 Realtime 配置后端 VAD
+
+客户端可以通过 OpenAI Realtime 的 `session.update` 事件设置 `session.audio.input.turn_detection.threshold`：
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "type": "realtime",
+    "audio": {
+      "input": {
+        "turn_detection": {
+          "type": "server_vad",
+          "threshold": 0.6
+        }
+      }
+    }
+  }
+}
+```
+
+网关会校验阈值范围，并调用当前会话 VAD 模型的 `set_threshold`。更新成功后，服务端返回 `session.updated`，其中包含生效后的会话配置；未配置后端 VAD 或模型不支持调整阈值时，服务端返回 `error` 事件。
+
+该配置只作用于后端 VAD，不会修改前端 VAD 的正负概率阈值。
+
+协议字段参见 [OpenAI Realtime VAD 文档](https://developers.openai.com/api/docs/guides/realtime-vad)。
 
 ## `clone`与`reset`
 

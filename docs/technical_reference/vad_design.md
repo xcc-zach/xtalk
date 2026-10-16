@@ -3,6 +3,10 @@ class VAD(ABC):
     """Abstract base class for voice activity detection engines."""
 
     @abstractmethod
+    def set_threshold(self, *, threshold: float) -> None:
+        ...
+
+    @abstractmethod
     def is_speech(self, frame: bytes) -> bool:
         ...
 
@@ -12,7 +16,7 @@ class VAD(ABC):
 
 ## Best Practice for Implementing `is_speech`
 
-The framework actually calls `async_is_speech`. Therefore, if the underlying implementation is asynchronous, the best practice is to implement `async_is_speech` first, and then implement `is_speech` like this:
+The service layer calls `async_is_speech` in single-frame mode and `async_detect_frames` in batch mode; the latter calls `async_is_speech` sequentially by default. Therefore, if the underlying implementation is asynchronous, the best practice is to implement `async_is_speech` first, and then implement `is_speech` like this:
 
 ```python
 import asyncio
@@ -44,7 +48,7 @@ Notes:
 `VADManager` consumes `EnhancedAudioFrameReceived` events and, when backend VAD is enabled, performs the following steps:
 
 - buffer the input audio and split it into fixed-length frames
-- call `async_is_speech` once for each frame
+- call `async_is_speech` in single-frame mode or `async_detect_frames` in batch mode, obtaining one boolean result per frame in input order
 - advance the state machine based on consecutive speech frames and consecutive silence frames
 - publish `VADSpeechStart` / `VADSpeechEnd` when thresholds are met
 
@@ -92,6 +96,39 @@ When frontend VAD is enabled, microphone PCM frames are uploaded immediately wit
 X-Talk supports frontend VAD. Backend `VAD` is mainly for cases where the frontend cannot run VAD, or when you explicitly want VAD to run on the server side.
 
 It is generally not recommended to enable both frontend and backend VAD at the same time, otherwise duplicate turn events may be produced.
+
+## Updating the Threshold at Runtime
+
+`set_threshold` is abstract and must be implemented by every VAD subclass. A subclass cannot be instantiated without an implementation. `threshold` is the speech probability cutoff for frame-level decisions, with a valid range of `[0, 1]`.
+
+Models that do not support threshold updates must still implement this method explicitly and raise `NotImplementedError` to indicate that the capability is unsupported.
+
+## Configuring Backend VAD Through Realtime
+
+Clients can set `session.audio.input.turn_detection.threshold` through the OpenAI Realtime `session.update` event:
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "type": "realtime",
+    "audio": {
+      "input": {
+        "turn_detection": {
+          "type": "server_vad",
+          "threshold": 0.6
+        }
+      }
+    }
+  }
+}
+```
+
+The gateway validates the threshold range and calls `set_threshold` on the current session's VAD model. On success, the server returns `session.updated` with the effective session configuration. If no backend VAD is configured or the model does not support threshold updates, the server returns an `error` event.
+
+This configuration applies only to backend VAD and does not change the frontend VAD's positive or negative probability thresholds.
+
+See the [OpenAI Realtime VAD documentation](https://developers.openai.com/api/docs/guides/realtime-vad) for the protocol fields.
 
 ## `clone` and `reset`
 
