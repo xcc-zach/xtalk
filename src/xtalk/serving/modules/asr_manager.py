@@ -2,9 +2,10 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from ...models import ASR, Agent, Models
+from ...models import ASR, VAD, Agent, Models
 from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
+    ASRFailed,
     ASRResultFinal,  # emit when turn about to move to next stage like text generation
     ASRResultPartial,
     AudioFrameReceived,
@@ -82,6 +83,8 @@ class AudioConsumer:
         config: dict[str, Any] | None = None,
     ) -> None:
         self._event_bus = event_bus
+        self._config = config if config is not None else {}
+        self._backend_vad = models.get(VAD) is not None
         self._asr_model = models.require(ASR)
         self._asr_model.reset()
         self._agent = models.get(Agent)
@@ -95,8 +98,11 @@ class AudioConsumer:
         self._paused = False
         # Cache for recognition used in _recognize_and_publish
         self._recognized_text = ""
+        self._recognition_failed = False
+        self._preview_revision = 0
         self._turn_chat_history: str | None = None
         self._recognition_generation = 0
+        self._item_id = ""
         self._turn_id = 0
         self._segment_id = 0
         # Assume PCM 16bit mono
@@ -114,14 +120,50 @@ class AudioConsumer:
         self._lifecycle_lock = asyncio.Lock()
         # Start audio consumer task immediately
         self._audio_consumer_task = asyncio.create_task(self._audio_consumer())
+
     async def accept_audio_frame(self, audio_frame: bytes):
         # Add audio_frame to pre-buffer if consumer not started; add audio_frame to recognition queue if started
         if not self._consumer_running():
+            detection = self._config.get("realtime_turn_detection")
+            if isinstance(detection, dict):
+                retention_ms = detection["prefix_padding_ms"]
+                if self._backend_vad:
+                    retention_ms += (
+                        self._config.get("vad_min_speech_ms", 250)
+                        + (
+                            self._config.get("vad_max_queue_frames", 256)
+                            + self._config.get("vad_batch_frames", 1)
+                        )
+                        * self._config.get("vad_frame_samples", 512)
+                        * 1000
+                        / self.SAMPLE_RATE
+                    )
+                self._pre_buffer._max_bytes = max(
+                    1, int(retention_ms * self.SAMPLE_RATE * 2 / 1000)
+                )
             await self._pre_buffer.put(audio_frame)
         else:
             await self._audio_queue.put(audio_frame)
 
-    async def start(self, *, turn_id: int = 0, segment_id: int = 0):
+    async def start(
+        self,
+        *,
+        turn_id: int = 0,
+        item_id: str = "",
+        segment_id: int = 0,
+        audio_lookback_ms: float | None = None,
+    ):
+        """Start ASR using the detected onset rather than late notification time.
+
+        Parameters
+        ----------
+        item_id : str
+            Stable input item identifier allocated by the turn manager.
+        turn_id, segment_id : int
+            Existing manager-owned turn and speech segment identifiers.
+        audio_lookback_ms : float | None
+            Audio preceding the notification, including VAD delay and padding.
+        """
         # Pump pre-buffer to recognition queue; start consumer
         async with self._lifecycle_lock:
             # Break start-once invariance warning
@@ -130,11 +172,22 @@ class AudioConsumer:
                 return
             self._ended = False
             self._paused = False
+            self._recognition_failed = False
+            self._preview_revision = 0
+            self._item_id = item_id
             self._turn_id = turn_id
             self._segment_id = segment_id
             self._turn_chat_history = self._snapshot_chat_history()
             self._start_consumer()
-            await self._audio_queue.put(await self._pre_buffer.get())
+            initial_audio = await self._pre_buffer.get()
+            detection = self._config.get("realtime_turn_detection")
+            lookback_ms = audio_lookback_ms
+            if lookback_ms is None and isinstance(detection, dict):
+                lookback_ms = detection["prefix_padding_ms"]
+            if lookback_ms is not None:
+                keep_bytes = int(lookback_ms * self.SAMPLE_RATE / 1000) * 2
+                initial_audio = initial_audio[-keep_bytes:] if keep_bytes else b""
+            await self._audio_queue.put(initial_audio)
 
     async def pause(self):
         # Stop consumer, do one recognition and publish
@@ -241,12 +294,28 @@ class AudioConsumer:
             raise ValueError("ASR ends but chunk is not final chunk")
         recognition_generation = self._recognition_generation
         recognized_text = self._recognized_text
+        if self._recognition_failed:
+            return
         if len(audio) > 0 or is_final_chunk:
-            recognized_text = await self._asr_model.async_recognize_stream(
-                audio,
-                is_final=is_final_chunk,
-                chat_history=self._turn_chat_history,
-            )
+            try:
+                recognized_text = await self._asr_model.async_recognize_stream(
+                    audio,
+                    is_final=is_final_chunk,
+                    chat_history=self._turn_chat_history,
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate provider failure from the session task
+                if recognition_generation != self._recognition_generation:
+                    return
+                self._recognition_failed = True
+                self._recognized_text = ""
+                await self._publish_event(
+                    ASRFailed(
+                        session_id=self._session_id,
+                        item_id=self._item_id,
+                        message=str(exc),
+                    )
+                )
+                return
         if recognition_generation != self._recognition_generation:
             return
         if (
@@ -255,7 +324,9 @@ class AudioConsumer:
             and not self._is_blank_text(self._recognized_text)
         ):
             recognized_text = self._recognized_text
-        if self._is_blank_text(recognized_text):
+        if self._is_blank_text(recognized_text) and (
+            is_asr_end or self._is_blank_text(self._recognized_text)
+        ):
             return
         if is_asr_end:
             self._recognized_text = recognized_text
@@ -263,10 +334,20 @@ class AudioConsumer:
         else:
             if recognized_text == self._recognized_text and not is_final_chunk:
                 return
+            previous_text = self._recognized_text
+            self._preview_revision += 1
             self._recognized_text = recognized_text
             await self._publish_event(
                 ASRResultPartial(
                     session_id=self._session_id,
+                    item_id=self._item_id,
+                    delta=recognized_text[len(previous_text) :]
+                    if recognized_text.startswith(previous_text)
+                    else recognized_text,
+                    update_mode="append"
+                    if recognized_text.startswith(previous_text)
+                    else "replace",
+                    revision=self._preview_revision,
                     text=recognized_text,
                     display_text=recognized_text,
                     speech_pause=is_final_chunk,
@@ -293,6 +374,7 @@ class AudioConsumer:
         await self._publish_event(
             ASRResultFinal(
                 session_id=self._session_id,
+                item_id=self._item_id,
                 text=text,
                 display_text=text,
                 turn_id=self._turn_id,
@@ -354,9 +436,7 @@ class ASRManager(Manager):
     @Manager.event_handler(TurnInputAbortRequested, priority=100)
     async def _handle_input_abort(self, event: TurnInputAbortRequested) -> None:
         """Discard acoustic input before a synthetic text turn begins."""
-        if event.origin != "text":
-            return
-        self._text_turn_active = True
+        self._text_turn_active = event.origin == "text"
         self._audio_consumer._invalidate_recognition()
         async with self._input_lock:
             await self._audio_consumer.abort()
@@ -375,7 +455,9 @@ class ASRManager(Manager):
             return
         await self._audio_consumer.start(
             turn_id=event.turn_id,
+            item_id=event.item_id,
             segment_id=event.segment_id,
+            audio_lookback_ms=event.audio_lookback_ms,
         )
 
     @Manager.event_handler(TurnASREndRequested)
