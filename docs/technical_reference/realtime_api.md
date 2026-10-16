@@ -4,11 +4,40 @@ Xtalk exposes an OpenAI Realtime style API with a standard subset and Xtalk exte
 
 ## Transport conventions
 
-Connect to `WS /v1/realtime?model=xtalk`, using the configured model alias. Control events and all server output use JSON with `type`. Server events include `event_id`; clients may supply `event_id`. C→S means client to server; S→C means server to client. Each connection owns a temporary Session and Conversation (dialogue context). An Item is a message; a Response represents one reply generation. Output and content indices start at zero. “Content identity” means `response_id`, `item_id`, `output_index`, and `content_index`.
+Connect to `WS /v1/realtime?model=xtalk`, using the configured model alias. Control events and default server output use JSON with `type`. Server events include `event_id`; clients may supply `event_id`. C→S means client to server; S→C means server to client. Each connection owns a temporary Session and Conversation (dialogue context). An Item is a message; a Response represents one reply generation. Output and content indices start at zero. “Content identity” means `response_id`, `item_id`, `output_index`, and `content_index`.
 
-Normal input/response audio is **24 kHz, mono, signed PCM16 little-endian**, without a WAV header. JSON Base64 and raw PCM binary input are both enabled by default; output remains Base64 JSON. The format of `session.audio.mix.delta` is specified by its own metadata.
+Normal input/response audio is **24 kHz, mono, signed PCM16 little-endian**, without a WAV header. JSON Base64 and raw PCM binary input are both enabled by default; output defaults to Base64 JSON and supports the explicitly negotiated binary extension below. The format of `session.audio.mix.delta` is specified by its own metadata.
 
 Each input message is limited to 1 MiB (UTF-8 bytes for JSON, PCM bytes for binary). Both input forms share an audio buffer budget of 60 seconds; committing or completing an audio turn releases the corresponding input budget so more audio can be sent. Odd byte counts, invalid Base64, and oversized input are rejected without changing valid buffering. Send 20–100 ms per audio message for realtime streaming.
+
+## Binary audio output (Xtalk extension)
+
+Base64 JSON remains the OpenAI-style default. To request binary output, send:
+
+```json
+{"type":"session.update","session":{"xtalk":{"output_audio_encoding":"binary_pcm"}}}
+```
+
+`session.created/updated` includes `session.xtalk.output_audio_encoding`, either `base64` or `binary_pcm`. Omitted fields retain their values. Wait for `session.updated` before expecting binary output. Switching is rejected while a Response is active or playback blocks remain unsettled; setting the current value again is allowed. Invalid values and disallowed changes return `invalid_value` without changing the effective configuration.
+
+The frontend SDK supports `createSession(url, {outputAudioEncoding: "binary_pcm"})`, defaulting to `base64`. It waits for negotiation before opening audio, distinguishes JSON text from binary WebSocket messages, and delivers raw PCM directly to existing playback or mixed-audio callbacks without re-encoding it as Base64.
+
+Each complete binary WebSocket message contains:
+
+```text
+[4-byte unsigned big-endian header length N][N-byte UTF-8 JSON header][PCM bytes]
+```
+
+N is 1–65536. Headers contain `version: 1` and `event_id`, without `delta`:
+
+| type | Header metadata | Audio payload |
+|---|---|---|
+| `xtalk.output_audio.delta` | `response_id`, `item_id`, `output_index`, `content_index` | 24 kHz mono PCM16 little-endian |
+| `xtalk.audio.mix.delta` | `sample_rate`, `channels`, `format: "pcm_s16le"` | PCM16 little-endian at the stated rate and channel count |
+
+These replace the corresponding Base64 JSON `response.output_audio.delta` and `session.audio.mix.delta` messages. Each chunk uses exactly one encoding, without a separate JSON header event. Raw PCM and Base64 JSON input rules are unaffected. Transcripts, completion, cancellation, errors, and playback controls remain JSON. Playback acknowledgements retain existing Response identity and original chunk order, without an additional sequence number. Audio for stopped or superseded responses is not played.
+
+Unnegotiated binary audio, invalid header lengths/JSON, unknown versions/types, missing content identity, or misaligned PCM stop playback and close the connection without guessing the encoding or acknowledging successful playback. Standard OpenAI clients should retain the default Base64 mode.
 
 ## Session settings
 

@@ -4,11 +4,40 @@ Xtalk 提供 OpenAI Realtime 风格的 API，包含标准子集和 Xtalk 扩展�
 
 ## 传输约定
 
-连接 `WS /v1/realtime?model=xtalk`；模型别名可由服务端配置。控制事件和所有服务端输出使用 JSON，包含 `type`；服务端事件包含 `event_id`，客户端可选提供 `event_id`。表中 C→S 表示客户端到服务端，S→C 表示服务端到客户端。一次连接对应一个临时 Session（会话）及 Conversation（对话上下文）；Item 是其中的一条消息，Response 是一次回复生成。“内容标识”指 `response_id`、`item_id`、`output_index`、`content_index`，后两个索引从零开始。
+连接 `WS /v1/realtime?model=xtalk`；模型别名可由服务端配置。控制事件和默认服务端输出使用 JSON，包含 `type`；服务端事件包含 `event_id`，客户端可选提供 `event_id`。表中 C→S 表示客户端到服务端，S→C 表示服务端到客户端。一次连接对应一个临时 Session（会话）及 Conversation（对话上下文）；Item 是其中的一条消息，Response 是一次回复生成。“内容标识”指 `response_id`、`item_id`、`output_index`、`content_index`，后两个索引从零开始。
 
-普通输入/回复音频为 **24 kHz、单声道、signed PCM16 little-endian**，不含 WAV 文件头。输入既支持 JSON Base64，也支持裸 PCM 二进制，默认同时开启；输出仍为 Base64 JSON。`session.audio.mix.delta` 的格式单独以事件元数据为准。
+普通输入/回复音频为 **24 kHz、单声道、signed PCM16 little-endian**，不含 WAV 文件头。输入既支持 JSON Base64，也支持裸 PCM 二进制，默认同时开启；输出默认使用 Base64 JSON，可显式协商下述二进制输出扩展。`session.audio.mix.delta` 的格式单独以事件元数据为准。
 
 单条输入消息最多 1 MiB（JSON 按 UTF-8 字节计，二进制按 PCM 字节计）；两种输入共享最多 60 秒的音频缓冲，提交或完成音频轮次后会释放对应输入预算，可继续发送音频。奇数字节、非法 Base64 和超限输入被拒绝，不改变有效缓冲；建议每包发送 20–100 ms 音频。
+
+## 二进制音频输出（Xtalk 扩展）
+
+默认保持 OpenAI 风格的 Base64 JSON 输出。需要二进制输出时，先发送：
+
+```json
+{"type":"session.update","session":{"xtalk":{"output_audio_encoding":"binary_pcm"}}}
+```
+
+`session.created/updated` 回显 `session.xtalk.output_audio_encoding`，可选值为 `base64` 和 `binary_pcm`；省略字段保持原值。等待 `session.updated` 确认后启用二进制解析。有活动 Response 或未结算播放块时不能切换编码，重复设置当前值允许；非法值或不允许的切换返回 `invalid_value`，不修改有效配置。
+
+前端 SDK 可使用 `createSession(url, {outputAudioEncoding: "binary_pcm"})`；默认仍为 `base64`。SDK 在打开音频前等待协商确认，按 WebSocket 消息类型区分文本 JSON 与二进制音频，二进制 PCM 直接进入原播放或混合音频回调，不重新 Base64 编码。
+
+每条完整二进制 WebSocket 消息包含：
+
+```text
+[4 字节无符号大端头长度 N][N 字节 UTF-8 JSON 头][PCM 字节]
+```
+
+N 范围为 1–65536，头部包含 `version: 1` 和 `event_id`，不含 `delta`。头部类型及内容如下：
+
+| type | 头部元数据 | 音频载荷 |
+|---|---|---|
+| `xtalk.output_audio.delta` | `response_id`、`item_id`、`output_index`、`content_index` | 24 kHz、单声道 PCM16 little-endian |
+| `xtalk.audio.mix.delta` | `sample_rate`、`channels`、`format: "pcm_s16le"` | 按头部采样率和声道解释的 PCM16 little-endian |
+
+启用后，以上消息分别替代 `response.output_audio.delta` 和 `session.audio.mix.delta` 的 Base64 JSON；每块只发送一种编码，不另发头部 JSON。输入方向的裸 PCM 与 JSON Base64 规则不变。转写、完成、取消、错误及播放控制继续使用 JSON；播放确认仍按现有 Response 和原始块顺序发送，无额外块序号。迟到或已停止回复的音频不进入播放。
+
+客户端遇到未协商的二进制音频、非法头长度/JSON、未知版本/类型、缺少内容标识或 PCM 样本未对齐时，停止播放并关闭连接，不猜测编码、不确认播放成功。纯 OpenAI 客户端应继续使用默认 Base64 模式。
 
 ## 会话配置
 
