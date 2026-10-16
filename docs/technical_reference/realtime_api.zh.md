@@ -18,6 +18,32 @@ Xtalk 提供 OpenAI Realtime 风格的 API，包含标准子集和 Xtalk 扩展�
 
 `voice` 默认 `default`，`speed` 默认 `1.0`，范围 `0.25–1.5`；活动回复期间更新速度是 Xtalk 扩展，已处理音频不重复变速。`emotion` 是 Xtalk 扩展，形如 `{"name":"happy","vector":[]}`，名称非空时优先于向量；更新时二者不能同时为空。修改 instructions、voice、emotion 需要相应模型支持，失败返回错误。配置项省略时保持原值。
 
+## WebSocket 错误事件
+
+请求的字段缺失、类型错误、数值越界或操作不受支持时，服务端通过 WebSocket 返回 `error` 事件。客户端应监听该事件，并根据 `error.code`、`error.message` 和 `error.param` 修正请求。校验失败后连接保持可用，可以继续发送后续请求。
+
+- `error.type`：无效请求使用 `invalid_request_error`；非预期的服务端执行失败使用 `server_error`。
+- `error.code` 和 `error.message`：具体错误码和可读说明。
+- `error.param`：相关协议字段的路径；无法定位字段时为 `null`。
+- `error.event_id`：导致错误的客户端事件 ID；未提供或无法提取时为 `null`。
+- 顶层 `event_id`：本次服务端错误事件的独立 ID，不是客户端请求 ID。
+
+```json
+{
+  "type": "error",
+  "event_id": "evt_server_error",
+  "error": {
+    "type": "invalid_request_error",
+    "code": "invalid_value",
+    "message": "Input should be less than or equal to 1",
+    "param": "session.audio.input.turn_detection.threshold",
+    "event_id": "evt_client_update"
+  }
+}
+```
+
+`session.update` 失败时返回 `error`，不会发送表示更新成功的 `session.updated`。其他请求也应结合各自的成功事件判断结果，不应将消息发送成功视为操作成功。
+
 ## 事件表
 
 | 阶段 | 事件或消息 | 方向 | 关键字段（不含公共信封） | 行为及客户端处理 |

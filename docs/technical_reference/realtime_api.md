@@ -18,6 +18,32 @@ Each input message is limited to 1 MiB (UTF-8 bytes for JSON, PCM bytes for bina
 
 `voice` defaults to `default`; `speed` defaults to `1.0` and accepts `0.25–1.5`. Updating speed during an active response is an Xtalk extension; already processed audio is not processed again. The Xtalk `emotion` extension has the form `{"name":"happy","vector":[]}`; a nonempty name takes precedence over the vector, and updates cannot leave both empty. Updating instructions, voice, or emotion requires model support and otherwise returns an error. Omitted settings retain their values.
 
+## WebSocket error events
+
+Missing fields, incorrect types, out-of-range values, and unsupported operations produce an `error` event over WebSocket. Clients should listen for this event and use `error.code`, `error.message`, and `error.param` to correct the request. The connection remains usable after validation failure, allowing subsequent requests.
+
+- `error.type`: `invalid_request_error` for invalid requests; `server_error` for unexpected server execution failures.
+- `error.code` and `error.message`: the specific error code and a readable explanation.
+- `error.param`: the related protocol field path, or `null` when no field can be identified.
+- `error.event_id`: the client event ID that caused the error, or `null` when absent or unavailable.
+- Top-level `event_id`: the independent identifier of the server error event, not the client request ID.
+
+```json
+{
+  "type": "error",
+  "event_id": "evt_server_error",
+  "error": {
+    "type": "invalid_request_error",
+    "code": "invalid_value",
+    "message": "Input should be less than or equal to 1",
+    "param": "session.audio.input.turn_detection.threshold",
+    "event_id": "evt_client_update"
+  }
+}
+```
+
+A failed `session.update` returns `error` without a success acknowledgement through `session.updated`. For other requests, use their corresponding success events to determine the outcome; successfully sending a message does not confirm that the operation succeeded.
+
 ## Event table
 
 | Stage | Event or message | Direction | Key fields (excluding envelope) | Behavior and client handling |
