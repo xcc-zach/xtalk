@@ -286,6 +286,20 @@ class SileroVAD(VAD):
             context_samples=self.context_samples,
         )
 
+    def set_threshold(self, *, threshold: float) -> None:
+        """Update the supported speech probability threshold.
+
+        Parameters
+        ----------
+        threshold : float
+            Validated probability threshold between zero and one.
+        """
+        if threshold == self.threshold:
+            return
+        self.threshold = threshold
+        if self.base_url is not None:
+            self.reset()
+
     def reset(self) -> None:
         """Reset this instance's streaming state."""
         if self.base_url is not None:

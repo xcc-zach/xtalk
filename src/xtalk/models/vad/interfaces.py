@@ -9,6 +9,17 @@ class VAD(ABC):
     """Abstract base class for voice activity detection engines."""
 
     @abstractmethod
+    def set_threshold(self, *, threshold: float) -> None:
+        """Configure the speech probability threshold.
+
+        Parameters
+        ----------
+        threshold : float
+            Probability threshold between zero and one.
+
+        """
+
+    @abstractmethod
     def is_speech(self, frame: bytes) -> bool:
         """Determine whether an audio frame contains speech.
 
