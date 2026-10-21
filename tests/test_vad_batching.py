@@ -25,6 +25,10 @@ class RecordingVAD(VAD):
         """Record sequential single-frame calls."""
         self.frames = []
 
+    def set_threshold(self, *, threshold: float) -> None:
+        """Reject threshold updates for this deterministic boolean test model."""
+        raise NotImplementedError("RecordingVAD does not support threshold updates")
+
     def is_speech(self, frame):
         """Record a frame and classify its first byte."""
         self.frames.append(frame)
@@ -103,7 +107,7 @@ def test_partial_batch_flushes_after_deadline():
             )
 
             async def completed():
-                while not vad.async_detect_frames.call_count:
+                while not vad.async_detect_frames.await_count:
                     await asyncio.sleep(0.005)
 
             await asyncio.wait_for(completed(), 1)

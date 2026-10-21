@@ -33,6 +33,7 @@ from ..events import (
     TurnInputAbortRequested,
     VADSpeechEnd,
     VADSpeechStart,
+    VADThresholdUpdateRequested,
 )
 from ..interfaces import Manager
 
@@ -44,6 +45,7 @@ _Result = TypeVar("_Result")
 class _VadState:
     """Internal state container for VAD smoothing."""
 
+    speech_run_started_at: float | None = None
     in_speech: bool = False
     speech_run_frames: int = 0
     non_speech_run_frames: int = 0
@@ -134,17 +136,37 @@ class VADManager(Manager):
     # ----------------------------
     # Event handling
     # ----------------------------
+    @Manager.event_handler(VADThresholdUpdateRequested)
+    async def _update_threshold(self, event: VADThresholdUpdateRequested) -> None:
+        """Check model availability or apply a validated threshold."""
+        if self.vad is None:
+            raise ValueError("No backend VAD model is configured")
+        if event.check_only:
+            return
+        async with self._request_lock, self._state_lock:
+            self.vad.set_threshold(threshold=event.threshold)
+
     @Manager.event_handler(EnhancedAudioFrameReceived, priority=100)
     async def _on_audio_frame(self, event: EnhancedAudioFrameReceived) -> None:
         """Process audio frames and run backend VAD when enabled."""
-        if self._stopped or self.vad is None or self._text_turn_active:
+        if (
+            self._stopped
+            or self.vad is None
+            or self._text_turn_active
+            or self.config.get("realtime_turn_detection", True) is None
+        ):
             return
         if self._batch_frames > 1:
             self._enqueue_audio(event)
             return
         try:
             async with self._state_lock:
-                if self._stopped or self.vad is None or self._text_turn_active:
+                if (
+                    self._stopped
+                    or self.vad is None
+                    or self._text_turn_active
+                    or self.config.get("realtime_turn_detection", True) is None
+                ):
                     return
 
                 if not event.audio_data:
@@ -177,9 +199,7 @@ class VADManager(Manager):
     @Manager.event_handler(TurnInputAbortRequested, priority=110)
     async def _on_input_abort(self, event: TurnInputAbortRequested) -> None:
         """Suppress and clear acoustic VAD state for a synthetic text turn."""
-        if event.origin != "text":
-            return
-        self._text_turn_active = True
+        self._text_turn_active = event.origin == "text"
         self._epoch += 1
         async with self._state_lock:
             self._clear_detection_state()
@@ -195,10 +215,24 @@ class VADManager(Manager):
             self._clear_detection_state()
             self._text_turn_active = False
 
-    async def _advance_state(self, is_speech: bool) -> None:
+    async def _advance_state(
+        self, is_speech: bool, *, frame_time: float | None = None
+    ) -> None:
         """Advance the state machine and emit start/end events based on durations."""
         st = self._st
+        detection = self.config.get("realtime_turn_detection")
+        redemption_frames = self._redemption_frames
+        if isinstance(detection, dict):
+            redemption_frames = max(
+                1, round(detection["silence_duration_ms"] / self.ms_per_frame)
+            )
         if is_speech:
+            if st.speech_run_frames == 0:
+                st.speech_run_started_at = (
+                    frame_time
+                    if frame_time is not None
+                    else asyncio.get_running_loop().time()
+                )
             st.speech_run_frames += 1
             st.non_speech_run_frames = 0
 
@@ -209,9 +243,10 @@ class VADManager(Manager):
         else:
             st.non_speech_run_frames += 1
             st.speech_run_frames = 0
+            st.speech_run_started_at = None
 
             # Exit speech when enough silence frames accumulate
-            if st.in_speech and st.non_speech_run_frames >= self._redemption_frames:
+            if st.in_speech and st.non_speech_run_frames >= redemption_frames:
                 st.in_speech = False
                 await self._emit_vad_end()
 
@@ -220,6 +255,15 @@ class VADManager(Manager):
         evt = VADSpeechStart(
             session_id=self.session_id,
             origin="server",
+            audio_lookback_ms=(
+                (asyncio.get_running_loop().time() - self._st.speech_run_started_at)
+                * 1000
+                + self.config.get("realtime_turn_detection", {}).get(
+                    "prefix_padding_ms", 300
+                )
+            )
+            if self._st.speech_run_started_at is not None
+            else None,
         )
         await self.event_bus.publish(evt)
 
@@ -294,18 +338,17 @@ class VADManager(Manager):
                 for i in range(count)
             ]
             del self._buf[: count * self._frame_bytes]
-            for _ in range(count):
-                self._frame_times.popleft()
+            frame_times = [self._frame_times.popleft() for _ in range(count)]
             epoch = self._epoch
             async with self._request_lock:
                 if epoch != self._epoch:
                     continue
                 results = await self._detect_batch(frames)
             async with self._state_lock:
-                for is_speech in results:
+                for is_speech, frame_time in zip(results, frame_times, strict=True):
                     if epoch != self._epoch or self._stopped:
                         break
-                    await self._advance_state(is_speech)
+                    await self._advance_state(is_speech, frame_time=frame_time)
             if self._frame_times:
                 self._ready.set()
 

@@ -185,8 +185,31 @@ args = parser.parse_args()
 
 app = FastAPI(title="Xtalk Dev Server")
 
-xtalk_instance = Xtalk.from_config(args.config)
-xtalk_instance.mount_routes(app)
+import json
+from xtalk.model_loader import init_configured_model
+
+with open(args.config, encoding="utf-8") as config_file:
+    application_config = json.load(config_file)
+application_service_config = application_config.setdefault("service_config", {})
+record_audio = application_service_config.pop("recording", False) is True
+if record_audio:
+    application_service_config["send_full_audio_to_client"] = True
+host_embeddings = init_configured_model(slot="embeddings", config=application_config) if "embeddings" in application_config else None
+application_config.pop("embeddings", None)
+xtalk_instance = Xtalk.from_config(application_config)
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from host.application import ApplicationHost
+
+@asynccontextmanager
+async def _lifespan(app):
+    async with LifespanManager(xtalk_instance.create_asgi_app()):
+        yield
+
+app.router.lifespan_context = _lifespan
+ApplicationHost(xtalk_instance, data_dir=application_service_config.get("data_dir", "data"), embeddings=host_embeddings, record_audio=record_audio).mount_routes(app)
 
 
 logs_path = Path(__file__).parent

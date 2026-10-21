@@ -218,19 +218,6 @@ Clone the agent for a new session.
 - `Agent`
   Session-safe agent instance.
 
-#### restore_history
-
-```python
-def restore_history(self, messages: list[dict[str, Any]]) -> None
-```
-
-Restore persisted conversation messages into the agent state.
-
-##### 参数
-
-- `messages` (`list[dict[str, Any]]`)
-  Persisted chat messages ordered by session history.
-
 #### append_context
 
 ```python

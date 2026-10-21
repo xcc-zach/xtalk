@@ -3,6 +3,7 @@
 Event Bus with enhanced error handling and recursion protection.
 """
 import asyncio
+import inspect
 import logging
 import time
 import weakref
@@ -319,6 +320,28 @@ class EventBus:
                 )
 
             return False
+
+    async def request(self, event: Event) -> None:
+        """Execute a single-owner request and propagate its failure.
+
+        Parameters
+        ----------
+        event : Event
+            Validated request consumed by exactly one registered handler.
+
+        Raises
+        ------
+        ValueError
+            No owner or multiple owners are registered for the request.
+        Exception
+            The owning handler failed; the original exception is propagated.
+        """
+        handlers = self._handlers.get(event.event_type, [])
+        if len(handlers) != 1:
+            raise ValueError(f"Expected one handler for {event.event_type}")
+        result = handlers[0].handler(event)
+        if inspect.isawaitable(result):
+            await result
 
     async def _handle_event_safe(
         self,

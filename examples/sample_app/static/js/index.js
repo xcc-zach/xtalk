@@ -1,4 +1,5 @@
 const { createSession } = await import("../../xtalk/index.js");
+import {createBusinessSession} from "./conversation-store.js";
 
 function resolveAppURL(path) {
     const baseURL = new URL("./", window.location.href);
@@ -6,7 +7,7 @@ function resolveAppURL(path) {
 }
 
 function getWebSocketURL() {
-    const url = resolveAppURL("ws");
+    const url = resolveAppURL("v1/realtime?model=xtalk");
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     return url;
 }
@@ -17,7 +18,7 @@ const inputConfig = {
     enableVAD: true,
 };
 const FRONTEND_VAD_ENABLED = inputConfig.enableVAD !== false;
-const session = createSession(getWebSocketURL(), {
+const session = createBusinessSession(createSession, getWebSocketURL(), {
     inputConfig,
 });
 

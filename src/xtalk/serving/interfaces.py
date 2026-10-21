@@ -1,3 +1,4 @@
+from typing import Protocol
 from abc import ABC, abstractmethod, ABCMeta
 from typing import Type, Callable, Any
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ class EventOverrides:
     def register_extra(self, obj: Any, event_bus: EventBus) -> None:
         for item in self.extra:
             ev_type: Type[Event] = item["event_type"]
+            if "method_name" in item and self.should_skip(item["method_name"], ev_type):
+                continue
             priority: int = item.get("priority", 0)
             enabled_if = item.get("enabled_if", None)
 
@@ -131,6 +134,7 @@ class EventListenerMixin(metaclass=EventListenerMeta):
             Decorator that annotates the target method for automatic event-bus
             registration.
         """
+
         def decorator(func: Callable[[Event], Any]):
             meta_list = getattr(func, "__event_handlers__", [])
             meta_list.append(
@@ -188,3 +192,47 @@ class Manager(EventListenerMixin, ShutdownMixin):
         return EventListenerMixin.event_handler(
             event_type, priority=priority, enabled_if=enabled_if
         )
+
+
+class Connection(Protocol):
+    """Describe framework-independent WebSocket operations used by the runtime."""
+
+    async def accept(self) -> None:
+        """Accept the WebSocket handshake."""
+        ...
+
+    async def receive(self) -> dict:
+        """Return a transport input message or disconnect notification."""
+        ...
+
+    async def send_json(self, message: dict) -> None:
+        """Send a JSON event.
+
+        Parameters
+        ----------
+        message : dict
+            External event payload.
+        """
+        ...
+
+    async def send_bytes(self, data: bytes) -> None:
+        """Send a complete binary message.
+
+        Parameters
+        ----------
+        data : bytes
+            Binary protocol payload.
+        """
+        ...
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        """Close the transport.
+
+        Parameters
+        ----------
+        code : int
+            WebSocket close code.
+        reason : str
+            Public close reason.
+        """
+        ...

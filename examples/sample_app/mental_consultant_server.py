@@ -299,7 +299,19 @@ xtalk_instance = (
     .set_model(MentalConsultantAgent)
     .build()
 )
-xtalk_instance.mount_routes(app)
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from host.application import ApplicationHost
+
+@asynccontextmanager
+async def _realtime_lifespan(application):
+    async with LifespanManager(xtalk_instance.create_asgi_app()):
+        yield
+
+app.router.lifespan_context = _realtime_lifespan
+ApplicationHost(xtalk_instance).mount_routes(app)
 
 
 # Serve static files

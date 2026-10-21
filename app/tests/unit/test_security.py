@@ -158,7 +158,7 @@ def test_core_http_routes_preserve_authorization_for_core_jwt() -> None:
 
 
 def test_websocket_allows_launch_token_or_delegates_access_token_to_core() -> None:
-    """Support the public SDK URL while leaving JWT validation to XTalk."""
+    """Support the public SDK URL while leaving JWT validation to the host."""
 
     policy = SecurityPolicy(token=TOKEN, origins=(ORIGIN,))
 
@@ -166,7 +166,7 @@ def test_websocket_allows_launch_token_or_delegates_access_token_to_core() -> No
         policy.evaluate(
             _scope(
                 scope_type="websocket",
-                path="/ws",
+                path="/v1/realtime",
                 query={STARTUP_TOKEN_QUERY: TOKEN},
             )
         )
@@ -176,13 +176,13 @@ def test_websocket_allows_launch_token_or_delegates_access_token_to_core() -> No
         policy.evaluate(
             _scope(
                 scope_type="websocket",
-                path="/ws",
+                path="/v1/realtime",
                 query={CORE_ACCESS_TOKEN_QUERY: "core-jwt"},
             )
         )
         is None
     )
-    denial = policy.evaluate(_scope(scope_type="websocket", path="/ws"))
+    denial = policy.evaluate(_scope(scope_type="websocket", path="/v1/realtime"))
     assert denial is not None
     assert denial.status_code == 401
 

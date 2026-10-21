@@ -11,6 +11,8 @@ from ...models import Agent, Models, SpeakerDiarization
 from ...models.agents import AgentContext
 from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
+    AgentContextAppendRequested,
+    AgentInstructionsUpdateRequested,
     ASRResultFinal,
     ASRResultPartial,
     CaptionUpdated,
@@ -58,10 +60,32 @@ class LLMAgentContextManager(Manager):
         self.llm_agent = models.get(Agent)
         self.multi_speaker_enabled = models.get(SpeakerDiarization) is not None
 
+    @Manager.event_handler(AgentInstructionsUpdateRequested)
+    async def _update_instructions(self, event: AgentInstructionsUpdateRequested) -> None:
+        """Check instruction support or update the configured agent."""
+        if self.llm_agent is None or type(self.llm_agent).update_instructions is Agent.update_instructions:
+            raise ValueError("Configured agent does not support instruction updates")
+        if not event.check_only:
+            self.llm_agent.update_instructions(instructions=event.instructions)
+
+    @Manager.event_handler(AgentContextAppendRequested)
+    async def _append_context(self, event: AgentContextAppendRequested) -> None:
+        """Inject validated text through the context owner."""
+        if self.llm_agent is None:
+            raise ValueError("No agent is configured for context injection")
+        self.llm_agent.append_context(role=event.role, content=event.content)
+
     @Manager.event_handler(ASRResultPartial, priority=20)
     async def _handle_asr_result_partial(self, event: ASRResultPartial) -> None:
         """Forward ``ASRResultPartial`` into the agent."""
 
+        detection = self.config.get("realtime_turn_detection")
+        if (
+            event.origin != "text"
+            and isinstance(detection, dict)
+            and not detection["create_response"]
+        ):
+            return
         await self._accept_event_context(event, context_type="asr_partial")
 
     @Manager.event_handler(ASRResultFinal, priority=20)
@@ -69,6 +93,15 @@ class LLMAgentContextManager(Manager):
         """Forward ``ASRResultFinal`` into the agent."""
 
         if self.multi_speaker_enabled and event.origin != "text":
+            return
+        detection = self.config.get("realtime_turn_detection")
+        if (
+            event.origin != "text"
+            and isinstance(detection, dict)
+            and not detection["create_response"]
+        ):
+            if self.llm_agent is not None:
+                self.llm_agent.append_context(role="user", content=event.text)
             return
         await self._accept_event_context(event, context_type="asr_final")
 
@@ -80,6 +113,11 @@ class LLMAgentContextManager(Manager):
         """Forward the joined ASR/MTD hard turn into the agent."""
 
         if not self.multi_speaker_enabled:
+            return
+        detection = self.config.get("realtime_turn_detection")
+        if isinstance(detection, dict) and not detection["create_response"]:
+            if self.llm_agent is not None:
+                self.llm_agent.append_context(role="user", content=event.asr_text)
             return
         await self._accept_event_context(event, context_type="multi_speaker_final")
 

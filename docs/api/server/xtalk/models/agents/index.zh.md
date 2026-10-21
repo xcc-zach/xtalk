@@ -110,21 +110,6 @@ Clone the agent for a new session.
 - `Agent`
   Session-safe agent instance.
 
-#### restore_history
-
-_定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_
-
-```python
-def restore_history(self, messages: list[dict[str, Any]]) -> None
-```
-
-Restore persisted conversation messages into the agent state.
-
-##### 参数
-
-- `messages` (`list[dict[str, Any]]`)
-  Persisted chat messages ordered by session history.
-
 #### append_context
 
 _定义于 [`xtalk.models.agents.interfaces`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/interfaces.py)。_

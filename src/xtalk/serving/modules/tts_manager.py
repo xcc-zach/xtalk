@@ -18,23 +18,24 @@ from ..events import (
     ToolCallOccurred,
     TTSChunkPlayed,
     TTSChunkReady,
+    TTSConfigurationUpdateRequested,
     TTSEmotionChange,
     TTSFinished,
     TTSModelSwitchRequested,
     TTSPaused,
+    TTSResponseClosed,
     TTSResumed,
     TTSSpeedChange,
     # Outbound events (unchanged for OutputGateway)
     TTSStarted,
     TTSStopped,
-    TTSResponseClosed,
     TTSStreamingTextAccepted,
     TTSTextDeliveryFinished,
     TTSTextSynthesisStarted,
     TTSTextSynthesized,
     TTSVoiceChange,
-    TurnTTSFlushRequested,
     TurnTTSDeliveryStartRequested,
+    TurnTTSFlushRequested,
     TurnTTSPauseRequested,
     TurnTTSResumeRequested,
     # Inbound mediator events
@@ -378,6 +379,26 @@ class TTSManager(Manager):
         self._streaming_sample_rate = 0
         return text
 
+    @Manager.event_handler(TTSConfigurationUpdateRequested)
+    async def _update_configuration(self, event: TTSConfigurationUpdateRequested) -> None:
+        """Check synthesis capabilities or apply one validated setting."""
+        model = self.models.get(TTS)
+        if event.voice is not None or event.emotion is not None:
+            if model is None:
+                raise ValueError("No TTS model is configured")
+            if event.voice is not None and type(model).set_voice is TTS.set_voice:
+                raise ValueError("Configured TTS does not support voice updates")
+            if event.emotion is not None and type(model).set_emotion is TTS.set_emotion:
+                raise ValueError("Configured TTS does not support emotion updates")
+        if event.check_only:
+            return
+        if event.voice is not None:
+            model.set_voice(voice_names=[event.voice])
+        if event.emotion is not None:
+            model.set_emotion(emotion=event.emotion["name"] or event.emotion["vector"])
+        if event.speed is not None:
+            self.current_speed = event.speed
+
     @Manager.event_handler(TurnTTSStartRequested, priority=100)
     async def _handle_turn_tts_start(self, event: TurnTTSStartRequested) -> None:
         """Create a preparation pipeline without opening client delivery."""
@@ -468,6 +489,7 @@ class TTSManager(Manager):
             return
         await self._resume_tts()
         tts_resumed_event = TTSResumed(
+            response_id=self._response_id or "",
             session_id=self.session_id,
         )
         await self.event_bus.publish(tts_resumed_event)
@@ -810,6 +832,7 @@ class TTSManager(Manager):
     async def _publish_tts_pause(self) -> None:
         """Publish TTSPaused event."""
         event = TTSPaused(
+            response_id=self._response_id or "",
             session_id=self.session_id,
         )
         await self.event_bus.publish(event)
@@ -818,10 +841,12 @@ class TTSManager(Manager):
         """Publish a TTS error event."""
         await self.event_bus.publish(
             ErrorOccurred(
+                response_id=self._response_id or "",
                 session_id=self.session_id,
                 error_type=error_type,
                 error_message=message,
-            )
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def shutdown(self) -> None:

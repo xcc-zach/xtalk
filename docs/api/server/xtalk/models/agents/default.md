@@ -88,19 +88,6 @@ async def async_accept(self, context: AgentContext) -> AsyncIterator[AgentOutput
 def clone(self) -> 'DefaultAgent'
 ```
 
-#### restore_history
-
-```python
-def restore_history(self, messages: list[dict[str, Any]]) -> None
-```
-
-Replace in-memory history with externally supplied messages.
-
-##### Parameters
-
-- `messages` (`list[dict[str, Any]]`)
-  Ordered text messages supplied by the application.
-
 #### append_context
 
 ```python

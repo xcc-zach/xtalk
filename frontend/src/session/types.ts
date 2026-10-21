@@ -1,14 +1,11 @@
 import type { InputAudioSessionConfig, OutputAudioSessionConfig } from "../bases/audio-session";
-import type { SessionServiceURLConfig } from "../bases/http";
 import { Conversation } from "../conversation";
 
 export type {
     AudioChunkCallback,
     Session,
     SessionConfig,
-    SessionDetail,
     SessionState,
-    SessionSummary,
 };
 
 /**
@@ -22,50 +19,11 @@ type SessionState = Conversation["state"];
 type AudioChunkCallback = (pcmChunkInt16: ArrayBuffer, sampleRate: number) => void;
 
 /**
- * Summary information for a stored session returned by the sessions endpoint.
- */
-type SessionSummary = {
-    /**
-     * Backend identifier of the session.
-     */
-    session_id: string;
-    /**
-     * Human-readable title generated or assigned for the session.
-     */
-    title: string | null;
-};
-
-/**
- * Detailed session payload including historical messages.
- */
-type SessionDetail = {
-    /**
-     * Backend identifier of the session.
-     */
-    session_id: string;
-    /**
-     * Human-readable title generated or assigned for the session.
-     */
-    title: string | null;
-    /**
-     * Ordered messages stored in the session.
-     */
-    messages: Array<{
-        /**
-         * Role of the message author.
-         */
-        role: "user" | "assistant" | "info";
-        /**
-         * Text content associated with the message.
-         */
-        content: string;
-    }>;
-};
-
-/**
  * Configuration overrides used when creating a session.
  */
 interface SessionConfig {
+    /** Request binary PCM output; defaults to compatible Base64 JSON. */
+    outputAudioEncoding?: "base64" | "binary_pcm";
     /**
      * Input audio session overrides such as capture sample rate.
      */
@@ -74,10 +32,8 @@ interface SessionConfig {
      * Output audio session overrides such as playback sample rate.
      */
     outputConfig?: Partial<OutputAudioSessionConfig>;
-    /**
-     * Optional overrides for auxiliary HTTP service endpoints.
-     */
-    serviceURLs?: SessionServiceURLConfig;
+    /** Optional Realtime API key; business credentials belong to the URL owner. */
+    apiKey?: string;
 }
 
 /**
@@ -85,7 +41,7 @@ interface SessionConfig {
  */
 interface Session {
     /**
-     * Opens the session runtime and performs authentication if needed.
+     * Opens the Realtime connection and its audio resources.
      */
     open(): Promise<void>;
     /**
@@ -133,27 +89,12 @@ interface Session {
     /**
      * Submits a finalized text turn through the connected realtime session.
      *
-     * The promise resolves after a `finish_asr` action echoes the normalized
-     * text with `origin` set to `text`.
+     * The promise resolves after the matching `conversation.item.done` receipt.
+     * Validation failures and disconnection reject the promise.
      *
      * @param text User-authored text for the next turn.
      */
     sendText(text: string): Promise<void>;
-    /**
-     * Uploads a file into the current session context.
-     *
-     * @param file File blob to upload.
-     * @param endpoint Optional upload endpoint override.
-     */
-    uploadFile(file: Blob, endpoint?: string | URL): Promise<void>;
-    /**
-     * Fetches available persisted sessions for the current user.
-     */
-    getSessions(): Promise<SessionSummary[]>;
-    /**
-     * Switches the active conversation to a persisted session or starts a new one.
-     *
-     * @param sessionId Target session identifier, or `null` to start a new session.
-     */
-    switchSession(sessionId: string | null): Promise<void>;
+    /** Injects external text history without generating a reply. */
+    restoreHistory(messages: Array<{role: "user" | "assistant" | "system"; content: string}>): Promise<void>;
 }

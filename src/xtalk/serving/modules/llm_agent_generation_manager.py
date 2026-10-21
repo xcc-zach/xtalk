@@ -44,6 +44,7 @@ class _ResponseOutputState:
     accumulated_text: str = ""
     first_chunk_generated: bool = False
     tts_started: bool = False
+    text_only: bool = False
 
     def reset(self) -> None:
         """Clear the completed response while preserving the stream."""
@@ -52,6 +53,7 @@ class _ResponseOutputState:
         self.accumulated_text = ""
         self.first_chunk_generated = False
         self.tts_started = False
+        self.text_only = False
 
 
 class LLMAgentConsumptionManager(Manager):
@@ -226,14 +228,25 @@ class LLMAgentConsumptionManager(Manager):
         tasks: list[asyncio.Task[None]]
         iterators: list[AsyncIterator[AgentOutput]]
         async with self._streams_lock:
-            tasks, iterators = self._detach_interruptible_streams_locked()
+            if event.response_id is None:
+                tasks, iterators = self._detach_interruptible_streams_locked()
+            else:
+                tasks = [
+                    task
+                    for task, state in self._response_states.items()
+                    if state.response_id == event.response_id
+                ]
+                iterators = [self._active_streams.pop(task) for task in tasks]
+                for task in tasks:
+                    self._response_states.pop(task, None)
+                    self._persistent_streams.discard(task)
 
         await self._cancel_tasks(tasks)
         await self._close_iterators(iterators)
         await self.event_bus.publish(
             TurnTTSStopRequested(
                 session_id=self.session_id,
-                response_id=None,
+                response_id=event.response_id,
                 reason=event.reason,
             ),
             mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
@@ -324,14 +337,20 @@ class LLMAgentConsumptionManager(Manager):
 
             if state.response_id is None:
                 state.response_id = uuid4().hex
+                state.text_only = self.config.get("output_modalities") == ["text"]
             response_id = state.response_id
             state.accumulated_text += chunk_text
             accumulated_text = state.accumulated_text
-            should_start_tts = not state.tts_started
+            text_only = state.text_only
+            should_start_tts = not state.tts_started and not text_only
             if should_start_tts:
                 state.tts_started = True
 
-            await self._publish_llm_response_update(response_id, accumulated_text)
+            await self._publish_llm_response_update(
+                response_id, accumulated_text, delta=chunk_text
+            )
+            if text_only:
+                return
             if should_start_tts:
                 await self.event_bus.publish(
                     TurnTTSStartRequested(
@@ -417,6 +436,7 @@ class LLMAgentConsumptionManager(Manager):
         response_id = state.response_id
         final_text = state.accumulated_text
         tts_started = state.tts_started
+        text_only = state.text_only
         has_text_output = bool(final_text) or tts_started
         state.reset()
         if not has_text_output:
@@ -425,8 +445,7 @@ class LLMAgentConsumptionManager(Manager):
             return
         if tts_started:
             logger.debug(
-                "[realtime-tts-race] stage=flush_schedule "
-                "session=%s final_chars=%d",
+                "[realtime-tts-race] stage=flush_schedule session=%s final_chars=%d",
                 self.session_id,
                 len(final_text),
             )
@@ -438,6 +457,13 @@ class LLMAgentConsumptionManager(Manager):
                 mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
         await self._publish_llm_response_finish(response_id, final_text)
+        if text_only:
+            agent = self.models.get(Agent)
+            if agent is not None:
+                try:
+                    agent.append_context(role="assistant", content=final_text)
+                except NotImplementedError:
+                    logger.debug("Stateless agent does not retain generated text")
 
     def _detach_interruptible_streams_locked(
         self,
@@ -506,11 +532,14 @@ class LLMAgentConsumptionManager(Manager):
         self,
         response_id: str,
         text: str,
+        *,
+        delta: str = "",
     ) -> None:
         """Publish an incremental update for one response."""
 
         await self.event_bus.publish(
             LLMAgentResponseUpdate(
+                delta=delta,
                 session_id=self.session_id,
                 response_id=response_id,
                 text=text,
@@ -566,12 +595,15 @@ class LLMAgentConsumptionManager(Manager):
     async def _publish_error(self, error_type: str, message: str) -> None:
         """Publish one consumption error event."""
 
+        state = self._response_states.get(asyncio.current_task())
         await self.event_bus.publish(
             ErrorOccurred(
+                response_id=state.response_id if state and state.response_id else "",
                 session_id=self.session_id,
                 error_type=error_type,
                 error_message=message,
-            )
+            ),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
 
     async def shutdown(self) -> None:

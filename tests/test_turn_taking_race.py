@@ -12,6 +12,7 @@ from xtalk.serving.events import (
     TurnASREndRequested,
     TurnASRStartRequested,
     TurnDetectorStopSpeaking,
+    TurnInputAbortRequested,
     TurnLLMAgentPauseRequested,
     TurnLLMAgentResumeRequested,
     TurnLLMAgentStopRequested,
@@ -23,6 +24,25 @@ from xtalk.serving.modules.turn_taking_manager import TurnTakingManager
 
 class TurnTakingRaceTests(unittest.IsolatedAsyncioTestCase):
     """Verify short barge-ins survive a slow streaming-TTS interruption."""
+
+    async def test_audio_item_identity_survives_segments_and_changes_after_boundaries(self) -> None:
+        """Reuse one item across segments and allocate anew after end or abort."""
+        bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(bus.shutdown)
+        manager = TurnTakingManager(bus, "session", Models())
+        await manager._on_vad_start(VADSpeechStart(session_id="session"))
+        await manager._on_vad_start(VADSpeechStart(session_id="session"))
+        await manager._on_vad_end(VADSpeechEnd(session_id="session"))
+        await manager._on_vad_start(VADSpeechStart(session_id="session"))
+        await manager._on_input_abort(TurnInputAbortRequested(session_id="session"))
+        await manager._on_vad_start(VADSpeechStart(session_id="session"))
+        starts = bus.get_history(event_type=TurnASRStartRequested.TYPE)
+        ends = bus.get_history(event_type=TurnASREndRequested.TYPE)
+        self.assertTrue(starts[0].item_id)
+        self.assertEqual(starts[0].item_id, starts[1].item_id)
+        self.assertEqual(starts[0].item_id, ends[0].item_id)
+        self.assertNotEqual(starts[0].segment_id, starts[1].segment_id)
+        self.assertEqual(len({event.item_id for event in starts}), 3)
 
     async def test_diarization_pauses_then_resumes_non_focus_speech(self) -> None:
         """Resume the current response when diarization identifies non-focus speech."""

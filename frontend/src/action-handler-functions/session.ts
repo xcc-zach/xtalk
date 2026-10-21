@@ -1,13 +1,10 @@
-import type { ActionToFunctionMap } from "./types";
+import type { ActionToFunctionMap } from "./handler-types";
 const sessionMap: ActionToFunctionMap = {
-    "session_attached": async (data, websocket, conversation, outputAudioSession) => {
-        const sid = data.session_id || null;
-        if (conversation.state.sessionId !== sid) {
-            conversation.switch(sid, []);
-            return;
-        }
-        conversation.state.sessionId = sid;
+    "session.created": async (data, websocket, conversation) => {
+        conversation.state.sessionId = data.session.id;
     },
+    "session.updated": async () => {},
+    "session.queue.updated": async () => {},
+    "session.queue.granted": async () => {},
 };
-
 export default sessionMap;

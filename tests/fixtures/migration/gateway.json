@@ -1,0 +1,123 @@
+{
+  "source_revision": "88d877a2336bac0a05d1bc13699857aaa1792952",
+  "source": "src/xtalk/serving/modules/output_gateway.py",
+  "cases": [
+    {
+      "event_class": "CaptionUpdated",
+      "fields": {
+        "text": "caption",
+        "is_final": true,
+        "reason": "update"
+      },
+      "legacy": {
+        "action": "caption_updated",
+        "data": {
+          "text": "caption",
+          "is_final": true,
+          "reason": "update"
+        }
+      },
+      "realtime_type": "conversation.caption.updated"
+    },
+    {
+      "event_class": "RetrievalUpdated",
+      "fields": {
+        "text": "result",
+        "is_final": true
+      },
+      "legacy": {
+        "action": "retrieval_updated",
+        "data": {
+          "text": "result",
+          "is_final": true
+        }
+      },
+      "realtime_type": "conversation.retrieval.updated"
+    },
+    {
+      "event_class": "SpeakerRecognized",
+      "fields": {
+        "speaker_id": "speaker",
+        "reason": "recognized"
+      },
+      "legacy": {
+        "action": "speaker_updated",
+        "data": {
+          "speaker_id": "speaker",
+          "reason": "recognized"
+        }
+      },
+      "realtime_type": "conversation.speaker.updated"
+    },
+    {
+      "event_class": "ResponseUpdate",
+      "fields": {
+        "response_id": "old",
+        "text": "played"
+      },
+      "legacy": {
+        "action": "update_resp",
+        "data": {
+          "response_id": "old",
+          "text": "played"
+        }
+      },
+      "realtime_type": "response.output_audio.playback.updated"
+    },
+    {
+      "event_class": "ResponseFinish",
+      "fields": {
+        "response_id": "old",
+        "text": "heard prefix"
+      },
+      "legacy": {
+        "action": "finish_resp",
+        "data": {
+          "response_id": "old",
+          "text": "heard prefix"
+        }
+      },
+      "realtime_type": "response.output_audio.playback.done"
+    },
+    {
+      "event_class": "ToolCallOccurred",
+      "fields": {
+        "name": "search",
+        "args": {
+          "query": "test"
+        }
+      },
+      "legacy": {
+        "action": "tool_called",
+        "data": {
+          "name": "search",
+          "args": {
+            "query": "test"
+          }
+        }
+      },
+      "realtime_type": "response.tool.called"
+    },
+    {
+      "event_class": "LatencyMetricsUpdated",
+      "fields": {
+        "network_latency_ms": 1.5,
+        "asr_latency_ms": 2.5,
+        "llm_first_token_ms": 3.5,
+        "llm_sentence_ms": 4.5,
+        "tts_first_chunk_ms": 5.5
+      },
+      "legacy": {
+        "action": "latency_metrics",
+        "data": {
+          "network_latency_ms": 1,
+          "asr_latency_ms": 2,
+          "llm_first_token_ms": 3,
+          "llm_sentence_ms": 4,
+          "tts_first_chunk_ms": 5
+        }
+      },
+      "realtime_type": "session.latency.updated"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ from ..events import (
     TurnASREndRequested,
     TurnDetectorStartGeneration,
     TurnDetectorStopSpeaking,
+    TurnInputAbortRequested,
 )
 from ...models import Models, SpeakerDiarization, TurnDetector
 
@@ -30,6 +31,7 @@ class TurnTakingManager(Manager):
     ):
         self.event_bus = event_bus
         self.session_id = session_id
+        self.config = config if config is not None else {}
         self._turn_detector_model = models.get(TurnDetector)
         self._speaker_diarization_enabled = models.get(SpeakerDiarization) is not None
         self._vad_transition_lock = asyncio.Lock()
@@ -37,8 +39,21 @@ class TurnTakingManager(Manager):
         self._next_segment_id = 0
         self._turn_open = False
         self._current_turn_id = 0
+        self._current_item_id = ""
         self._current_segment_id = 0
         self._speaker_decision_pending = False
+
+    @Manager.event_handler(TurnInputAbortRequested, priority=100)
+    async def _on_input_abort(self, event: TurnInputAbortRequested) -> None:
+        """Release the aborted turn's identifier scope before the next input."""
+        self._turn_open = False
+        self._speaker_decision_pending = False
+
+    def _interrupt_enabled(self) -> bool:
+        detection = self.config.get("realtime_turn_detection")
+        return not isinstance(detection, dict) or detection.get(
+            "interrupt_response", True
+        )
 
     @Manager.event_handler(TurnDetectorStartGeneration, priority=99)
     async def _on_turn_detector_start_generation(
@@ -49,7 +64,7 @@ class TurnTakingManager(Manager):
     # Stop speaking must be handled before starting generation
     @Manager.event_handler(TurnDetectorStopSpeaking, priority=100)
     async def _on_turn_detector_stop_speaking(self, _event: TurnDetectorStopSpeaking):
-        if self._speaker_diarization_enabled:
+        if self._speaker_diarization_enabled or not self._interrupt_enabled():
             return
         await self.event_bus.publish(
             TurnLLMAgentStopRequested(
@@ -75,10 +90,13 @@ class TurnTakingManager(Manager):
             if not self._turn_open:
                 self._next_turn_id += 1
                 self._current_turn_id = self._next_turn_id
+                self._current_item_id = (
+                    f"item_input_{self.session_id}_{self._current_turn_id}"
+                )
                 self._turn_open = True
             self._next_segment_id += 1
             self._current_segment_id = self._next_segment_id
-            if self._speaker_diarization_enabled:
+            if self._speaker_diarization_enabled and self._interrupt_enabled():
                 self._speaker_decision_pending = True
                 await self.event_bus.publish(
                     TurnLLMAgentPauseRequested(session_id=self.session_id),
@@ -88,11 +106,13 @@ class TurnTakingManager(Manager):
                 TurnASRStartRequested(
                     session_id=self.session_id,
                     turn_id=self._current_turn_id,
+                    item_id=self._current_item_id,
                     segment_id=self._current_segment_id,
+                    audio_lookback_ms=event.audio_lookback_ms,
                 ),
                 mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
             )
-            if self._speaker_diarization_enabled:
+            if self._speaker_diarization_enabled or not self._interrupt_enabled():
                 return
             if self._turn_detector_model is None:
                 await self.event_bus.publish(
@@ -133,10 +153,11 @@ class TurnTakingManager(Manager):
             if event.origin == "text":
                 return
 
-            if self._turn_detector_model is None:
-                await self._publish_asr_end(
-                    mode=EventDispatchMode.WAIT_UNTIL_COMPLETE
-                )
+            if (
+                self._turn_detector_model is None
+                or self.config.get("realtime_turn_detection", True) is None
+            ):
+                await self._publish_asr_end(mode=EventDispatchMode.WAIT_UNTIL_COMPLETE)
             else:
                 await self.event_bus.publish(
                     TurnASRPauseRequested(
@@ -160,6 +181,7 @@ class TurnTakingManager(Manager):
             TurnASREndRequested(
                 session_id=self.session_id,
                 turn_id=self._current_turn_id,
+                item_id=self._current_item_id,
                 segment_id=self._current_segment_id,
             ),
             mode=mode,

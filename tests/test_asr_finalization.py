@@ -119,6 +119,21 @@ class _BlockingASR(ASR):
 class ASRFinalizationTests(unittest.IsolatedAsyncioTestCase):
     """Verify that finalization cannot discard a useful partial transcript."""
 
+    async def test_asr_preserves_the_assigned_item_id(self) -> None:
+        """Carry an opaque turn-owned ID into partial and final results."""
+        bus = EventBus(enable_history=True)
+        self.addAsyncCleanup(bus.shutdown)
+        consumer = AudioConsumer(bus, "session", Models({ASR: _BlankFinalASR()}))
+        self.addAsyncCleanup(consumer.shutdown)
+        await consumer.start(turn_id=7, item_id="opaque_input_id")
+        await consumer._recognize_and_publish(b"00")
+        await consumer.end()
+        results = [event for event in bus.get_history()
+                   if isinstance(event, (ASRResultPartial, ASRResultFinal))]
+        self.assertTrue(any(isinstance(event, ASRResultPartial) for event in results))
+        self.assertTrue(any(isinstance(event, ASRResultFinal) for event in results))
+        self.assertTrue(all(event.item_id == "opaque_input_id" for event in results))
+
     async def test_history_gate_requires_a_diarization_model(self) -> None:
         """Keep the original background ASR dispatch when MTD is absent."""
 

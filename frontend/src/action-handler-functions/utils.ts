@@ -1,4 +1,4 @@
-import type { ActionHandlerFunction } from "./types";
+import type { ActionHandlerFunction } from "./handler-types";
 export { onVadSpeechStart, onVadSpeechEnd };
 
 const onVadSpeechStart: ActionHandlerFunction = async (data, websocket, conversation, outputAudioSession) => {

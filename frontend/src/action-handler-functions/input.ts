@@ -1,18 +1,21 @@
-import type { ActionToFunctionMap } from "./types";
+import type { ActionToFunctionMap } from "./handler-types";
 import { onVadSpeechStart, onVadSpeechEnd } from "./utils";
 import { createEncoding } from "../encoding";
 
 const encoding = createEncoding();
 
 const inputMap: ActionToFunctionMap = {
-    "vad_speech_start": async (data, websocket, conversation, outputAudioSession) => {
+    "xtalk.audio.mix.delta": async (data, websocket, conversation) => {
+        conversation.emitFullAudioChunk(data.pcm, data.sample_rate);
+    },
+    "input_audio_buffer.speech_started": async (data, websocket, conversation, outputAudioSession) => {
         onVadSpeechStart(data, websocket, conversation, outputAudioSession);
     },
-    "vad_speech_end": async (data, websocket, conversation, outputAudioSession) => {
+    "input_audio_buffer.speech_stopped": async (data, websocket, conversation, outputAudioSession) => {
         onVadSpeechEnd(data, websocket, conversation, outputAudioSession);
     },
-    "full_audio_frame": async (data, websocket, conversation, outputAudioSession) => {
-        const audioBase64 = typeof data?.audio_base64 === "string" ? data.audio_base64 : "";
+    "session.audio.mix.delta": async (data, websocket, conversation, outputAudioSession) => {
+        const audioBase64 = typeof data?.delta === "string" ? data.delta : "";
         if (!audioBase64) {
             return;
         }

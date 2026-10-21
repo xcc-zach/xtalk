@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from xtalk import Service
 import json
 import unittest
 from types import SimpleNamespace
@@ -92,10 +93,10 @@ class _RecordingWebSocket:
     def __init__(self) -> None:
         self.messages: list[str] = []
 
-    async def send_text(self, message: str) -> None:
-        """Record one JSON WebSocket message."""
+    async def send_json(self, message: dict) -> None:
+        """Record a protocol event using the connection contract."""
+        self.messages.append(json.dumps(message))
 
-        self.messages.append(message)
 
 
 class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
@@ -472,6 +473,7 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             event_bus=event_bus,
             session_id="session",
             websocket=websocket,  # type: ignore[arg-type]
+            _event_overrides=Service(models=Models())._event_overrides[OutputGateway],
             models=models,
         )
 
@@ -479,6 +481,7 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             ASRResultPartial(
                 session_id="session",
                 turn_id=8,
+                item_id="item_input_8",
                 text="visible",
             ),
             mode=EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED,
@@ -491,22 +494,16 @@ class MultiSpeakerTurnContextManagerTest(unittest.IsolatedAsyncioTestCase):
             ASRResultPartial(
                 session_id="session",
                 turn_id=8,
+                item_id="item_input_8",
                 text="hidden",
             ),
             mode=EventDispatchMode.WAIT_UNTIL_COMPLETE_OR_STOPPED,
         )
 
-        self.assertEqual(len(websocket.messages), 1)
-        self.assertEqual(
-            json.loads(websocket.messages[0]),
-            {
-                "action": "update_asr",
-                "data": {
-                    "text": "visible",
-                    "origin": "asr",
-                },
-            },
-        )
+        messages = [json.loads(value) for value in websocket.messages]
+        previews = [value for value in messages if value["type"] == "conversation.item.input_audio_transcription.delta"]
+        self.assertEqual(len(previews), 1)
+        self.assertEqual(previews[0]["item_id"], "item_input_8")
 
     async def test_mixed_turn_republishes_only_focus_content(self) -> None:
         """Replace a stopped mixed final with focus-only history content."""

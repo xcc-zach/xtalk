@@ -131,8 +131,11 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class VADSpeechStart(Event)
 ```
 
+Speech onset with optional server-detection audio lookback in milliseconds.
+
 ### Class Fields
 
+- `audio_lookback_ms: float | None` = `None`
 - `TYPE: ClassVar[str]` = `'vad.speech_start'`
 - `origin: str` = `'client'`
 
@@ -974,8 +977,11 @@ _Defined in [`xtalk.serving.events`](https://github.com/xcc-zach/xtalk/blob/main
 class TurnASRStartRequested(Event)
 ```
 
+Start a turn, retaining audio received while server VAD was running.
+
 ### Class Fields
 
+- `audio_lookback_ms: float | None` = `None`
 - `TYPE: ClassVar[str]` = `'turn.asr_start_requested'`
 - `turn_id: int` = `0`
 - `segment_id: int` = `0`

@@ -53,19 +53,25 @@ class EchoAgent(Agent):
         if text:
             yield text
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Ignore persisted history for the stateless echo agent."""
-
-        del messages
-        return None
-
     def clone(self) -> "EchoAgent":
         """Create a fresh stateless echo agent."""
 
         return EchoAgent()
 
 xtalk_instance = Xtalk.configure(args.config).set_model(EchoAgent).build()
-xtalk_instance.mount_routes(app)
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from host.application import ApplicationHost
+
+@asynccontextmanager
+async def _realtime_lifespan(application):
+    async with LifespanManager(xtalk_instance.create_asgi_app()):
+        yield
+
+app.router.lifespan_context = _realtime_lifespan
+ApplicationHost(xtalk_instance).mount_routes(app)
 
 
 # Serve static files

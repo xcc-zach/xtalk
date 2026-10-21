@@ -53,7 +53,7 @@ def build_xtalk_runtime(
     Returns
     -------
     Any
-        Public XTalk runtime wrapper exposing ``mount_routes``.
+        Public XTalk runtime wrapper exposing ``create_asgi_app``.
     """
 
     _register_managed_model_clients()
@@ -81,7 +81,7 @@ def build_xtalk_runtime(
     return runtime
 
 
-def mount_xtalk_routes(runtime: Any, app: Any) -> None:
+def mount_xtalk_routes(runtime: Any, app: Any, *, data_dir="data", user_id=None):
     """Mount public XTalk HTTP and WebSocket routes on a FastAPI app.
 
     Parameters
@@ -92,4 +92,20 @@ def mount_xtalk_routes(runtime: Any, app: Any) -> None:
         FastAPI application receiving XTalk's public routes.
     """
 
-    runtime.mount_routes(app)
+    from contextlib import asynccontextmanager
+    from asgi_lifespan import LifespanManager
+    from .conversation_host import ApplicationHost
+
+    host = ApplicationHost(runtime, data_dir=data_dir, user_id=user_id)
+    host.mount_routes(app)
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        async with previous(application):
+            async with LifespanManager(runtime.create_asgi_app()):
+                yield
+
+    app.router.lifespan_context = lifespan
+
+    return host

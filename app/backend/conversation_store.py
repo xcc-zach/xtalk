@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+
 def _build_title(text: str, *, max_chars: int = 32) -> str:
     collapsed = " ".join(text.split())
     if len(collapsed) <= max_chars:
@@ -57,6 +58,41 @@ class PersistenceStore:
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
                     ON chat_messages(session_id, id ASC);
                 """
+            )
+
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)")
+            }
+            if "item_id" not in columns:
+                conn.execute("ALTER TABLE chat_messages ADD COLUMN item_id TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_item ON chat_messages(session_id, item_id)"
+            )
+
+    def upsert_assistant(
+        self, *, user_id: str, session_id: str, item_id: str, content: str
+    ) -> None:
+        """Apply a playback snapshot to one assistant message without duplication.
+
+        Parameters
+        ----------
+        user_id : str
+            Authenticated conversation owner.
+        session_id : str
+            Application conversation identifier.
+        item_id : str
+            Stable external item identifier.
+        content : str
+            Full text confirmed as delivered to the user.
+        """
+        if not self.user_owns_session(user_id, session_id):
+            raise KeyError(session_id)
+        if not content.strip():
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO chat_messages (session_id, role, content, item_id) VALUES (?, 'assistant', ?, ?) ON CONFLICT(session_id, item_id) DO UPDATE SET content = excluded.content",
+                (session_id, content, item_id),
             )
 
     def ensure_user(self, user_id: str) -> dict[str, Any]:

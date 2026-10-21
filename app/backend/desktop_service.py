@@ -46,30 +46,6 @@ class DesktopXtalk(Xtalk):
             max_sessions=max_sessions,
         )
 
-    def _login(self) -> dict[str, Any]:
-        """Issue a login token for the desktop runtime identity.
-
-        Desktop launches bind a stable anonymous identity through the app
-        adapter; every login resolves to that identity so persisted sessions
-        survive restarts without exposing user management.
-
-        Returns
-        -------
-        dict[str, Any]
-            Access token and the user record it authenticates.
-        """
-
-        user_id = self._anonymous_user_id or str(uuid.uuid4())
-        user = (
-            self._persistence.ensure_user(user_id)
-            if self._persistence is not None
-            else {"id": user_id}
-        )
-        return {
-            "access_token": self._auth.issue_token(sub=user_id),
-            "user": user,
-        }
-
     @classmethod
     def _build_from_config_dict(cls, config: dict[str, Any]) -> DesktopXtalk:
         """Build a desktop runtime from an effective XTalk configuration.

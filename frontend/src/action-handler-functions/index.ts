@@ -1,4 +1,4 @@
-import type { ActionToFunctionMap } from "./types";
+import type { ActionToFunctionMap } from "./handler-types";
 export { ACTION_TO_FUNCTION };
 
 const ACTION_TO_FUNCTION: ActionToFunctionMap = {}

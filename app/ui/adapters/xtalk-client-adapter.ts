@@ -1,8 +1,9 @@
 import {
-  createSession,
   type Session,
   type SessionConfig,
 } from "xtalk-client";
+
+import { createBusinessSession, type BusinessSession } from "./conversation-session";
 
 import type { NativeBackendConnection } from "./native-capabilities";
 
@@ -162,7 +163,7 @@ function installDesktopAudioConstraints(): void {
  * Adapts the public xtalk-client session API to desktop-owned state and URLs.
  */
 export class XtalkClientAdapter {
-  readonly #session: Session;
+  readonly #session: BusinessSession;
   readonly #diagnostics: XtalkEndpointDiagnostics;
   readonly #listeners = new Set<DesktopSessionListener>();
   readonly #toolCallListeners = new Set<DesktopToolCallListener>();
@@ -182,15 +183,9 @@ export class XtalkClientAdapter {
         enableVAD: false,
         enableEnhancer: false,
       },
-      serviceURLs: {
-        login: endpoints.login,
-        sessions: endpoints.sessions,
-        sessionDetail: (sessionId: string) => endpoints.sessionDetail(sessionId),
-        upload: endpoints.upload,
-      },
     };
 
-    this.#session = createSession(endpoints.websocket, sessionConfig);
+    this.#session = createBusinessSession(endpoints, sessionConfig);
     this.#diagnostics = {
       origin: connection.origin,
       websocketURL: endpoints.websocket.toString(),
@@ -302,7 +297,7 @@ export class XtalkClientAdapter {
   /**
    * Sends a plain-text user turn through the public realtime session.
    *
-   * The SDK waits for the matching server-confirmed `finish_asr` action, so
+   * The SDK waits for the matching server-confirmed `conversation.item.done` receipt, so
    * message state, tools, synthesis, and persistence remain server-authoritative.
    *
    * @param text Non-empty user message containing at most 2,048 characters.
@@ -361,7 +356,7 @@ interface XtalkEndpoints {
 }
 
 function createEndpoints(connection: NativeBackendConnection): XtalkEndpoints {
-  const websocket = new URL("/ws", connection.origin);
+  const websocket = new URL("/v1/realtime", connection.origin);
   websocket.protocol = websocket.protocol === "https:" ? "wss:" : "ws:";
 
   const authenticatedURL = (path: string): URL => {

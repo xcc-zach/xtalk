@@ -74,7 +74,10 @@ class TurnDetectorManager(Manager):
     async def _on_audio_frame(self, event: EnhancedAudioFrameReceived) -> None:
         """Process audio frames through turn detector."""
         try:
-            if self.turn_detector is None:
+            if (
+                self.turn_detector is None
+                or self.config.get("realtime_turn_detection", True) is None
+            ):
                 return
 
             if not event.audio_data:
@@ -94,7 +97,10 @@ class TurnDetectorManager(Manager):
         respond remains controlled by the final multi-speaker join.
         """
         try:
-            if self.turn_detector is None:
+            if (
+                self.turn_detector is None
+                or self.config.get("realtime_turn_detection", True) is None
+            ):
                 return
             if event.origin == "text":
                 return
@@ -114,7 +120,10 @@ class TurnDetectorManager(Manager):
     async def _on_vad_speech_start(self, event: VADSpeechStart) -> None:
         """Notify the turn detector that VAD has just detected speech start."""
         try:
-            if self.turn_detector is None:
+            if (
+                self.turn_detector is None
+                or self.config.get("realtime_turn_detection", True) is None
+            ):
                 return
             if event.origin in {"text", "turn_detector"}:
                 return
@@ -172,6 +181,8 @@ class TurnDetectorManager(Manager):
 
     async def _handle_detection_result(self, result: TurnDetectionResult) -> None:
         """Handle one turn detection result and emit the corresponding events."""
+        if self.config.get("realtime_turn_detection", True) is None:
+            return
         await self._handle_proxy_vad_result(result)
         if result.action == TurnDetectionAction.STOP_SPEAKING:
             evt = TurnDetectorStopSpeaking(session_id=self.session_id)

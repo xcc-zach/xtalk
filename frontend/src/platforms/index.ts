@@ -1,9 +1,6 @@
 import { BaseInputAudioSession, BaseOutputAudioSession } from "../bases/audio-session";
 import type { InputAudioSessionConfig, OutputAudioSessionConfig } from "../bases/audio-session";
-import { BaseHTTPClient } from "../bases/http";
-import type { ResolvableURL, SessionServiceURLConfig, SessionServiceURLs } from "../bases/http";
 import { BaseEncoding } from "../bases/encoding";
-import { BasePersistenceStore } from "../bases/persistence";
 import { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 import { BaseWebSocket } from "../bases/websocket";
 import {
@@ -14,13 +11,9 @@ import type { WebAudioBridge } from "./web-audio-bridge";
 import {
     WebDeferredTaskScheduler,
     WebEncoding,
-    WebHTTPClient,
     WebInputAudioSession,
     WebOutputAudioSession,
-    WebPersistenceStore,
     WebWebSocket,
-    buildWebSocketURLWithAccessToken,
-    resolveWebServiceURLs,
 } from "./web";
 
 export {
@@ -40,18 +33,8 @@ type PlatformRuntime = {
     createOutputAudioSession(config: OutputAudioSessionConfig): BaseOutputAudioSession;
     createWebSocket(url: string | URL, protocols?: string | string[]): BaseWebSocket;
     delay(milliseconds: number): Promise<void>;
-    createHTTPClient(): BaseHTTPClient;
     createDeferredTaskScheduler(): BaseDeferredTaskScheduler;
-    resolveServiceURLs(
-        websocketURL: ResolvableURL,
-        config?: SessionServiceURLConfig,
-    ): SessionServiceURLs;
-    buildAuthenticatedWebSocketURL(
-        websocketURL: ResolvableURL,
-        accessToken: string,
-    ): ResolvableURL;
     createEncoding(): BaseEncoding;
-    createPersistenceStore(): BasePersistenceStore;
 };
 
 enum Platform {
@@ -83,24 +66,11 @@ const WEB_PLATFORM_RUNTIME: PlatformRuntime = {
             window.setTimeout(resolve, milliseconds);
         });
     },
-    createHTTPClient() {
-        return new WebHTTPClient();
-    },
-    createDeferredTaskScheduler() {
-        return new WebDeferredTaskScheduler();
-    },
-    resolveServiceURLs(websocketURL, config) {
-        return resolveWebServiceURLs(websocketURL, config);
-    },
-    buildAuthenticatedWebSocketURL(websocketURL, accessToken) {
-        return buildWebSocketURLWithAccessToken(websocketURL, accessToken);
-    },
+    createDeferredTaskScheduler() { return new WebDeferredTaskScheduler(); },
     createEncoding() {
         return new WebEncoding();
     },
-    createPersistenceStore() {
-        return new WebPersistenceStore();
-    },
+
 };
 
 function getPlatformRuntime(): PlatformRuntime {

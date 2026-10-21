@@ -136,29 +136,10 @@ def create_application(
             unavailable, or the session is not owned by that identity.
         """
 
-        persistence = xtalk_runtime._persistence
-        user_id = xtalk_runtime._anonymous_user_id
-        if (
-            persistence is None
-            or user_id is None
-            or not persistence.user_owns_session(user_id, session_id)
-        ):
-            raise HTTPException(
-                status_code=404,
-                detail="Session not found",
-            )
-        # Stop the in-memory service first so any final message flush happens
-        # before the rows it targets are removed from the SQLite store.
-        service_manager = xtalk_runtime._service_manager
-        if service_manager is not None:
-            await service_manager.remove_service(session_id)
-        # The persistence store lives in the public ``xtalk`` package, so the
-        # App reuses its connection and lock directly for the deletion.
-        with persistence._lock, persistence._connect() as conn:
-            conn.execute(
-                "DELETE FROM chat_sessions WHERE id = ? AND user_id = ?",
-                (session_id, user_id),
-            )
+        try:
+            await conversation_host.delete_conversation(conversation_id=session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
         return {"status": "ok"}
 
     @app.get("/app/api/whiteboard")
@@ -180,7 +161,9 @@ def create_application(
             Normalized ``{version, text, revision, updated_at}`` snapshot.
         """
 
-        return get_whiteboard_store(session_id).snapshot()
+        return get_whiteboard_store(
+            conversation_host.runtime_session_id(session_id)
+        ).snapshot()
 
     if tool_ui_broker is not None:
 
@@ -197,9 +180,7 @@ def create_application(
                     detail="A tool UI frame source is required",
                 )
             try:
-                ticket = await tool_ui_broker.create_frame_ticket(
-                    payload["source"]
-                )
+                ticket = await tool_ui_broker.create_frame_ticket(payload["source"])
             except ValueError as exc:
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
             return {"ticket": ticket}
@@ -209,7 +190,9 @@ def create_application(
             """Return replayable Tool UI events for the active App session."""
 
             try:
-                events = await tool_ui_broker.snapshot(session_id)
+                events = await tool_ui_broker.snapshot(
+                    conversation_host.runtime_session_id(session_id)
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"events": events}
@@ -247,7 +230,9 @@ def create_application(
 
             await tool_ui_broker.serve(websocket)
 
-    mount_xtalk_routes(xtalk_runtime, app)
+    conversation_host = mount_xtalk_routes(
+        xtalk_runtime, app, data_dir=startup.data_dir, user_id=startup.anonymous_user_id
+    )
     app.state.sidecar_ready = True
     return app
 
@@ -274,9 +259,9 @@ def build_application(
 
     effective_config = build_effective_config(startup)
     tool_call_bridge = DesktopToolCallBridge()
-    effective_config.setdefault("service_config", {})[
-        "_desktop_tool_call_bridge"
-    ] = tool_call_bridge
+    effective_config.setdefault("service_config", {})["_desktop_tool_call_bridge"] = (
+        tool_call_bridge
+    )
     tool_ui_broker = ToolUIBroker(bridge=tool_call_bridge)
     xtalk_runtime = build_xtalk_runtime(
         effective_config,

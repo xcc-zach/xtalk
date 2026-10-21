@@ -1,18 +1,19 @@
-# -*- coding: utf-8 -*-
+import asyncio
 import logging
 import uuid
+from collections.abc import Callable, Coroutine
 from inspect import signature
-from typing import Any, Callable, Coroutine, Type
-
-from fastapi import WebSocket
+from typing import Any, ClassVar
 
 from ..models import Agent, Models
+from ..realtime.protocol import InputHandler, OutputHandler
+from . import events as runtime_events
 from .event_bus import EventBus, EventDispatchMode
 from .events import Event, LLMAgentLoop
+from .interfaces import Connection as WebSocket
 from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
 from .modules.captioner_manager import CaptionerManager
-from .modules.embeddings_manager import EmbeddingsManager
 from .modules.enhancer_manager import EnhancerManager
 from .modules.input_gateway import InputGateway
 from .modules.latency_manager import LatencyManager
@@ -20,7 +21,6 @@ from .modules.llm_agent_context_manager import LLMAgentContextManager
 from .modules.llm_agent_generation_manager import LLMAgentConsumptionManager
 from .modules.multi_speaker_turn_context_manager import MultiSpeakerTurnContextManager
 from .modules.output_gateway import OutputGateway
-from .modules.persistence_manager import PersistenceManager
 from .modules.recording_manager import RecordingManager
 from .modules.retrieval_manager import RetrievalManager
 from .modules.speaker_manager import SpeakerManager
@@ -57,31 +57,31 @@ class Service:
         *,
         models: Models,
         service_config: dict[str, Any] | None = None,
-        manager_classes: list[Type[Manager]] | None = None,
+        manager_classes: list[type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
         _session_id: str | None = None,
-        _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
+        _event_overrides: dict[type[EventListenerMixin], EventOverrides] | None = None,
     ):
         self.session_id = _session_id or str(uuid.uuid4())
         models = models.clone()
         self.models = models
         # Per-session config (shared with managers/gateways)
         base_config: dict[str, Any] = dict(service_config) if service_config else {}
-        # Default data directory inside current workspace
-        if not base_config.get("data_dir"):
-            base_config["data_dir"] = "data"
+        base_config.setdefault("output_modalities", ["audio"])
         self.service_config = base_config
 
         self.event_bus = EventBus(enable_history=False, max_history=0)
 
-        self._manager_classes: list[Type[Manager]] = list(manager_classes or [])
-        if self._should_enable_persistence_manager():
-            if PersistenceManager not in self._manager_classes:
-                self._manager_classes.append(PersistenceManager)
+        self._input_handlers = {}
+        self._output_handlers = {}
+        self._manager_classes: list[type[Manager]] = list(manager_classes or [])
         self._managers: list[Manager] = []
-        self._event_overrides: dict[Type[EventListenerMixin], EventOverrides] = (
+        self._event_overrides: dict[type[EventListenerMixin], EventOverrides] = (
             self._clone_event_overrides(_event_overrides)
         )
+
+        if _event_overrides is None:
+            self._register_builtin_handlers()
 
         # When _websocket is None this is a prototype instance with no runtime logic
         if _websocket is None:
@@ -95,6 +95,8 @@ class Service:
             _websocket,
             config=self.service_config,
         )
+        self.input_gateway._service = self
+        self.input_gateway._handlers = dict(self._input_handlers)
         self.output_gateway = OutputGateway(
             self.event_bus,
             self.session_id,
@@ -104,10 +106,241 @@ class Service:
             _event_overrides=self._event_overrides.get(OutputGateway),
         )
 
+        self.output_gateway._register_custom_outputs(self._effective_output_handlers())
+
+    def _register_builtin_handlers(self) -> None:
+        """Assemble protocol handlers through the public registration APIs."""
+        for kind, handler in (
+            ("session.update", InputGateway._update_session),
+            ("input_audio_buffer.append", InputGateway._handle_audio_append),
+            ("input_audio_buffer.commit", InputGateway._handle_audio_commit),
+            ("input_audio_buffer.clear", InputGateway._handle_audio_clear),
+            ("input_audio_buffer.speech_start", InputGateway._handle_speech_start),
+            ("conversation.item.create", InputGateway._handle_item_create),
+            ("response.cancel", InputGateway._handle_response_cancel),
+            (
+                "response.output_audio.playback.chunk_played",
+                InputGateway._handle_playback_ack,
+            ),
+            (
+                "response.output_audio.playback.finished",
+                InputGateway._handle_playback_ack,
+            ),
+            (
+                "response.output_audio.playback.stopped",
+                InputGateway._handle_playback_ack,
+            ),
+        ):
+            self.register_input_handler(type=kind, handler=handler)
+        for source, kind, handler in (
+            (
+                runtime_events.ResponseUpdate,
+                "response.output_audio.playback.updated",
+                OutputGateway._map_playback,
+            ),
+            (
+                runtime_events.ResponseFinish,
+                "response.output_audio.playback.done",
+                OutputGateway._map_playback,
+            ),
+            (
+                runtime_events.SpeakerRecognized,
+                "conversation.speaker.updated",
+                OutputGateway._map_speaker,
+            ),
+            (
+                runtime_events.CaptionUpdated,
+                "conversation.caption.updated",
+                OutputGateway._map_caption,
+            ),
+            (
+                runtime_events.RetrievalUpdated,
+                "conversation.retrieval.updated",
+                OutputGateway._map_retrieval,
+            ),
+            (
+                runtime_events.LatencyMetricsUpdated,
+                "session.latency.updated",
+                OutputGateway._map_latency,
+            ),
+            (
+                runtime_events.ToolCallOccurred,
+                "response.tool.called",
+                OutputGateway._map_tool,
+            ),
+        ):
+            self.register_output_handler(
+                source_event=source, type=kind, handler=handler
+            )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TurnASREndRequested,
+            method_or_handler="_on_input_commit",
+            priority=100,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.LLMAgentResponseUpdate,
+            method_or_handler="_on_generated_text",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.LLMAgentResponseFinish,
+            method_or_handler="_on_generated_done",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSTextDeliveryFinished,
+            method_or_handler="_on_sentence",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.ASRResultPartial,
+            method_or_handler="_send_gated_update_asr_signal",
+            priority=40,
+            enabled_if=lambda gateway: gateway._speaker_history_gate_enabled,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.ASRResultPartial,
+            method_or_handler="_send_update_asr_signal",
+            priority=5,
+            enabled_if=lambda gateway: not gateway._speaker_history_gate_enabled,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.ASRFailed,
+            method_or_handler="_send_asr_failure",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.ASRResultFinal,
+            method_or_handler="_send_finish_asr_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSStarted,
+            method_or_handler="_on_start_tts",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSStopped,
+            method_or_handler="_send_stop_tts_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.ErrorOccurred,
+            method_or_handler="_send_error_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSPaused,
+            method_or_handler="_send_pause_tts_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSResumed,
+            method_or_handler="_send_resume_tts_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSFinished,
+            method_or_handler="_send_tts_finished_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSChunkReady,
+            method_or_handler="_send_tts_chunk_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.FullAudioFrameReady,
+            method_or_handler="_send_full_audio_frame_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSVoiceChange,
+            method_or_handler="_send_voice_changed_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.VADSpeechStart,
+            method_or_handler="_send_vad_start_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.VADSpeechEnd,
+            method_or_handler="_send_vad_end_signal",
+            priority=5,
+        )
+        self.subscribe_event(
+            event_listener_cls=OutputGateway,
+            event_type=runtime_events.TTSEmotionChange,
+            method_or_handler="_send_emotion_changed_signal",
+            priority=5,
+        )
+
+    def _effective_output_handlers(self):
+        overrides = self._event_overrides.get(OutputGateway)
+        return {
+            key: handler
+            for key, handler in self._output_handlers.items()
+            if overrides is None or not overrides.should_skip("*", key[0])
+        }
+
+    def register_input_handler(self, *, type: str, handler: InputHandler) -> None:
+        """Register or replace an external input handler.
+
+        Parameters
+        ----------
+        type : str
+            External event type.
+        handler : callable
+            Async handler accepting the current gateway and complete message.
+        """
+        self._input_handlers[type] = handler
+        if hasattr(self, "input_gateway"):
+            self.input_gateway._handlers[type] = handler
+
+    def register_output_handler(
+        self, *, source_event: type[Event], type: str, handler: OutputHandler
+    ) -> None:
+        """Register or replace an internal-event output mapping.
+
+        Parameters
+        ----------
+        source_event : type[Event]
+            Internal source event.
+        type : str
+            Outbound event type.
+        handler : callable
+            Synchronous or async payload builder, optionally returning None.
+        """
+        self._output_handlers[(source_event, type)] = handler
+        if hasattr(self, "output_gateway"):
+            self.output_gateway._register_custom_outputs(
+                {(source_event, type): handler}
+            )
+
     # ------------------------ override utilities ------------------------
 
     def _get_or_create_overrides(
-        self, event_listner_cls: Type[Manager]
+        self, event_listner_cls: type[Manager]
     ) -> EventOverrides:
         overrides = self._event_overrides.get(event_listner_cls)
         if overrides is None:
@@ -118,8 +351,8 @@ class Service:
     def unsubscribe_event(
         self,
         *,
-        event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[Event],
+        event_listener_cls: type[EventListenerMixin],
+        event_type: type[Event],
         method_name: str | None = None,
     ) -> None:
         """Disable an automatic event subscription for a listener class.
@@ -144,8 +377,8 @@ class Service:
     def subscribe_event(
         self,
         *,
-        event_listener_cls: Type[EventListenerMixin],
-        event_type: Type[Event],
+        event_listener_cls: type[EventListenerMixin],
+        event_type: type[Event],
         method_or_handler: (
             str
             | Callable[[EventListenerMixin, Event], Any]
@@ -200,24 +433,24 @@ class Service:
 
     # ---------------------------------------------------------------
 
-    def _instantiate_manager(self, manager_cls: Type[Manager]) -> Manager:
+    def _instantiate_manager(self, manager_cls: type[Manager]) -> Manager:
         # Locate overrides for this manager class
         overrides = self._event_overrides.get(manager_cls)
 
         # Determine whether models are needed
         if "models" in signature(manager_cls.__init__).parameters:
-            kwargs: dict[str, Any] = dict(
-                event_bus=self.event_bus,
-                session_id=self.session_id,
-                models=self.models,
-                config=self.service_config,
-            )
+            kwargs: dict[str, Any] = {
+                "event_bus": self.event_bus,
+                "session_id": self.session_id,
+                "models": self.models,
+                "config": self.service_config,
+            }
         else:
-            kwargs = dict(
-                event_bus=self.event_bus,
-                session_id=self.session_id,
-                config=self.service_config,
-            )
+            kwargs = {
+                "event_bus": self.event_bus,
+                "session_id": self.session_id,
+                "config": self.service_config,
+            }
 
         # Pass overrides via hidden parameter to EventListenerMeta.__call__
         if overrides is not None:
@@ -226,7 +459,7 @@ class Service:
         manager = manager_cls(**kwargs)
         return manager
 
-    def register_manager(self, manager_cls: Type[Manager]):
+    def register_manager(self, manager_cls: type[Manager]):
         """Register a manager class on the service.
 
         Parameters
@@ -239,7 +472,7 @@ class Service:
         if hasattr(self, "input_gateway"):
             self._managers.append(self._instantiate_manager(manager_cls))
 
-    def unregister_manager(self, manager_cls: Type[Manager]):
+    def unregister_manager(self, manager_cls: type[Manager]):
         """Remove a manager class from the service.
 
         Parameters
@@ -295,34 +528,17 @@ class Service:
         )
         await self.input_gateway.handle_message_loop()
 
-    def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None:
-        """Restore persisted conversation history into the session agent."""
-        agent = self.models.get(Agent)
-        if agent is None:
-            return
-        agent.restore_history(messages)
-
-    async def send_session_attached(self) -> None:
-        """Notify the client that the session is attached."""
-        if not hasattr(self, "output_gateway"):
-            raise RuntimeError(
-                "This Service instance is a prototype and cannot send session events."
-            )
-        await self.output_gateway.send_session_attached()
-
     async def stop(self) -> None:
         """Stop the service and shut down all managers."""
-        try:
-            for manager in self._managers:
-                await manager.shutdown()
-            await self.event_bus.shutdown()
-
-        except Exception as e:
-            logger.error(
-                "Error while stopping service - session: %s, error: %s",
-                self.session_id,
-                e,
-            )
+        for manager in self._managers:
+            results = await asyncio.gather(manager.shutdown(), return_exceptions=True)
+            if isinstance(results[0], BaseException):
+                logger.error(
+                    "Manager shutdown failed - session: %s, error: %s",
+                    self.session_id,
+                    results[0],
+                )
+        await self.event_bus.shutdown()
 
     def clone(
         self,
@@ -354,22 +570,21 @@ class Service:
             _session_id=session_id,
             _event_overrides=self._event_overrides,
         )
-        return new_service
-
-    def _should_enable_persistence_manager(self) -> bool:
-        persistence_store = self.service_config.get("persistence_store")
-        user_id = self.service_config.get("user_id")
-        return (
-            persistence_store is not None and isinstance(user_id, str) and bool(user_id)
+        new_service._input_handlers = dict(self._input_handlers)
+        new_service._output_handlers = dict(self._output_handlers)
+        new_service.input_gateway._handlers = dict(self._input_handlers)
+        new_service.output_gateway._register_custom_outputs(
+            new_service._effective_output_handlers()
         )
+        return new_service
 
     @staticmethod
     def _clone_event_overrides(
-        source: dict[Type[EventListenerMixin], EventOverrides] | None,
-    ) -> dict[Type[EventListenerMixin], EventOverrides]:
+        source: dict[type[EventListenerMixin], EventOverrides] | None,
+    ) -> dict[type[EventListenerMixin], EventOverrides]:
         if source is None:
             return {}
-        cloned: dict[Type[EventListenerMixin], EventOverrides] = {}
+        cloned: dict[type[EventListenerMixin], EventOverrides] = {}
         for listener_cls, overrides in source.items():
             cloned[listener_cls] = EventOverrides(
                 disable=[
@@ -390,7 +605,7 @@ class DefaultService(Service):
     register or override managers for custom behavior.
     """
 
-    MANAGER_CLASSES: list[Type[Manager]] = [
+    MANAGER_CLASSES: ClassVar[list[type[Manager]]] = [
         ASRManager,
         MultiSpeakerTurnContextManager,
         LLMAgentContextManager,
@@ -405,7 +620,6 @@ class DefaultService(Service):
         VADManager,
         EnhancerManager,
         SpeakerManager,
-        EmbeddingsManager,
         RecordingManager,
         TurnDetectorManager,
     ]
@@ -415,10 +629,10 @@ class DefaultService(Service):
         *,
         models: Models,
         service_config: dict[str, Any] | None = None,
-        manager_classes: list[Type[Manager]] | None = None,
+        manager_classes: list[type[Manager]] | None = None,
         _websocket: WebSocket | None = None,
         _session_id: str | None = None,
-        _event_overrides: dict[Type[EventListenerMixin], EventOverrides] | None = None,
+        _event_overrides: dict[type[EventListenerMixin], EventOverrides] | None = None,
     ):
         super().__init__(
             models=models,

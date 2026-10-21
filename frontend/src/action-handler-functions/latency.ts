@@ -1,6 +1,6 @@
-import type { ActionToFunctionMap } from "./types";
+import type { ActionToFunctionMap } from "./handler-types";
 const latencyMap: ActionToFunctionMap = {
-    "latency_metrics": async (data, websocket, conversation, outputAudioSession) => {
+    "session.latency.updated": async (data, websocket, conversation, outputAudioSession) => {
         conversation.updateLatency(
             {
                 network: Number(data.network_latency_ms) || 0,

@@ -5,7 +5,7 @@ import type { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 import type { BaseWebSocket } from "../bases/websocket";
 import type { BaseWebSocketCloseEvent, BaseWebSocketMessageEvent } from "../bases/websocket";
 import { Conversation } from "../conversation";
-import { buildAuthenticatedWebSocketURL } from "../http";
+
 import { ActionHandler } from "../action-handler";
 import { createDeferredTaskScheduler } from "../task-scheduler";
 import { createWebSocket } from "../websocket";
@@ -19,6 +19,7 @@ type SessionRuntimeController = ReturnType<typeof createSessionRuntimeController
 function createSessionRuntimeController(
     {
         actionHandler,
+        beforeAudioStart,
         conversation,
         getAccessToken,
         inputConfig,
@@ -27,6 +28,7 @@ function createSessionRuntimeController(
         websocketURL,
     }: {
         actionHandler: ActionHandler;
+        beforeAudioStart: () => Promise<void>;
         conversation: Conversation;
         getAccessToken: () => string | null;
         inputConfig: InputAudioSessionConfig;
@@ -56,13 +58,11 @@ function createSessionRuntimeController(
 
     async function initialize(): Promise<void> {
         const accessToken = getAccessToken();
-        if (!accessToken) {
-            throw new Error("Access token missing");
-        }
 
-        const wsURL = buildAuthenticatedWebSocketURL(websocketURL, accessToken);
+
         const closeState = { expected: false };
-        websocket = createWebSocket(wsURL);
+        actionHandler.resetConnection();
+        websocket = createWebSocket(websocketURL, accessToken ? ["realtime", "openai-insecure-api-key." + accessToken] : undefined);
         activeCloseState = closeState;
         inputAudioSession = createInputAudioSession(inputConfig);
         outputAudioSession = createOutputAudioSession(outputConfig);
@@ -74,12 +74,10 @@ function createSessionRuntimeController(
         const currentObserverTaskScheduler = observerTaskScheduler;
         currentInputAudioSession.muted = preferredMuted;
 
-        let rejectAttached: ((reason?: unknown) => void) | null = null;
-        const actionAttachedPromise = actionHandler.waitForAction("session_attached");
-        const attachedPromise = new Promise<void>((resolve, reject) => {
-            rejectAttached = reject;
-            void actionAttachedPromise.then(resolve, reject);
-        });
+        const readiness = actionHandler.waitUntilReady();
+        const attachedPromise = readiness.promise;
+        // Consume failures immediately while transport opening is still pending.
+        void attachedPromise.catch(() => {});
         const openPromise = new Promise<void>((resolve, reject) => {
             currentWebSocket.addEventListener("open", () => {
                 resolve();
@@ -91,7 +89,9 @@ function createSessionRuntimeController(
 
         currentWebSocket.addEventListener("close", (event: BaseWebSocketCloseEvent) => {
             conversation.state.streamState = "idle";
-            rejectAttached?.(new Error("WebSocket closed before session attachment"));
+            conversation.state.connectionState = "disconnected";
+            readiness.cancel(new Error("WebSocket closed before session readiness"));
+            actionHandler.cancelPending();
             if (!closeState.expected) {
                 onUnexpectedDisconnect(event);
             }
@@ -99,24 +99,13 @@ function createSessionRuntimeController(
         currentWebSocket.addEventListener(
             "message",
             async (event: BaseWebSocketMessageEvent) => {
-                if (typeof event.data === "string") {
-                    const message: { action: string; data: unknown } = JSON.parse(event.data);
-                    await actionHandler.handleAction(
-                        message.action,
-                        message.data,
-                        currentWebSocket,
-                        conversation,
-                        currentOutputAudioSession,
-                    );
-                } else if (event.data instanceof ArrayBuffer) {
-                    await currentOutputAudioSession.pushAudioChunk(event.data);
-                }
+                await actionHandler.handleMessage(event.data, currentWebSocket, conversation, currentOutputAudioSession);
             },
         );
 
         currentInputAudioSession.onFrame(async (audioChunk) => {
             if (currentWebSocket.ready()) {
-                currentWebSocket.sendAudioChunk(audioChunk);
+                await actionHandler.handleAction("client_audio_frame", {audioChunk, sampleRate: inputConfig.sampleRate}, currentWebSocket, conversation, currentOutputAudioSession);
             }
             const callback = inputAudioChunkCallback;
             currentObserverTaskScheduler.schedule(() => {
@@ -184,17 +173,22 @@ function createSessionRuntimeController(
             }
         });
 
-        await openPromise;
-        currentWebSocket.sendJson({
-            action: "attach_session",
-            session_id: conversation.state.sessionId,
-        });
-        await attachedPromise;
-        await currentOutputAudioSession.open();
-        await currentInputAudioSession.open();
+        try {
+            await openPromise;
+            await attachedPromise;
+            await beforeAudioStart();
+            await currentOutputAudioSession.open();
+            await currentInputAudioSession.open();
+        } catch (error) {
+            readiness.cancel(error);
+            await close();
+            throw error;
+        }
+        conversation.state.connectionState = "connected";
     }
 
     async function close(): Promise<void> {
+        actionHandler.cancelPending();
         const currentInput = inputAudioSession;
         const currentOutput = outputAudioSession;
         const currentWebSocket = websocket;

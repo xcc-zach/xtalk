@@ -539,16 +539,6 @@ Run the full WebSocket message loop for a live session.
   Raised if the service instance is still a prototype without runtime
   gateways.
 
-#### restore_conversation
-
-_Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._
-
-```python
-def restore_conversation(self, *, messages: list[dict[str, Any]]) -> None
-```
-
-Restore persisted conversation history into the session agent.
-
 #### stop
 
 _Defined in [`xtalk.serving.service`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/serving/service.py)._

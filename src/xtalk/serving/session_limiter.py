@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Session concurrency limiter.
 
@@ -10,12 +9,10 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Optional
 
-from fastapi import WebSocket
+from .interfaces import Connection as WebSocket
 
 logger = logging.getLogger(__name__)
-
 
 
 @dataclass
@@ -44,7 +41,7 @@ class SessionLimiter:
         """
         self.max_sessions = max_sessions
         self.active_sessions = 0
-        self.wait_queue: Deque[QueueWaiter] = deque()
+        self.wait_queue: deque[QueueWaiter] = deque()
         self._lock = asyncio.Lock()
 
     @property
@@ -57,7 +54,7 @@ class SessionLimiter:
         """Return number of queued waiters."""
         return len(self.wait_queue)
 
-    async def acquire(self, websocket: WebSocket) -> Optional[QueueWaiter]:
+    async def acquire(self, websocket: WebSocket) -> QueueWaiter | None:
         """
         Acquire a session slot, queueing if necessary.
 
@@ -86,12 +83,11 @@ class SessionLimiter:
         try:
             await websocket.send_json(
                 {
-                    "action": "queue_status",
-                    "data": {
-                        "position": position,
-                        "limit": self.max_sessions,
-                        "active": self.active_sessions,
-                    },
+                    "type": "session.queue.updated",
+                    "event_id": __import__("uuid").uuid4().hex,
+                    "position": position,
+                    "limit": self.max_sessions,
+                    "active": self.active_sessions,
                 }
             )
         except Exception as e:
@@ -125,7 +121,12 @@ class SessionLimiter:
 
         # Notify client it has been granted
         try:
-            await websocket.send_json({"action": "queue_granted"})
+            await websocket.send_json(
+                {
+                    "type": "session.queue.granted",
+                    "event_id": __import__("uuid").uuid4().hex,
+                }
+            )
         except Exception as e:
             logger.warning(f"Failed to send queue_granted: {e}")
             # Client disconnected, release slot
@@ -134,7 +135,7 @@ class SessionLimiter:
 
         return waiter
 
-    async def release(self, waiter: Optional[QueueWaiter]) -> None:
+    async def release(self, waiter: QueueWaiter | None) -> None:
         """Release a slot and wake the next queued waiter."""
         if waiter is None:
             return
@@ -181,7 +182,8 @@ class SessionLimiter:
             try:
                 await waiter.websocket.send_json(
                     {
-                        "action": "queue_status",
+                        "type": "session.queue.updated",
+                        "event_id": __import__("uuid").uuid4().hex,
                         "position": position,
                         "limit": self.max_sessions,
                         "active": self.active_sessions,

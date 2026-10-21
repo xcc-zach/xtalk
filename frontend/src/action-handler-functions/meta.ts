@@ -1,15 +1,15 @@
-import type { ActionToFunctionMap } from "./types";
+import type { ActionToFunctionMap } from "./handler-types";
 const metaMap: ActionToFunctionMap = {
-    "thought_updated": async (data, websocket, conversation, outputAudioSession) => {
+    "conversation.thought.updated": async (data, websocket, conversation, outputAudioSession) => {
         conversation.state.thought = data.text;
     },
-    "caption_updated": async (data, websocket, conversation, outputAudioSession) => {
+    "conversation.caption.updated": async (data, websocket, conversation, outputAudioSession) => {
         conversation.state.caption = data.text;
     },
-    "retrieval_updated": async (data, websocket, conversation, outputAudioSession) => {
+    "conversation.retrieval.updated": async (data, websocket, conversation, outputAudioSession) => {
         conversation.state.retrieval = data.text;
     },
-    "tool_called": async (data, websocket, conversation, outputAudioSession) => {
+    "response.tool.called": async (data, websocket, conversation, outputAudioSession) => {
         conversation.state.tool_call = {
             name: data.name,
             args: data.args || {}

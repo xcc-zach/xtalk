@@ -1,33 +1,22 @@
 from __future__ import annotations
 
 import json
-import uuid
-from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from fastapi import (
-    File,
-    Form,
-    HTTPException,
-    Request,
-    UploadFile,
-    WebSocket,
-    status,
-)
-
-from .auth import JWTAuth, extract_bearer_token, resolve_auth_config
-from .persistence import PersistenceStore
-from .serving.service_manager import ServiceManager
-from .serving.session_limiter import SessionLimiter
-from .serving.events import TextForEmbeddingReady
-from .serving.service import Service, DefaultService
-from .models.agents.tools import Tool
-from .models.container import Models
-from .models.registry import ModelImplInfo
 from .model_loader import (
     ensure_model_types_registered,
     init_configured_model,
 )
+from .models.agents.tools import Tool
+from .models.container import Models
+from .models.registry import ModelImplInfo
+from .realtime.auth import authorize
+from .realtime.config import RealtimeConfig
+from .realtime.connection import RealtimeConnection
+from .serving.service import DefaultService, Service
+from .serving.service_manager import ServiceManager
+from .serving.session_limiter import SessionLimiter
 
 _ConfigTransform = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -239,7 +228,7 @@ class XtalkBuilder:
         elif isinstance(configured_agent, dict):
             agent_config = dict(configured_agent)
         else:
-            raise ValueError(f"{agent_slot} must be a model name or an object.")
+            raise ValueError(f"{agent_slot} must be a model name or an object.")  # noqa: TRY004 - preserve builder validation contract
 
         configured_params = agent_config.get("params")
         if configured_params is None:
@@ -251,7 +240,7 @@ class XtalkBuilder:
 
         configured_tools = params.get("tools", [])
         if not isinstance(configured_tools, list):
-            raise ValueError(f"{agent_slot}.params.tools must be a list.")
+            raise ValueError(f"{agent_slot}.params.tools must be a list.")  # noqa: TRY004 - preserve builder validation contract
         params["tools"] = [*configured_tools, *tools]
         agent_config["params"] = params
 
@@ -282,22 +271,11 @@ class Xtalk:
             is enforced.
         """
         service_config = dict(service_prototype.service_config)
-        self._persistence_enabled = self._is_persistence_enabled(service_config)
-        data_dir = service_config.get("data_dir") or "data"
-        auth_secret, auth_ttl_seconds = resolve_auth_config(service_config)
-
-        self._persistence = (
-            PersistenceStore(
-                Path(data_dir).expanduser().resolve() / "chat_history.sqlite3"
-            )
-            if self._persistence_enabled
-            else None
+        self._realtime_config = RealtimeConfig.from_dict(
+            service_config.get("realtime_api", {})
         )
-        self._auth = JWTAuth(secret=auth_secret, ttl_seconds=auth_ttl_seconds)
-        self._service_manager = ServiceManager(
-            service_prototype=service_prototype,
-            persistence_store=self._persistence,
-        )
+        self._service_manager = ServiceManager(service_prototype=service_prototype)
+        self._asgi_app = None
         self._models = service_prototype.models
         self._session_limiter = (
             SessionLimiter(max_sessions) if max_sessions is not None else None
@@ -413,211 +391,130 @@ class Xtalk:
         """
         self._session_limiter = SessionLimiter(limit)
 
-    async def embed_text(self, session_id: str, text: str, user_id: str | None = None):
-        """Queue text for session-scoped embedding storage.
+    def create_asgi_app(self):
+        """Return the cached framework-independent ASGI application.
 
-        Parameters
-        ----------
-        session_id : str
-            Session identifier returned to the frontend.
-        text : str
-            Text content that should be embedded and persisted for retrieval.
-
-        Raises
-        ------
-        ValueError
-            Raised if the target session does not exist.
+        Returns
+        -------
+        callable
+            HTTP, WebSocket and lifespan ASGI application.
         """
-        if (
-            self._persistence is not None
-            and user_id is not None
-            and not self._persistence.user_owns_session(user_id, session_id)
-        ):
-            raise ValueError(f"Session {session_id} not found for user {user_id}.")
-        service = self._service_manager.get_service(session_id)
-        if service is None:
-            raise ValueError(f"Session {session_id} not found.")
-        await service.event_bus.publish(
-            TextForEmbeddingReady(session_id=session_id, text=text)
-        )
+        if self._asgi_app is not None:
+            return self._asgi_app
+        import asyncio
+        from urllib.parse import parse_qs
 
-    def _login(self) -> dict[str, Any]:
-        user_id = str(uuid.uuid4())
-        user = (
-            self._persistence.ensure_user(user_id)
-            if self._persistence is not None
-            else {"id": user_id}
-        )
-        return {
-            "access_token": self._auth.issue_token(sub=user_id),
-            "user": user,
-        }
+        started = False
+        closed = False
+        tasks = set()
 
-    def _verify_access_token(self, token: str) -> str:
-        user_id = self._auth.verify_token(token)
-        if self._persistence is not None:
-            self._persistence.ensure_user(user_id)
-        return user_id
-
-    def _list_sessions(self, user_id: str) -> list[dict[str, Any]]:
-        if self._persistence is None:
-            return []
-        self._persistence.ensure_user(user_id)
-        return self._persistence.list_sessions(user_id)
-
-    def _get_session_detail(self, user_id: str, session_id: str) -> dict[str, Any]:
-        if self._persistence is None:
-            raise KeyError(session_id)
-        self._persistence.ensure_user(user_id)
-        return self._persistence.get_session_detail(user_id, session_id)
-
-    def mount_routes(
-        self,
-        app: Any,
-        *,
-        login_path: str = "/api/auth/login",
-        sessions_path: str = "/api/sessions",
-        session_detail_path: str = "/api/sessions/{session_id}",
-        upload_path: str = "/api/upload",
-        ws_path: str = "/ws",
-    ) -> None:
-        """Mount the built-in auth, session, upload, and websocket routes."""
-
-        def _require_http_user(request: Request) -> str:
-            token = extract_bearer_token(request.headers.get("authorization"))
-            if not token:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Missing bearer token",
+        async def application(scope, receive, send):
+            nonlocal started, closed
+            if scope["type"] == "lifespan":
+                while True:
+                    message = await receive()
+                    if message["type"] == "lifespan.startup":
+                        if started or closed:
+                            await send(
+                                {
+                                    "type": "lifespan.startup.failed",
+                                    "message": "Application already started or closed",
+                                }
+                            )
+                            return
+                        started = True
+                        await send({"type": "lifespan.startup.complete"})
+                    elif message["type"] == "lifespan.shutdown":
+                        started = False
+                        closed = True
+                        for task in tuple(tasks):
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        await send({"type": "lifespan.shutdown.complete"})
+                        return
+            path = scope["path"]
+            root = scope.get("root_path", "")
+            if root and path.startswith(root + "/"):
+                path = path[len(root) :]
+            allowed = authorize(scope, self._realtime_config.api_keys)
+            if scope["type"] == "http":
+                code = (
+                    503
+                    if not started
+                    else 401
+                    if not allowed
+                    else 200
+                    if path == "/v1/models" and scope["method"] == "GET"
+                    else 404
                 )
-            try:
-                return self._verify_access_token(token)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=str(exc),
-                ) from exc
-
-        def _require_ws_user(websocket: WebSocket) -> str:
-            token = websocket.query_params.get("access_token")
-            if token is None:
-                token = extract_bearer_token(websocket.headers.get("authorization"))
-            if not token:
-                raise ValueError("Missing access token")
-            return self._verify_access_token(token)
-
-        @app.post(login_path)
-        async def _login_route() -> dict[str, Any]:
-            return self._login()
-
-        @app.get(sessions_path)
-        async def _list_sessions_route(request: Request) -> dict[str, Any]:
-            user_id = _require_http_user(request)
-            return {"sessions": self._list_sessions(user_id)}
-
-        @app.get(session_detail_path)
-        async def _session_detail_route(
-            request: Request, session_id: str
-        ) -> dict[str, Any]:
-            user_id = _require_http_user(request)
-            try:
-                return self._get_session_detail(user_id, session_id)
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
-                ) from exc
-
-        @app.post(upload_path)
-        async def _upload_route(
-            request: Request,
-            session_id: str = Form(...),
-            file: UploadFile = File(...),
-        ) -> dict[str, str]:
-            user_id = _require_http_user(request)
-            content_type = (file.content_type or "").lower()
-            is_text = content_type.startswith("text/") if content_type else False
-            if content_type and not is_text:
-                raise HTTPException(
-                    status_code=400, detail="Only text files are supported."
+                payload = (
+                    {
+                        "object": "list",
+                        "data": [
+                            {"id": self._realtime_config.model, "object": "model"}
+                        ],
+                    }
+                    if code == 200
+                    else {"error": {"code": str(code)}}
                 )
-            text = (await file.read()).decode("utf-8", errors="ignore")
-            try:
-                await self.embed_text(session_id=session_id, text=text, user_id=user_id)
-            except ValueError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            return {"status": "ok"}
-
-        @app.websocket(ws_path)
-        async def _websocket_route(websocket: WebSocket) -> None:
-            try:
-                user_id = _require_ws_user(websocket)
-            except ValueError:
-                await websocket.accept()
-                await websocket.close(code=1008, reason="Unauthorized")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": code,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send(
+                    {"type": "http.response.body", "body": json.dumps(payload).encode()}
+                )
                 return
-            await self.connect(websocket, user_id=user_id)
-
-    async def connect(self, websocket: WebSocket, user_id: str | None = None):
-        """Accept a WebSocket session and hand it to the service manager.
-
-        Parameters
-        ----------
-        websocket : WebSocket
-            FastAPI WebSocket connection from the client.
-        user_id : str | None, optional
-            Authenticated user identifier. When omitted, the connection falls
-            back to the legacy connection-scoped session behavior.
-
-        Notes
-        -----
-        If a session limit is configured, the socket is first admitted through
-        the session limiter queue.
-        """
-        if self._session_limiter:
-            await websocket.accept()
-            waiter = await self._session_limiter.acquire(websocket)
-            if waiter is None:
-                try:
-                    await websocket.close(code=1000)
-                except Exception:
-                    pass
+            if scope["type"] != "websocket":
                 return
-            await self._service_manager.connect(
-                websocket=websocket, already_accepted=True, user_id=user_id
-            )
-            await self._session_limiter.release(waiter)
-            return
+            await receive()
+            model = parse_qs(
+                scope.get("query_string", b"").decode("utf-8", errors="replace"),
+                keep_blank_values=True,
+            ).get("model", [self._realtime_config.model])[0]
+            if (
+                not started
+                or not allowed
+                or path != "/v1/realtime"
+                or model != self._realtime_config.model
+            ):
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            connection = RealtimeConnection(receive, send)
+            await connection.accept()
+            task = asyncio.current_task()
+            tasks.add(task)
+            waiter = None
+            try:
+                if self._session_limiter:
+                    waiter = await self._session_limiter.acquire(connection)
+                    if waiter is None:
+                        return
+                await self._service_manager._connect(connection, already_accepted=True)
+            finally:
+                if self._session_limiter:
+                    await self._session_limiter.release(waiter)
+                tasks.discard(task)
+                await connection.close()
 
-        await self._service_manager.connect(websocket=websocket, user_id=user_id)
+        self._asgi_app = application
+        return application
 
     @staticmethod
     def _max_sessions(config: dict):
         if "max_connections" in config:
             try:
                 return int(config["max_connections"])
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                raise ValueError("max_connections must be an integer") from None
         return None
 
     @staticmethod
     def _load_service_config(config: dict):
         return config.get("service_config", {})
-
-    @staticmethod
-    def _is_persistence_enabled(service_config: dict[str, Any]) -> bool:
-        """Return whether session persistence is enabled for the service."""
-        value = service_config.get("enable_persistence")
-        if value is None:
-            return True
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"0", "false", "no", "off"}:
-                return False
-            if normalized in {"1", "true", "yes", "on"}:
-                return True
-        return bool(value)
 
     @classmethod
     def _load_models(

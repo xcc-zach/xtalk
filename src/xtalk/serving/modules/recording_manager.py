@@ -1,28 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-RecordingManager
-
-Session-level audio recorder that produces a stereo WAV file:
-- Left channel: scheduled user audio
-- Right channel: scheduled TTS audio
-
-Recording file is initialized lazily on first audio frame or when a
-SessionConfigReceived event is received. If the client sends a session_config
-message with a recording_path, that path is used; otherwise the default path
-logs/session_audio/<timestamp>.wav is used.
-
-Client usage:
-    ws.send(JSON.stringify({
-        action: "session_config",
-        recording_path: "custom/path/recording.wav"
-    }));
-"""
+"""Mix session input and playback audio for downstream event consumers."""
 
 import asyncio
 import logging
-import os
 import time
-import wave
 from collections import deque
 from typing import Any, Optional
 
@@ -32,7 +13,6 @@ from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     AudioFrameReceived,
     FullAudioFrameReady,
-    SessionConfigReceived,
     TTSChunkReady,
     TTSPaused,
     TTSResumed,
@@ -145,18 +125,12 @@ class RecordingManager(Manager):
         self.session_id = session_id
         self.config: dict[str, Any] = config or {}
 
-        self._recording_enabled: bool = self.config.get("recording") is True
         self._send_full_audio_enabled: bool = (
             self.config.get("send_full_audio_to_client") is True
         )
-        self._enabled: bool = self._recording_enabled or self._send_full_audio_enabled
+        self._enabled: bool = self._send_full_audio_enabled
         if not self._enabled:
             return
-
-        self._file_initialized = False
-        self._out_dir: str = ""
-        self._out_path: str = ""
-        self._wf: Optional[wave.Wave_write] = None
 
         self._user_buffer = _MonoBuffer()
         self._tts_buffer = _MonoBuffer()
@@ -180,38 +154,12 @@ class RecordingManager(Manager):
         self._tts_playing_ends_at: Optional[float] = None
 
         self._lock = asyncio.Lock()
-        self._io_lock = asyncio.Lock()
         self._user_task: Optional[asyncio.Task] = asyncio.create_task(
             self._user_scheduler_loop()
         )
         self._tts_task: Optional[asyncio.Task] = asyncio.create_task(
             self._tts_scheduler_loop()
         )
-
-    def _init_file(self, custom_path: str | None = None) -> None:
-        """Initialize the WAV file lazily."""
-        if not self._recording_enabled or self._file_initialized:
-            return
-
-        if custom_path:
-            self._out_path = custom_path
-            self._out_dir = os.path.dirname(custom_path) or "."
-        else:
-            self._out_dir = os.path.join("logs", "session_audio")
-            now_wall = time.time()
-            now_str = (
-                time.strftime("%Y%m%d_%H%M%S", time.localtime(now_wall))
-                + f"_{int((now_wall - int(now_wall)) * 1000):03d}"
-            )
-            self._out_path = os.path.join(self._out_dir, f"{now_str}.wav")
-
-        os.makedirs(self._out_dir, exist_ok=True)
-
-        self._wf = wave.open(self._out_path, "wb")
-        self._wf.setnchannels(2)
-        self._wf.setsampwidth(2)
-        self._wf.setframerate(self.TARGET_SR)
-        self._file_initialized = True
 
     def _ensure_timeline_started(self, now_mono: float | None = None) -> None:
         """Start the session monotonic clock on first audio activity."""
@@ -360,7 +308,10 @@ class RecordingManager(Manager):
                 async with self._lock:
                     now_mono = time.monotonic()
                     self._advance_user_until_locked(now_mono)
-                    if self._user_next_tick_mono is None or self._user_frame_samples <= 0:
+                    if (
+                        self._user_next_tick_mono is None
+                        or self._user_frame_samples <= 0
+                    ):
                         self._user_wakeup.clear()
                     else:
                         timeout = max(0.0, self._user_next_tick_mono - now_mono)
@@ -476,8 +427,6 @@ class RecordingManager(Manager):
         stereo_chunk = await self._drain_aligned_stereo_chunk()
         if not stereo_chunk:
             return False
-        if self._recording_enabled:
-            await self._write_stereo_chunk(stereo_chunk)
         if self._send_full_audio_enabled:
             await self._publish_full_audio_chunk(stereo_chunk)
         return True
@@ -486,18 +435,6 @@ class RecordingManager(Manager):
         """Flush every aligned stereo chunk currently available."""
         while await self._flush_outputs():
             pass
-
-    async def _write_stereo_chunk(self, stereo_chunk: bytes) -> None:
-        """Write a stereo PCM chunk into the WAV file."""
-        if not stereo_chunk:
-            return
-        if self._wf is None:
-            self._init_file(None)
-        if self._wf is None:
-            return
-        loop = asyncio.get_running_loop()
-        async with self._io_lock:
-            await loop.run_in_executor(None, self._wf.writeframes, stereo_chunk)
 
     async def _publish_full_audio_chunk(self, stereo_chunk: bytes) -> None:
         """Publish a full-conversation stereo PCM chunk for downstream transport."""
@@ -533,7 +470,9 @@ class RecordingManager(Manager):
     async def _build_final_stereo_chunk(self) -> bytes:
         """Build the final padded stereo chunk from any remaining buffered audio."""
         async with self._lock:
-            n_samples = max(self._user_buffer.total_samples, self._tts_buffer.total_samples)
+            n_samples = max(
+                self._user_buffer.total_samples, self._tts_buffer.total_samples
+            )
             if n_samples <= 0:
                 self._reset_buffers_locked()
                 return b""
@@ -554,13 +493,6 @@ class RecordingManager(Manager):
             )
             self._reset_buffers_locked()
             return stereo_chunk
-
-    @Manager.event_handler(SessionConfigReceived, priority=100)
-    async def _on_session_config(self, event: SessionConfigReceived) -> None:
-        """Initialize recording with a client-provided path."""
-        if not self._recording_enabled or self._file_initialized:
-            return
-        self._init_file(event.recording_path)
 
     @Manager.event_handler(AudioFrameReceived, priority=50)
     async def _on_audio_frame(self, event: AudioFrameReceived) -> None:
@@ -584,8 +516,8 @@ class RecordingManager(Manager):
                 self._user_frame_samples = int(data_i16.size)
                 self._user_queue.append(data_i16)
                 if self._user_next_tick_mono is None:
-                    self._user_next_tick_mono = (
-                        now_mono + (self._user_frame_samples / self.TARGET_SR)
+                    self._user_next_tick_mono = now_mono + (
+                        self._user_frame_samples / self.TARGET_SR
                     )
                 self._user_wakeup.set()
         except Exception as e:
@@ -711,13 +643,5 @@ class RecordingManager(Manager):
 
         final_chunk = await self._build_final_stereo_chunk()
         if final_chunk:
-            if self._recording_enabled:
-                await self._write_stereo_chunk(final_chunk)
             if self._send_full_audio_enabled:
                 await self._publish_full_audio_chunk(final_chunk)
-
-        try:
-            if self._recording_enabled and self._wf is not None:
-                self._wf.close()
-        finally:
-            self._wf = None

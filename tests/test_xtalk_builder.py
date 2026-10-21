@@ -80,11 +80,6 @@ class _BuilderRegisteredAgent(Agent):
 
         return _BuilderRegisteredAgent()
 
-    def restore_history(self, messages: list[dict[str, Any]]) -> None:
-        """Ignore restored history in the stateless test Agent."""
-
-        del messages
-
 
 class XtalkBuilderTests(unittest.TestCase):
     """Verify runtime Agent tools are attached before model construction."""

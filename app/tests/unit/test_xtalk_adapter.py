@@ -24,10 +24,11 @@ class _FakeRuntime:
         self.mounted_app: Any = None
         self._anonymous_user_id: str | None = None
 
-    def mount_routes(self, app: Any) -> None:
-        """Record the application passed to the public mount method."""
-
-        self.mounted_app = app
+    def create_asgi_app(self):
+        """Return the runtime's native ASGI application."""
+        async def application(scope, receive, send):
+            pass
+        return application
 
 
 class _FakeBuilder:
@@ -220,12 +221,11 @@ def test_adapter_uses_only_tools_returned_by_the_unified_loader(
     assert runtime.tools == [DeveloperTime, DeveloperWebSearch]
 
 
-def test_adapter_mounts_routes_through_the_runtime_public_method() -> None:
-    """Delegate route registration without inspecting runtime internals."""
-
+def test_adapter_mounts_routes_through_the_runtime_public_method(tmp_path) -> None:
+    """Compose host routes with the runtime's native ASGI application."""
+    from fastapi import FastAPI
     runtime = _FakeRuntime()
-    app = object()
-
-    xtalk_adapter.mount_xtalk_routes(runtime, app)
-
-    assert runtime.mounted_app is app
+    app = FastAPI()
+    host = xtalk_adapter.mount_xtalk_routes(runtime, app, data_dir=tmp_path)
+    assert host.runtime is runtime
+    assert any(route.path == "/v1/realtime" for route in app.routes)

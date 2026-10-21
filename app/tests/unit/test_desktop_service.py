@@ -110,8 +110,8 @@ def test_desktop_login_uses_stable_anonymous_identity(tmp_path) -> None:
         models=SimpleNamespace(),
     )
 
-    first = DesktopXtalk(service_prototype=service_prototype)
-    first._anonymous_user_id = "xtalk-desktop-user"
+    from backend.conversation_host import ApplicationHost
+    first = ApplicationHost(None, str(tmp_path), user_id="xtalk-desktop-user")
     assert first._login()["user"] == {"id": "xtalk-desktop-user"}
 
     created = first._persistence.create_session("xtalk-desktop-user")
@@ -122,8 +122,7 @@ def test_desktop_login_uses_stable_anonymous_identity(tmp_path) -> None:
         content="persist me",
     )
 
-    restarted = DesktopXtalk(service_prototype=service_prototype)
-    restarted._anonymous_user_id = "xtalk-desktop-user"
+    restarted = ApplicationHost(None, str(tmp_path), user_id="xtalk-desktop-user")
     assert restarted._login()["user"] == {"id": "xtalk-desktop-user"}
     assert restarted._list_sessions("xtalk-desktop-user") == [
         {"session_id": created["session_id"], "title": "persist me"}
@@ -140,7 +139,8 @@ def test_desktop_login_without_identity_uses_fresh_user(tmp_path) -> None:
         },
         models=SimpleNamespace(),
     )
-    runtime = DesktopXtalk(service_prototype=service_prototype)
+    from backend.conversation_host import ApplicationHost
+    runtime = ApplicationHost(None, str(tmp_path))
 
     first_user = runtime._login()["user"]["id"]
     second_user = runtime._login()["user"]["id"]

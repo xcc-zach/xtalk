@@ -98,8 +98,8 @@ async def output_gateway_llm_output_refactored_final_handler(
 ):
     await self.send_signal(
         {
-            "action": "finish_resp",
-            "data": {"response_id": event.response_id, "text": event.text},
+            "type": "response.output_audio.playback.done",
+            "response_id": event.response_id, "text": event.text,
         }
     )
 
@@ -122,7 +122,19 @@ xtalk_instance = Xtalk(service_prototype=custom_service, max_sessions=10)
 
 
 app = FastAPI(title="Xtalk Server")
-xtalk_instance.mount_routes(app)
+from contextlib import asynccontextmanager
+from asgi_lifespan import LifespanManager
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from host.application import ApplicationHost
+
+@asynccontextmanager
+async def _realtime_lifespan(application):
+    async with LifespanManager(xtalk_instance.create_asgi_app()):
+        yield
+
+app.router.lifespan_context = _realtime_lifespan
+ApplicationHost(xtalk_instance).mount_routes(app)
 
 
 # Serve static files

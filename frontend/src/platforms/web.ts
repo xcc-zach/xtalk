@@ -2,10 +2,7 @@ import { BaseWebSocket } from "../bases/websocket";
 import type { BaseWebSocketCloseEvent, BaseWebSocketMessageEvent } from "../bases/websocket";
 import { BaseInputAudioSession, BaseOutputAudioSession } from "../bases/audio-session";
 import type { InputAudioSessionConfig, OutputAudioSessionConfig } from "../bases/audio-session";
-import { BaseHTTPClient, HTTPRequestError } from "../bases/http";
-import type { ResolvableURL, SessionServiceURLConfig, SessionServiceURLs } from "../bases/http";
 import { BaseEncoding } from "../bases/encoding";
-import { BasePersistenceStore } from "../bases/persistence";
 import { BaseDeferredTaskScheduler } from "../bases/task-scheduler";
 
 import vadProcessorUrl from "../../worklets/vad-processor.worklet.js";
@@ -19,11 +16,7 @@ export {
     WebWebSocket,
     WebInputAudioSession,
     WebOutputAudioSession,
-    WebHTTPClient,
     WebEncoding,
-    WebPersistenceStore,
-    resolveWebServiceURLs,
-    buildWebSocketURLWithAccessToken,
 };
 
 /**
@@ -139,62 +132,25 @@ class WebWebSocket extends BaseWebSocket {
     }
 }
 
-function resolveBaseURL(rawURL: ResolvableURL): URL {
-    return new URL(rawURL.toString(), window.location.href);
-}
-
-function createAuthorizedHeaders(accessToken: string | null): Headers {
-    const headers = new Headers();
-    if (accessToken) {
-        headers.set("Authorization", `Bearer ${accessToken}`);
-    }
-    return headers;
-}
-
-class WebHTTPClient extends BaseHTTPClient {
-    async postJSON<T>(url: ResolvableURL, accessToken: string | null): Promise<T> {
-        const response = await fetch(url, {
-            method: "POST",
-            headers: createAuthorizedHeaders(accessToken),
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
-        }
-        return await response.json() as T;
-    }
-
-    async getJSON<T>(url: ResolvableURL, accessToken: string): Promise<T> {
-        const response = await fetch(url, {
-            method: "GET",
-            headers: createAuthorizedHeaders(accessToken),
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
-        }
-        return await response.json() as T;
-    }
-
-    async postFile(
-        url: ResolvableURL,
-        accessToken: string,
-        sessionId: string,
-        file: Blob,
-    ): Promise<void> {
-        const formData = new FormData();
-        formData.append("session_id", sessionId);
-        formData.append("file", file);
-        const response = await fetch(url, {
-            method: "POST",
-            headers: createAuthorizedHeaders(accessToken),
-            body: formData,
-        });
-        if (!response.ok) {
-            throw new HTTPRequestError(response.status);
-        }
-    }
-}
 
 class WebEncoding extends BaseEncoding {
+    encodePCM(data: ArrayBuffer, sampleRate: number, targetRate: number): string {
+        if (sampleRate === targetRate) return this.encodeBase64(data);
+        const input = new Int16Array(data);
+        const output = new Int16Array(Math.round(input.length * targetRate / sampleRate));
+        for (let i = 0; i < output.length; i++) {
+            const position = i * sampleRate / targetRate;
+            const left = Math.min(Math.floor(position), input.length - 1);
+            const right = Math.min(left + 1, input.length - 1);
+            output[i] = Math.round(input[left]! + (input[right]! - input[left]!) * (position - left));
+        }
+        return this.encodeBase64(output.buffer);
+    }
+    encodeBase64(data: ArrayBuffer): string {
+        let value = "";
+        for (const byte of new Uint8Array(data)) value += String.fromCharCode(byte);
+        return btoa(value);
+    }
     decodeBase64(base64: string): ArrayBuffer {
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
@@ -203,87 +159,6 @@ class WebEncoding extends BaseEncoding {
         }
         return bytes.buffer;
     }
-}
-
-class WebPersistenceStore extends BasePersistenceStore {
-    private supportsStorage(): boolean {
-        return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-    }
-
-    resolveKey(websocketURL: ResolvableURL): string | null {
-        if (!this.supportsStorage()) {
-            return null;
-        }
-        const resolvedURL = new URL(websocketURL.toString(), window.location.href);
-        return `xtalk:session:${resolvedURL.toString()}`;
-    }
-
-    load(key: string | null): string | null {
-        if (!key || !this.supportsStorage()) {
-            return null;
-        }
-        try {
-            return window.localStorage.getItem(key);
-        } catch {
-            return null;
-        }
-    }
-
-    save(key: string | null, value: string): void {
-        if (!key || !this.supportsStorage()) {
-            return;
-        }
-        try {
-            window.localStorage.setItem(key, value);
-        } catch {
-            // Ignore storage failures so realtime usage continues normally.
-        }
-    }
-
-    clear(key: string | null): void {
-        if (!key || !this.supportsStorage()) {
-            return;
-        }
-        try {
-            window.localStorage.removeItem(key);
-        } catch {
-            // Ignore storage failures so realtime usage continues normally.
-        }
-    }
-}
-
-function resolveWebServiceURLs(
-    websocketURL: ResolvableURL,
-    config?: SessionServiceURLConfig,
-): SessionServiceURLs {
-    const httpURL = resolveBaseURL(websocketURL);
-    if (httpURL.protocol === "ws:") {
-        httpURL.protocol = "http:";
-    } else if (httpURL.protocol === "wss:") {
-        httpURL.protocol = "https:";
-    }
-
-    const defaultSessionDetail = (sessionId: string) =>
-        new URL(`./api/sessions/${encodeURIComponent(sessionId)}`, httpURL);
-    const configuredSessionDetail = config?.sessionDetail;
-
-    return {
-        login: config?.login ?? new URL("./api/auth/login", httpURL),
-        sessions: config?.sessions ?? new URL("./api/sessions", httpURL),
-        sessionDetail: typeof configuredSessionDetail === "function"
-            ? configuredSessionDetail
-            : (sessionId: string) => configuredSessionDetail ?? defaultSessionDetail(sessionId),
-        upload: config?.upload ?? new URL("./api/upload", httpURL),
-    };
-}
-
-function buildWebSocketURLWithAccessToken(
-    websocketURL: ResolvableURL,
-    accessToken: string,
-): URL {
-    const url = resolveBaseURL(websocketURL);
-    url.searchParams.set("access_token", accessToken);
-    return url;
 }
 
 interface WebInputAudioSessionConfig extends InputAudioSessionConfig {

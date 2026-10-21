@@ -1,7 +1,6 @@
 from .modules.output_gateway import OutputGateway
 from .modules.asr_manager import ASRManager
 from .modules.direct_audio_manager import DirectAudioManager
-from .modules.embeddings_manager import EmbeddingsManager
 from .modules.enhancer_manager import EnhancerManager
 from .modules.latency_manager import LatencyManager
 from .modules.llm_agent_context_manager import LLMAgentContextManager
@@ -18,7 +17,6 @@ __all__ = [
     "OutputGateway",
     "ASRManager",
     "DirectAudioManager",
-    "EmbeddingsManager",
     "EnhancerManager",
     "LatencyManager",
     "LLMAgentContextManager",

@@ -1,5 +1,5 @@
 export { Conversation };
-export type { ConversationMessage, ConversationState, ConversationUser };
+export type { ConversationMessage, ConversationState };
 
 type ConversationMessage = {
     /** Source role used for display and incremental update behavior. */
@@ -10,17 +10,14 @@ type ConversationMessage = {
     final?: boolean;
     /** Stable server identifier for an assistant response. */
     responseId?: string;
-}
-
-type ConversationUser = {
-    id: string;
+    /** Stable conversation item identifier for transcription revisions. */
+    itemId?: string;
 }
 
 function defaultConversation(): {
     connectionState: "connected" | "reconnecting" | "disconnected";
     streamState: "idle" | "listening" | "processing" | "speaking";
     sessionId: string | null;
-    user: ConversationUser | null;
     latency: {
         network?: number,
         asr?: number,
@@ -28,6 +25,7 @@ function defaultConversation(): {
         llmSentence?: number,
         ttsFirstChunk?: number
     };
+    generatedResponses: Record<string, {text: string; final: boolean}>;
     messages: ConversationMessage[];
     thought: string;
     caption: string;
@@ -41,8 +39,8 @@ function defaultConversation(): {
         connectionState: "disconnected",
         streamState: "idle",
         sessionId: null,
-        user: null,
         latency: {},
+        generatedResponses: {},
         messages: [],
         thought: "",
         caption: "",
@@ -62,6 +60,20 @@ class Conversation {
     private assistantResponseIndexes = new Map<string, number>();
     private stateChangeCallbacks = new Set<(state: ConversationState) => void>();
     private fullAudioChunkCallback: (pcmChunkInt16: ArrayBuffer, sampleRate: number) => void = (_chunk, _sr) => { };
+
+    /** Apply a complete snapshot to one input item without merging other turns. */
+    updateInputItem(itemId: string, text: string, final: boolean): void {
+        const existing = this._state.messages.find(message => message.itemId === itemId);
+        if (existing) {
+            if (existing.final) return;
+            existing.content = text;
+            existing.final = final;
+        } else {
+            this._state.messages.push({role: "user", itemId, content: text, final});
+            this.messagePrefixes.push(undefined);
+        }
+        this.notifyStateChange();
+    }
 
     private notifyStateChange(): void {
         for (const callback of this.stateChangeCallbacks) {
@@ -91,11 +103,6 @@ class Conversation {
                 return key in target ? target[key] : undefined;
             }
         });
-    }
-
-    setUser(user: ConversationUser | null): void {
-        this._state.user = user;
-        this.notifyStateChange();
     }
 
     switch(sessionId: string | null, messages: ConversationMessage[]): void {
@@ -213,6 +220,12 @@ class Conversation {
      * @param content Full playback-confirmed response text.
      * @param final Whether this update closes the response.
      */
+    /** Stores generated content separately from playback-confirmed display. */
+    updateGeneratedResponse(responseId: string, text: string, final: boolean): void {
+        this._state.generatedResponses[responseId] = {text, final};
+        this.notifyStateChange();
+    }
+
     updateAssistantResponse(
         responseId: string,
         content: string,

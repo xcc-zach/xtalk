@@ -26,14 +26,16 @@ ORIGIN = "tauri://localhost"
 class _FakeRuntime:
     """Mount one representative core HTTP route."""
 
-    def mount_routes(self, app: Any) -> None:
-        """Register a route standing in for XTalk's public mounted routes."""
-
-        @app.get("/api/sessions")
-        async def _sessions() -> dict[str, list[Any]]:
-            """Return an empty fake session list."""
-
-            return {"sessions": []}
+    def create_asgi_app(self):
+        """Return a minimal native ASGI runtime for host composition tests."""
+        async def application(scope, receive, send):
+            if scope["type"] == "lifespan":
+                while True:
+                    message = await receive()
+                    await send({"type": message["type"] + ".complete"})
+                    if message["type"] == "lifespan.shutdown":
+                        return
+        return application
 
 
 def _startup(tmp_path: Path) -> StartupConfig:
@@ -105,6 +107,7 @@ def test_health_ready_and_core_route_security(tmp_path: Path) -> None:
         )
     )
     unauthorized = asyncio.run(_request(app, "GET", "/api/sessions"))
+    login = asyncio.run(_request(app, "POST", "/api/auth/login", headers={STARTUP_TOKEN_HEADER: TOKEN}))
     authorized = asyncio.run(
         _request(
             app,
@@ -112,7 +115,7 @@ def test_health_ready_and_core_route_security(tmp_path: Path) -> None:
             "/api/sessions",
             headers={
                 STARTUP_TOKEN_HEADER: TOKEN,
-                "Authorization": "Bearer core-jwt",
+                "Authorization": "Bearer " + login.json()["access_token"],
             },
         )
     )
@@ -160,25 +163,19 @@ def test_delete_session_removes_persisted_desktop_session(
 ) -> None:
     """Delete one desktop-owned session and require the launch token."""
 
-    from xtalk.persistence import PersistenceStore
+    from backend.conversation_store import PersistenceStore
 
     store = PersistenceStore(tmp_path / "data" / "chat_history.sqlite3")
     user_id = "desktop-user"
     session_id = store.create_session(user_id)["session_id"]
 
-    class _Runtime:
-        """Fake runtime exposing the desktop-owned persistence fields."""
-
-        _anonymous_user_id = user_id
-        _persistence = store
-        _service_manager = None
-
-        def mount_routes(self, app: Any) -> None:
-            """No-op: the delete route is mounted by the sidecar itself."""
+    startup = _startup(tmp_path)
+    from dataclasses import replace
+    startup = replace(startup, anonymous_user_id=user_id)
 
     app = create_application(
-        startup=_startup(tmp_path),
-        xtalk_runtime=_Runtime(),
+        startup=startup,
+        xtalk_runtime=_FakeRuntime(),
         shutdown_callback=lambda: None,
     )
 

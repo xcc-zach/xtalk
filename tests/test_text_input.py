@@ -8,7 +8,7 @@ import unittest
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
-from fastapi import WebSocket
+from xtalk.serving.interfaces import Connection as WebSocket
 
 from xtalk.models import Models
 from xtalk.serving.event_bus import EventBus
@@ -47,10 +47,10 @@ class _RecordingWebSocket:
     def __init__(self) -> None:
         self.messages: list[str] = []
 
-    async def send_text(self, message: str) -> None:
+    async def send_json(self, message: dict) -> None:
         """Record one outbound text frame."""
 
-        self.messages.append(message)
+        self.messages.append(json.dumps(message))
 
 
 class TextInputEventTests(unittest.IsolatedAsyncioTestCase):
@@ -176,8 +176,8 @@ class TextInputEventTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_finish_asr_echoes_text_origin(self) -> None:
-        """Expose origin on the existing receipt so audio cannot confirm text."""
+    async def test_text_input_does_not_emit_audio_transcription(self) -> None:
+        """Keep text item receipts distinct from audio transcription events."""
 
         websocket = _RecordingWebSocket()
         gateway = OutputGateway(
@@ -195,16 +195,8 @@ class TextInputEventTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(
-            json.loads(websocket.messages[0]),
-            {
-                "action": "finish_asr",
-                "data": {
-                    "text": "typed",
-                    "origin": "text",
-                },
-            },
-        )
+        self.assertEqual(websocket.messages, [])
+
 
 
 class TextInputManagerTests(unittest.IsolatedAsyncioTestCase):

@@ -189,7 +189,7 @@ class SecurityPolicy:
                 return SecurityDenial(401, "Startup token is required")
             return None
 
-        if path == "/ws":
+        if path == "/v1/realtime":
             if self._has_startup_token(
                 request_headers,
                 query,
@@ -199,7 +199,7 @@ class SecurityPolicy:
 
             # The current public browser SDK adds only `access_token` to its
             # WebSocket URL and cannot attach the app-specific launch header.
-            # Presence is enough at this outer boundary; XTalk's public route
+            # Presence is enough at this outer boundary; the application's conversation host
             # remains responsible for cryptographically validating the JWT.
             access_tokens = query.get(CORE_ACCESS_TOKEN_QUERY, [])
             if any(token for token in access_tokens):
