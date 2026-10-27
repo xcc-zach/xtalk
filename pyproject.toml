@@ -177,6 +177,7 @@ local_scheme   = "no-local-version"
 [tool.pytest.ini_options]
 addopts   = ["--import-mode=importlib", "-q"]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 exclude = ["*_pb2.py", "*_pb2_grpc.py"]
