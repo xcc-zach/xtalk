@@ -58,7 +58,7 @@ xtalk/
     - 更新连接测试替身与调用方，验证公开接口不再依赖 send_text，JSON 序列化及有序发送行为保持一致。
 - OutputGateway 在既有回复和混合音频输出入口选择编码，共用既有 PCM 转换及事件 ID 生成路径；不通过先 Base64 编码再解码得到二进制载荷。
 - 前端协议处理位于 ActionHandler 和现有处理器，session/runtime 保持通用消息转交；浏览器 binaryType 与必要的 Blob 转 ArrayBuffer 操作仅在 frontend/src/platforms 内实现，跨平台代码只依赖现有平台抽象及 Web-first 类型。
-- 在 tests/realtime/test_connection.py、test_output.py 和输入配置测试补充后端验证，在 frontend/tests 补充协商、二进制解析、播放和异常测试；更新 docs/technical_reference/realtime_api.md 与 realtime_api.zh.md，说明：如何启用并等待协商确认、按 WebSocket 消息类型识别音频编码、解析二进制头及 PCM 载荷、关联回复/混合音频、复用播放与块确认，以及处理非法消息；同时说明默认 Base64 兼容行为及两种编码互斥。两份协议文档保持一致。本变更不修改模型、提示词或推理逻辑，不要求新增独立示例客户端。
+- 在 tests/realtime/test_connection.py、test_output.py 和输入配置测试补充后端验证，在 frontend/tests 补充协商、二进制解析、播放和异常测试；更新 docs/reference/realtime_api.md 与 realtime_api.zh.md，说明：如何启用并等待协商确认、按 WebSocket 消息类型识别音频编码、解析二进制头及 PCM 载荷、关联回复/混合音频、复用播放与块确认，以及处理非法消息；同时说明默认 Base64 兼容行为及两种编码互斥。两份协议文档保持一致。本变更不修改模型、提示词或推理逻辑，不要求新增独立示例客户端。
 
 ```mermaid
 flowchart LR
