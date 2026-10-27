@@ -1,9 +1,13 @@
+# Customize the Service
+
 *Experimental feature*
+
+This tutorial ends with the frontend receiving a response text that your own code has rewritten. You will add a model of a new type to the service, define an event that carries its output, write a `Manager` that reacts to the end of each response, and rewire which handler delivers the finish event to the frontend. The result prepends `Assistant response: ` to every final response text.
+
+Before starting, complete [Attach Tools](attach_tools.md) so that you are familiar with staged configuration and the `Agent` model type.
 
 > **Note**
 > See [`examples/sample_app/custom_service.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_service.py) for the complete example. It adds a dummy `LLMOutputRefactorModel` to X-Talk and prepends `Assistant response: ` before the final LLM response text is sent to the frontend.
-
-You may want to introduce a new model type and connect its logic to the rest of the service flow.
 
 ## Introduce a New Model Type
 
@@ -48,6 +52,8 @@ Then put the custom model into the same `Models` container:
 models.set(LLMOutputRefactorModel, LLMOutputRefactorModel())
 ```
 
+`models` now holds the configured ASR, Agent and TTS plus your model. Nothing calls `refactor()` yet; the Manager below does.
+
 ### Approach 2: Introduce a New Model Type, Then a New Model
 
 If you want the model to be created from config, first define a model type interface and register it with `@model_type`; then define the concrete model implementation and register it with `@model`.
@@ -85,7 +91,7 @@ class PrefixLLMOutputRefactor(LLMOutputRefactor):
 
 `clone()` is not required by `@model_type` registration itself, but when the service clones `Models` for each session, it automatically calls `clone()` on model instances. If implementations of this model type should not share state across sessions, put `clone()` in the interface contract.
 
-Then add the model to the config file:
+Then add the model to the config file under the alias declared above:
 
 ```json
 {
@@ -162,6 +168,8 @@ class LLMOutputRefactorManager(Manager):
 
 The service passes `models` to the manager when creating a session. The example uses `models.get(...)`, so it skips refactoring if the model is absent. If your custom logic requires the model, require it directly so configuration errors surface early.
 
+Defining the class has no effect on its own: `handle_response_finish` runs only after the next step registers the Manager with the service.
+
 ## Register the Manager
 
 Create the service with `models`, then register the custom `Manager`:
@@ -174,7 +182,7 @@ custom_service = DefaultService(models=models)
 custom_service.register_manager(LLMOutputRefactorManager)
 ```
 
-Each session creates an `LLMOutputRefactorManager` and uses the model container cloned for that session.
+Each session creates an `LLMOutputRefactorManager` and uses the model container cloned for that session. From now on every `ResponseFinish` is followed by an `LLMOutputRefactoredFinal` on the event bus, but no component consumes the new event yet, so the frontend still sees the original text.
 
 ## Adjust Existing Event Subscriptions
 
@@ -190,7 +198,7 @@ custom_service.unsubscribe_event(
 )
 ```
 
-Then it registers a handler for the new `LLMOutputRefactoredFinal` event:
+Between this call and the next, the frontend receives no `response.output_audio.playback.done` for finished responses. The following registration restores it with the new event:
 
 ```python
 async def output_gateway_llm_output_refactored_final_handler(
@@ -222,4 +230,16 @@ xtalk_instance = Xtalk(service_prototype=custom_service)
 app = xtalk_instance.create_asgi_app()
 ```
 
-See the [Realtime API documentation](realtime_api.md) for instructions on starting the application.
+Run it as described in [Connect a Client](connect_a_client.md). After each reply finishes playing, the `response.output_audio.playback.done` event received by the client carries `text` beginning with `Assistant response: `.
+
+## Next Steps
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Bot2Bot →](bot2bot.md)** · Tutorial
+
+-   **[Overall Architecture: events, Managers and gateways →](../explanation/system_design.md)** · Explanation
+
+-   **[Model `clone()` and `reset()` →](../reference/model_clone_reset.md)** · Reference
+
+</div>

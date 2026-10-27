@@ -1,40 +1,14 @@
+# Bot2Bot
+
 *实验中的功能*
 
-X-Talk 现在支持在浏览器端把多个前端会话接到同一条共享音频总线上，让 bot 听到的是一条连续音频流，而不只是麦克风输入。
+完成本教程后，同一个浏览器页面里的两个 X-Talk 会话会通过一条共享音频总线互相对话，您的麦克风也可以选择加入同一条流。您将创建 bridge、让两个 bot 会话读取它、把每个 bot 的语音输出发布回去，并干净地关闭所有内容。
 
-本文档介绍当前这套仅前端实现的 bot2bot bridge API：
-
-- 共享音频总线通过 `createAudioBridge()` 创建；
-- 每个 bot session 使用 `inputConfig.mode = "web_bridge"`；
-- 用户麦克风可以选择由 bridge 直接接入，也可以完全不接入；
-- bot 的输出音频会重新发布回 bridge，从而让其他 bot 继续听到并回复。
-
-`createAudioBridge()` 是包根提供的统一入口。它会自动检测当前前端平台；在现阶段，检测到 Web 时会落到 Web bridge 实现。
-
-## 适用场景
-
-当您希望一个浏览器页面同时做到下面几件事时，可以使用 web audio bridge：
-
-- 同时连接多个 X-Talk session；
-- 让 bot 回应其他 bot 的语音输出；
-- 可选地把真实用户麦克风音频也注入同一条共享流；
-- 保持现有服务端接口不变，把音频编排放在前端完成。
-
-这套 API 目前只支持 Web 平台，实现位于 [`frontend/src/platforms`](https://github.com/xcc-zach/xtalk/tree/main/frontend/src/platforms)。
-
-## 共享流模型
-
-bridge 内部维护一条 `16000` Hz 的连续 PCM 音频流。
-
-- 没有人说话时，这条流会持续输出静默；
-- 用户或 bot 发布音频时，这些音频会被混入这条共享流；
-- 所有配置为 `mode: "web_bridge"` 的 bot session 都会持续收到来自同一条共享流的音频帧，但不会收到自己刚发布回去的那一路音频。
-
-这意味着 bridge 并不是点对点路由 bot 音频，而是让所有发布者都往一条总线上写，所有 bridge bot 都从这条总线上读，同时每个 bot 会自动过滤掉自己刚发布的音频。
+开始前请先完成[启动服务](start_the_service.zh.md)，确保服务已在运行，并且页面中的 `createSession()` 可用。共享流背后的设计见[音频桥接模型](../explanation/audio_bridge.zh.md)。
 
 ## 创建 bridge
 
-从客户端包中导入 bridge 构造函数：
+`createAudioBridge()` 是包根提供的统一入口。它会自动检测当前前端平台，现阶段落到 Web bridge 实现。从客户端包中导入它：
 
 ```ts
 import { createAudioBridge } from "xtalk-client";
@@ -42,38 +16,7 @@ import { createAudioBridge } from "xtalk-client";
 const bridge = createAudioBridge();
 ```
 
-bridge 实例当前公开的 API 如下：
-
-```ts
-type WebBridgeParticipantId = string;
-
-interface WebAudioBridgeUserInputConfig {
-    sourceId?: WebBridgeParticipantId;
-    sampleRate?: number;
-    enableVAD?: boolean;
-    enableEnhancer?: boolean;
-    vadRedemptionMs?: number;
-}
-
-interface WebAudioBridgePublishOptions {
-    sourceId: WebBridgeParticipantId;
-    sampleRate: number;
-}
-
-interface WebAudioBridge {
-    openUserInput(config?: WebAudioBridgeUserInputConfig): Promise<void>;
-    closeUserInput(): Promise<void>;
-    publishAudio(
-        pcmChunkInt16: ArrayBuffer,
-        options: WebAudioBridgePublishOptions,
-    ): void;
-    publishSpeechStart(sourceId: WebBridgeParticipantId): void;
-    publishSpeechEnd(sourceId: WebBridgeParticipantId): void;
-    close(): Promise<void>;
-}
-```
-
-这里展示的具体类型名描述的是当前 Web 实现；包根现在只导出 `createAudioBridge()`，不再直接导出这些带 `Web` 前缀的类型。
+bridge 此时维护一条连续的 16 kHz PCM 流；在有人发布音频之前，这条流只包含静默。实例 API 见[音频桥接](../reference/audio_bridge.zh.md)。
 
 ## 配置 bot session
 
@@ -96,11 +39,13 @@ const botA = createSession("/ws", {
 
 这些 bridge 相关输入字段的含义如下：
 
-- `mode`：设置为 `"web_bridge"`，表示这个 session 不再读取麦克风，而是读取共享 bridge 流；
+- `mode`：设置为 `"web_bridge"`，表示这个 session 读取共享 bridge 流；
 - `participantId`：前端 bridge 使用的参与者标识，用于按 source 控制 VAD 行为以及调试；
 - `bridge`：当前 bot 要订阅的 `WebAudioBridge` 实例；
 - `autoEmitVad`：该 bot 输出重新写回共享流时，是否同时广播前端 VAD 信号；
 - `vadRedemptionMs`：启用 `autoEmitVad` 时，语音结束的静默收尾时间。
+
+`await botA.open()` 之后，这个 bot 开始监听 bridge 流。此时还没有人发布音频，它听到的是静默，因此保持安静。
 
 ## 把 bot 输出重新发布回 bridge
 
@@ -115,7 +60,7 @@ botA.onOutputAudioChunk((pcm, sampleRate) => {
 });
 ```
 
-如果两个 bot 都这样做，它们就可以通过共享流继续互相回应：
+如果两个 bot 都这样做，它们就可以通过共享流互相回应：
 
 ```ts
 const botA = createSession("/ws", {
@@ -163,6 +108,8 @@ await botB.open();
 - bot 输出会被重新写回这条流；
 - bot 可以继续回复其他 bot 的回复。
 
+一旦某个 bot 产生回复，另一个 bot 就会听到并作答，这样的交流会持续到您停止会话为止。
+
 ## 让 bridge 直接接收用户音频
 
 如果您希望浏览器麦克风也进入共享流，可以直接在 bridge 上打开用户输入：
@@ -177,13 +124,13 @@ await bridge.openUserInput({
 });
 ```
 
-这里这些字段的语义故意与现有 Web 麦克风输入配置保持一致：
+调用时浏览器会弹出麦克风权限请求。这些字段的语义与现有 Web 麦克风输入配置保持一致：
 
 - `enableVAD`：是否为用户音频广播前端 `speechStart` 和 `speechEnd`；
 - `enableEnhancer`：发布用户音频前是否先做前端增强；
 - `vadRedemptionMs`：静默持续多久后才把用户语音视为结束。
 
-如果您不希望 bridge 接入用户麦克风，就不要调用 `openUserInput()`。
+说话时，两个 bot 都能听到您。如果您不希望 bridge 接入用户麦克风，就不要调用 `openUserInput()`。
 
 ## 完整示例
 
@@ -243,7 +190,7 @@ await bridge.openUserInput({
 
 ## 停止 bridge
 
-关闭时，建议先关闭用户输入，再关闭 bot session，最后关闭 bridge 本身：
+关闭时，先关闭用户输入（如果已打开），再关闭 bot session，最后关闭 bridge 本身：
 
 ```ts
 await bridge.closeUserInput();
@@ -252,10 +199,14 @@ await botB.close();
 await bridge.close();
 ```
 
-## 当前限制
+`bridge.close()` 完成后，没有会话再读取这条流，bot 之间停止互相回答。
 
-- 这套 bridge 目前只支持 Web 平台；
-- 共享音频总线完全在前端实现，不会修改服务端 agent 配置；
-- `participantId` 不是服务端的 speaker id，它只是前端 bridge 的参与者标识；
-- bot 不会听到自己刚刚发布回 bridge 的音频；
-- 当多个 bot 的输出持续写回同一条共享流时，它们可能会一直互相回应，直到您显式停止它们。
+## 下一步
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[音频桥接模型：共享流如何混音与过滤 →](../explanation/audio_bridge.zh.md)** · Explanation
+
+-   **[音频桥接：实例 API 与限制 →](../reference/audio_bridge.zh.md)** · Reference
+
+</div>

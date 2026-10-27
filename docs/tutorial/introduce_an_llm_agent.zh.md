@@ -1,8 +1,12 @@
-# 引入LLM Agent
+# 引入 LLM Agent
 
 *实验中的功能*
 
-LLM Agent 接收语音识别、回复播放和工具状态等上下文，并以流式方式输出文本或工具调用。本教程从一个只回显最终识别文本的 Agent 开始，再逐步增加会话状态、工具调用和持续输出能力。
+完成本教程后，您会得到一个完整的自定义 Agent：它维护自己的对话历史，并接受客户端发来的上下文与系统提示更新。您将从一个只回显最终识别文本的 Agent 开始，逐步增加会话状态、更多上下文和持续输出能力。
+
+开始前请先完成[引入新模型](introduce_a_new_model.zh.md)，确保已用 `@model` 注册 `EchoAgent` 并在配置中选择了它。
+
+LLM Agent 接收语音识别、回复播放和工具状态等上下文，并以流式方式输出文本或工具调用。
 
 ## 1. 输出第一条回复
 
@@ -15,7 +19,7 @@ async def async_accept(
         yield context["data"]["text"]
 ```
 
-这个例子只处理最终识别结果 `asr_final`，并将识别文本原样作为回复输出。
+这个例子只处理最终识别结果 `asr_final`，并将识别文本原样作为回复输出。有了这个方法，您说的每句话都会作为回复返回。
 
 运行时主要调用 `async_accept(context)`。其中 `context` 是一个 `AgentContext`，包含：
 
@@ -56,7 +60,7 @@ async def async_accept(
         yield AgentTurnBoundary()
 ```
 
-`pending_updates` 不是 `Agent` 基类提供的字段，而是这个自定义 Agent 在 `__init__()` 中创建的会话级异步队列。其他异步任务可以向该队列写入文本，由 `loop` 依次输出。
+`pending_updates` 由这个自定义 Agent 在 `__init__()` 中创建，是会话级异步队列，`Agent` 基类并未提供该字段。其他异步任务可以向该队列写入文本，由 `loop` 依次输出；每一条都会在没有用户输入的情况下直接播报给用户。
 
 `async_accept()` 返回异步的 `AgentOutput` 流。每一项可以是：
 
@@ -130,7 +134,7 @@ class EchoAgent(Agent):
 }
 ```
 
-随后可以创建服务：
+随后创建服务：
 
 ```python
 from xtalk import Xtalk
@@ -149,6 +153,8 @@ xtalk_instance = (
 )
 ```
 
+重启服务。对话现在经由 `EchoAgent` 处理；在后续步骤添加更多上下文之前，行为与第 1 步一致。
+
 ## 4. 处理更多上下文
 
 了解这些上下文后，可以在 `async_accept()` 中按类型分支。最终输入的处理已经在前文展示；如果还需要使用增量输入，可以增加以下分支：
@@ -157,6 +163,8 @@ xtalk_instance = (
 if context["type"] == "asr_partial":
     self.partial_text = context["data"]["text"]
 ```
+
+您说话时，`self.partial_text` 会在 `asr_final` 到来之前持续跟踪逐渐增长的识别结果。
 
 ## 5. 管理对话历史
 
@@ -176,7 +184,7 @@ def get_chat_history(self, with_system: bool = False) -> str | None:
 
 ## 6. 更新对话历史与系统提示
 
-自定义 Agent 可以实现 `append_context()` 和 `update_instructions()`，以支持客户端通过 WebSocket 更新当前会话。
+自定义 Agent 可以实现 `append_context()` 和 `update_instructions()`，以支持客户端通过 WebSocket 更新当前会话。在这两个方法存在之前，对应的客户端请求会被拒绝。
 
 客户端发送 `conversation.item.create` 追加上下文消息时，若未要求生成回复，会调用 `append_context()`。该方法需要将消息加入 Agent 的对话历史，供后续回复使用，也可用于逐条恢复已有对话。消息角色支持 `user`、`assistant` 和 `system`：
 
@@ -194,12 +202,26 @@ def update_instructions(self, *, instructions: str) -> None:
     self.instructions = instructions
 ```
 
-上例假设 Agent 在初始化时创建了 `self.messages` 和 `self.instructions`，并在生成回复时使用它们。请根据自己的消息存储方式调整实现。通过 `append_context()` 追加 `system` 消息会在历史末尾增加一条消息；`update_instructions()` 则替换当前系统提示。未实现对应接口时，客户端的上下文追加或系统提示更新请求会被拒绝。
+上例假设 Agent 在初始化时创建了 `self.messages` 和 `self.instructions`，并在生成回复时使用它们。请根据自己的消息存储方式调整实现。通过 `append_context()` 追加 `system` 消息会在历史末尾增加一条消息；`update_instructions()` 则替换当前系统提示。
+
+添加这两个方法后，携带 `instructions` 的 `session.update` 会收到 `session.updated` 回应，`conversation.item.create` 的消息会出现在 `self.messages` 中。
 
 ## 7. 工具调用
 
-详见[引入工具](tool_design.zh.md)。
+让 Agent 调用工具是下一篇教程[挂载工具](attach_tools.zh.md)的内容。
 
 ## 8. 使用辅助能力
 
 `Agent` 提供 `content_to_text()`，用于把 LangChain 返回的字符串或内容块转换为纯文本。
+
+## 下一步
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[挂载工具 →](attach_tools.zh.md)** · Tutorial
+
+-   **[Agent API →](../api/server/xtalk/models/agents/interfaces.zh.md)** · Reference
+
+-   **[Realtime API 协议：`conversation.item.create` 与 `session.update` →](../reference/realtime_api.zh.md)** · Reference
+
+</div>

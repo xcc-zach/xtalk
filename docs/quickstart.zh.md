@@ -15,7 +15,7 @@ pip install "xtalk[ali,example] @ git+https://github.com/xcc-zach/xtalk.git@main
 
 从[阿里云百炼平台](https://bailian.console.aliyun.com/?tab=model#/api-key)获取 API 密钥。我们将使用阿里云的（目前）免费服务。
 
-> 在线服务可能不稳定且延迟较高。我们建议使用本地部署的模型以获得更好的用户体验。我们推荐使用 *SherpaOnnx* 的 ASR 模型（[配置教程](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)）和 *IndexTTS*（[配置教程](https://github.com/Ksuriuri/index-tts-vllm)）。详情请参阅[服务器配置教程](tutorial/config_the_service.zh.md)和[本地完整部署示例配置](tutorial/sample_config_for_fully_local_deployment.zh.md)。
+> 在线服务可能不稳定且延迟较高。我们建议使用本地部署的模型以获得更好的用户体验。我们推荐使用 *SherpaOnnx* 的 ASR 模型（[配置教程](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)）和 *IndexTTS*（[配置教程](https://github.com/Ksuriuri/index-tts-vllm)）。详情请参阅[服务器配置教程](tutorial/config_the_service.zh.md)和[完全本地部署](how_to/deploy_fully_local.zh.md)。
 
 ## 第 3 步：创建配置文件
 
@@ -58,3 +58,15 @@ python examples/sample_app/configurable_server.py  --port 7635 --config <PATH_TO
 ```
 
 最后，我们的演示已准备好在 `http://localhost:7635`。在浏览器中查看吧！
+
+## 下一步
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[用自己的脚本启动服务 →](tutorial/start_the_service.zh.md)** · 教程
+
+-   **[完全本地部署 →](how_to/deploy_fully_local.zh.md)** · 操作指南
+
+-   **[支持的模型 →](reference/supported_models.zh.md)** · 参考
+
+</div>

@@ -22,4 +22,4 @@
 
 ## Scope
 
-- These instructions apply to all documentation under this directory, including tutorials, application tutorials, technical references, and API documentation.
+- These instructions apply to all documentation under this directory, including tutorials, how-to guides, reference pages, explanation pages, and API documentation.

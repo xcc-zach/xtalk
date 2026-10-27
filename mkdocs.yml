@@ -35,6 +35,11 @@ extra:
     - name: 简体中文
       link: /zh/
       lang: zh
+exclude_docs: |
+  AGENTS.md
+  README.md
+extra_css:
+  - stylesheets/extra.css
 plugins:
   - search:
       separator: '[\s\u200b\-]'
@@ -56,46 +61,66 @@ plugins:
           link: /zh/
           nav_translations:
             Home: 首页
-            Tutorial: 教程
-            'App Tutorial': 桌面应用教程
-            'Model Configuration': 模型配置
-            'Add Tools': 添加工具
-            'Web Search': 联网搜索
-            'Voice Wake': 语音唤醒
             Quickstart: 快速开始
-            'Technical Reference': 技术参考
-            Recipe: 开发指南
-            Realtime API: 实时 API
-            # Tabs under Tutorial
-            'Basic Usage': 基础使用
-            Other: 其他
+            Tutorial: 教程
+            How-to: 操作指南
+            Reference: 参考
+            Explanation: 原理说明
+            # Tutorial
+            Basics: 基础
+            'Extend the Service': 扩展服务
+            'Desktop App': 桌面应用
             'Start the Service': 启动服务
-            'Config the Service': 配置服务
-            'Sample Config for Fully Local Deployment': 完全本地部署示例配置
-            'Introduce Tools': 引入工具
-            Bot2Bot: Bot2Bot
+            'Configure the Service': 配置服务
+            'Connect a Client': 连接客户端
             'Introduce a New Model': 引入新模型
             'Introduce an LLM Agent': 引入LLM Agent
-            'Model Types and Control Logic Customization': 模型类型与控制逻辑定制
-            Testing: 测试
-            'Service Configuration': 服务配置项
+            'Attach Tools': 挂载工具
+            'Customize the Service': 定制服务
+            Bot2Bot: Bot2Bot
+            'Model Configuration': 模型配置
+            'Add Tools': 添加工具
+            # How-to
+            'Mount in FastAPI': 挂载到 FastAPI
+            'Deploy Fully Local': 完全本地部署
+            'Adapt Async Models': 适配异步模型
             Logging: 日志
+            Testing: 测试
             'Text Input': 文本输入
-            # Tabs under Technical Reference
-            'Overall Architecture': 整体架构
+            'Web Search': 联网搜索
+            'Voice Wake': 语音唤醒
+            # Reference
+            'Service Configuration': 服务配置项
+            'Client Session Config': 客户端会话配置
             'Realtime API Protocol': Realtime API协议
             'Supported Models': 支持的模型
-            'ASR Design': ASR设计
-            'TTS Design': TTS设计
-            'Speech Enhancer Design': 语音增强设计
-            'VAD Design': VAD设计
-            'Turn Detector Design': Turn Detector设计
-            'Forced Aligner': 强制对齐
             'Model clone() and reset()': 模型对象的clone()与reset()语义
-            # Tabs under API
-            'Client': 客户端
-            'Server': 服务端
+            Tools: 工具
+            'Audio Bridge': 音频桥接
+            'Model Interfaces': 模型接口
+            ASR: ASR
+            TTS: TTS
+            VAD: VAD
+            'Turn Detector': Turn Detector
+            'Speech Enhancer': 语音增强
+            'Forced Aligner': 强制对齐
+            API: API
+            Client: 客户端
+            Server: 服务端
+            # Explanation
+            'Overall Architecture': 整体架构
+            'VAD Pipeline': VAD 流程
+            'TTS Pipeline': TTS 流程
+            'Speech Enhancer Pipeline': 语音增强流程
+            'Turn Detection Pipeline': 轮次检测流程
+            'Forced Alignment Pipeline': 强制对齐流程
+            'Audio Bridge Model': 音频桥接模型
 markdown_extensions:
+  - attr_list
+  - toc:
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - md_in_html
   - pymdownx.highlight:
       anchor_linenums: true
@@ -108,38 +133,52 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Tutorial:
-      - 'Basic Usage':
+      - Basics:
           - 'Start the Service': tutorial/start_the_service.md
-          - 'Config the Service': tutorial/config_the_service.md
+          - 'Configure the Service': tutorial/config_the_service.md
+          - 'Connect a Client': tutorial/connect_a_client.md
+      - 'Extend the Service':
           - 'Introduce a New Model': tutorial/introduce_a_new_model.md
-          - 'Model Types and Control Logic Customization': tutorial/customize_the_service.md
-      - Other:
           - 'Introduce an LLM Agent': tutorial/introduce_an_llm_agent.md
-          - 'Introduce Tools': tutorial/tool_design.md
-          - 'Text Input': tutorial/text_input.md
-          - 'Realtime API': tutorial/realtime_api.md
-          - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
-          - 'Service Configuration': tutorial/service_config.md
-          - Logging: tutorial/logging.md
-          - Testing: tutorial/testing.md
+          - 'Attach Tools': tutorial/attach_tools.md
+          - 'Customize the Service': tutorial/customize_the_service.md
           - Bot2Bot: tutorial/bot2bot.md
-  - 'App Tutorial':
-      - 'Model Configuration': app_tutorial/model_configuration.md
-      - 'Add Tools': app_tutorial/add_tools.md
-      - 'Web Search': app_tutorial/web_search.md
-      - 'Voice Wake': app_tutorial/voice_wake.md
-  - 'Technical Reference':
-      - 'Overall Architecture': technical_reference/system_design.md
-      - 'Realtime API Protocol': technical_reference/realtime_api.md
-      - 'Supported Models': technical_reference/supported_models.md
-      - 'ASR Design': technical_reference/asr_design.md
-      - 'TTS Design': technical_reference/tts_design.md
-      - 'Speech Enhancer Design': technical_reference/speech_enhancer_design.md
-      - 'VAD Design': technical_reference/vad_design.md
-      - 'Turn Detector Design': technical_reference/turn_detector_design.md
-      - 'Forced Aligner': technical_reference/forced_aligner.md
-      - 'Model clone() and reset()': technical_reference/model_clone_reset.md
-      - Recipe: developer/recipe.md
-  - API:
-      - 'Client': api/client/globals.md
-      - 'Server': api/server/index.md
+      - 'Desktop App':
+          - 'Model Configuration': tutorial/desktop_app/model_configuration.md
+          - 'Add Tools': tutorial/desktop_app/add_tools.md
+  - How-to:
+      - 'Mount in FastAPI': how_to/mount_in_fastapi.md
+      - 'Deploy Fully Local': how_to/deploy_fully_local.md
+      - 'Adapt Async Models': how_to/adapt_async_models.md
+      - Logging: how_to/logging.md
+      - Testing: how_to/testing.md
+      - 'Text Input': how_to/text_input.md
+      - 'Desktop App':
+          - 'Web Search': how_to/desktop_app/web_search.md
+          - 'Voice Wake': how_to/desktop_app/voice_wake.md
+  - Reference:
+      - 'Service Configuration': reference/service_config.md
+      - 'Client Session Config': reference/client_session_config.md
+      - 'Realtime API Protocol': reference/realtime_api.md
+      - 'Supported Models': reference/supported_models.md
+      - 'Model clone() and reset()': reference/model_clone_reset.md
+      - Tools: reference/tools.md
+      - 'Audio Bridge': reference/audio_bridge.md
+      - 'Model Interfaces':
+          - ASR: reference/models/asr.md
+          - TTS: reference/models/tts.md
+          - VAD: reference/models/vad.md
+          - 'Turn Detector': reference/models/turn_detector.md
+          - 'Speech Enhancer': reference/models/speech_enhancer.md
+          - 'Forced Aligner': reference/models/forced_aligner.md
+      - API:
+          - Client: api/client/globals.md
+          - Server: api/server/index.md
+  - Explanation:
+      - 'Overall Architecture': explanation/system_design.md
+      - 'VAD Pipeline': explanation/vad.md
+      - 'TTS Pipeline': explanation/tts.md
+      - 'Speech Enhancer Pipeline': explanation/speech_enhancer.md
+      - 'Turn Detection Pipeline': explanation/turn_detector.md
+      - 'Forced Alignment Pipeline': explanation/forced_aligner.md
+      - 'Audio Bridge Model': explanation/audio_bridge.md

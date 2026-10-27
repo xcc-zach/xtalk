@@ -2,7 +2,11 @@
 
 *Experimental feature*
 
-An LLM Agent receives contexts such as speech recognition, response playback, and tool state, then streams text or tool calls. This guide starts with an Agent that only echoes finalized ASR text and progressively adds session state, tool calls, and persistent output.
+This tutorial ends with a complete custom Agent that keeps its own conversation history and accepts context and instruction updates from the client. You start from an Agent that only echoes finalized ASR text and progressively add session state, more contexts, and persistent output.
+
+Before starting, complete [Introduce a New Model](introduce_a_new_model.md) so that you have registered `EchoAgent` with `@model` and selected it from the config.
+
+An LLM Agent receives contexts such as speech recognition, response playback, and tool state, then streams text or tool calls.
 
 ## 1. Emit the First Response
 
@@ -15,14 +19,14 @@ async def async_accept(
         yield context["data"]["text"]
 ```
 
-This example handles only the finalized recognition result `asr_final` and echoes its text as the response.
+This example handles only the finalized recognition result `asr_final` and echoes its text as the response. With this method in place, each sentence you speak comes back as the reply.
 
 The runtime primarily calls `async_accept(context)`. Here, `context` is an `AgentContext` containing:
 
 - `context["type"]`: the context type;
 - `context["data"]`: data from the corresponding service event, excluding base event fields such as `session_id`.
 
-This guide covers the following `context["type"]` values:
+This tutorial covers the following `context["type"]` values:
 
 | Type | Main fields in `data` | Purpose |
 | --- | --- | --- |
@@ -56,7 +60,7 @@ async def async_accept(
         yield AgentTurnBoundary()
 ```
 
-`pending_updates` is not provided by the `Agent` base class. It is a session-level asynchronous queue created by this custom Agent in `__init__()`. Other asynchronous tasks can put text into the queue for `loop` to emit in order.
+`pending_updates` is not provided by the `Agent` base class. It is a session-level asynchronous queue created by this custom Agent in `__init__()`. Other asynchronous tasks can put text into the queue for `loop` to emit in order; each item is spoken to the user without any preceding user input.
 
 `async_accept()` returns an asynchronous stream of `AgentOutput` items. Each item may be:
 
@@ -149,6 +153,8 @@ xtalk_instance = (
 )
 ```
 
+Restart the server. Conversations now run through `EchoAgent`; the behavior matches step 1 until the following steps add more contexts.
+
 ## 4. Handle More Contexts
 
 With these contexts defined, `async_accept()` can branch by type. Final input was handled earlier; add this branch if the Agent also needs incremental input:
@@ -157,6 +163,8 @@ With these contexts defined, `async_accept()` can branch by type. Final input wa
 if context["type"] == "asr_partial":
     self.partial_text = context["data"]["text"]
 ```
+
+While you speak, `self.partial_text` tracks the growing recognition result before `asr_final` arrives.
 
 ## 5. Manage Conversation History
 
@@ -176,7 +184,7 @@ def get_chat_history(self, with_system: bool = False) -> str | None:
 
 ## 6. Update Conversation History and System Instructions
 
-A custom Agent can implement `append_context()` and `update_instructions()` to support clients updating the current session through WebSocket events.
+A custom Agent can implement `append_context()` and `update_instructions()` to support clients updating the current session through WebSocket events. Until these methods exist, the corresponding client requests are rejected.
 
 When a client sends `conversation.item.create` to append context without requesting a response, `append_context()` is called. This method should add the message to the Agent's conversation history for subsequent responses. It also supports restoring an existing conversation one message at a time. Supported roles are `user`, `assistant`, and `system`:
 
@@ -194,12 +202,26 @@ def update_instructions(self, *, instructions: str) -> None:
     self.instructions = instructions
 ```
 
-These examples assume the Agent initializes `self.messages` and `self.instructions` and uses them when generating responses. Adapt the implementation to your own message storage. Appending a `system` message through `append_context()` adds a message at the end of the history; `update_instructions()` replaces the current system instructions. Client requests to append context or update instructions are rejected when the corresponding interface is not implemented.
+These examples assume the Agent initializes `self.messages` and `self.instructions` and uses them when generating responses. Adapt the implementation to your own message storage. Appending a `system` message through `append_context()` adds a message at the end of the history; `update_instructions()` replaces the current system instructions.
+
+After adding both methods, a `session.update` carrying `instructions` is answered with `session.updated`, and `conversation.item.create` items appear in `self.messages`.
 
 ## 7. Tool Calls
 
-See [Introduce Tools](tool_design.md).
+Giving the Agent tools to call is the subject of the next tutorial, [Attach Tools](attach_tools.md).
 
 ## 8. Use Optional Helpers
 
 `Agent` provides `content_to_text()` to convert strings or content blocks returned by LangChain into plain text.
+
+## Next Steps
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Attach Tools →](attach_tools.md)** · Tutorial
+
+-   **[Agent API →](../api/server/xtalk/models/agents/interfaces.md)** · Reference
+
+-   **[Realtime API Protocol: `conversation.item.create` and `session.update` →](../reference/realtime_api.md)** · Reference
+
+</div>

@@ -15,7 +15,7 @@ pip install "xtalk[ali,example] @ git+https://github.com/xcc-zach/xtalk.git@main
 
 Obtain an API key from [AliCloud Bailian Platform](https://bailian.console.aliyun.com/?tab=model#/api-key). We will be using free-tier (currently) service from AliCloud.
 
-> Online service may be unstable and of high latency. We recommend using locally deployed models for better user experience. We recommend ASR models from *SherpaOnnx* ([setup tutorial](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)) and *IndexTTS* ([setup tutorial](https://github.com/Ksuriuri/index-tts-vllm)).See [server config tutorial](tutorial/config_the_service.md) and [sample config for fully local deployment](tutorial/sample_config_for_fully_local_deployment.md) for details. 
+> Online service may be unstable and of high latency. We recommend using locally deployed models for better user experience. We recommend ASR models from *SherpaOnnx* ([setup tutorial](https://k2-fsa.github.io/sherpa/onnx/sense-voice/python-api.html#websocket-server-and-client-example)) and *IndexTTS* ([setup tutorial](https://github.com/Ksuriuri/index-tts-vllm)).See [server config tutorial](tutorial/config_the_service.md) and [Deploy Fully Local](how_to/deploy_fully_local.md) for details. 
 
 ## Step 3. Create the config file
 
@@ -57,3 +57,15 @@ python examples/sample_app/configurable_server.py  --port 7635 --config <PATH_TO
 ```
 
 Finally, our demo is ready at `http://localhost:7635`. View it in the browser!
+
+## Next Steps
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Start the Service from your own script →](tutorial/start_the_service.md)** · Tutorial
+
+-   **[Deploy Fully Local →](how_to/deploy_fully_local.md)** · How-to
+
+-   **[Supported Models →](reference/supported_models.md)** · Reference
+
+</div>

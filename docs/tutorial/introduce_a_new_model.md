@@ -1,11 +1,17 @@
-> **Note**
-> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines an `EchoAgent` in the server file, registers it with `@model`, and replaces the configured `llm_agent` during staged configuration.
+# Introduce a New Model
 
-You may want to introduce a new model for an existing model type, such as a new LLM Agent. This page uses `custom_model.py` as an example and walks through adding a new `EchoAgent`. This agent reads the final ASR text and returns that text directly as the assistant response.
+This tutorial ends with the service answering through a model you registered yourself. You will add an `EchoAgent` for the existing `Agent` model type: it reads the final ASR text and returns that text directly as the assistant response, so every reply repeats what you said.
+
+Before starting, complete [Configure the Service](config_the_service.md) so that you know how `type` and `params` select a model.
+
+> **Note**
+> See [`examples/sample_app/custom_model.py`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/custom_model.py) for the complete example. The example defines `EchoAgent` in the server file, registers it with `@model`, and replaces the configured `llm_agent` during staged configuration.
 
 ## 1. Import the Model Interface and Registration Decorator
 
-`EchoAgent` belongs to the existing `Agent` model type, so it should inherit from `xtalk.model_types.Agent`. Use `@model` to register the implementation class in the model registry. For interface details, see the [Agent API](../api/server/xtalk/models/agents/interfaces.md).
+`EchoAgent` belongs to the existing `Agent` model type, so it inherits from `xtalk.model_types.Agent`. `@model` registers the implementation class in the model registry, which is what lets a config file select it by class name. For interface details, see the [Agent API](../api/server/xtalk/models/agents/interfaces.md).
+
+Add these imports to `server.py`:
 
 ```python
 from typing import Any, AsyncIterator, Iterable
@@ -46,16 +52,13 @@ class EchoAgent(Agent):
 
 ```
 
-Notes:
+`async_accept` is the main async runtime entrypoint; `accept` bridges it for callers that need a synchronous iterator. `clone()` returns a model instance for a new session, which keeps mutable state from being shared across sessions.
 
-- `async_accept` is the main async runtime entrypoint.
-- `clone()` should return a model instance suitable for a new session, avoiding shared mutable state across sessions.
-- For a complete development guide, see [Introduce an LLM Agent](introduce_an_llm_agent.md).
+Defining the class has no visible effect yet: the config still selects `DefaultAgent`. The next step switches to `EchoAgent`.
 
 ## 3. Select the New Model
 
-Change the `llm_agent` `type` to `EchoAgent` and continue using
-`Xtalk.from_config(...)`:
+Change the `llm_agent` `type` to `EchoAgent` and continue using `Xtalk.from_config(...)`:
 
 ```json
 {
@@ -66,8 +69,9 @@ Change the `llm_agent` `type` to `EchoAgent` and continue using
 }
 ```
 
-When the base config should remain reusable, select the registered Python class
-during staged configuration instead:
+Restart the server and speak a sentence. The reply is your own sentence read back by TTS.
+
+When the base config should remain reusable, keep `DefaultAgent` in the file and select the registered Python class during staged configuration instead:
 
 ```python
 def clear_agent_params(config: dict[str, Any]) -> dict[str, Any]:
@@ -85,10 +89,11 @@ xtalk_instance = (
 )
 ```
 
+`clear_agent_params` drops the `DefaultAgent` constructor arguments that `EchoAgent` does not accept. Without it `build()` fails while constructing `EchoAgent` with unexpected keyword arguments.
+
 ## 4. Register Before Creating Xtalk
 
-Because `EchoAgent` is defined in the same server file, Python executes the
-class definition and `@model` registration before reaching `set_model(...)`.
+Because `EchoAgent` is defined in the same server file, Python executes the class definition and `@model` registration before reaching `set_model(...)`.
 
 ```python
 xtalk_instance = (
@@ -100,9 +105,9 @@ xtalk_instance = (
 app = xtalk_instance.create_asgi_app()
 ```
 
-For application startup, see the [Realtime API documentation](realtime_api.md).
+For running the application, see [Connect a Client](connect_a_client.md).
 
-If the model is defined in a separate file, import that file first:
+If the model is defined in a separate file, import that file first so the registration runs before `build()`:
 
 ```python
 from my_app.echo_agent import EchoAgent
@@ -139,3 +144,15 @@ The following config keeps the original ASR and TTS while replacing the agent wi
     }
 }
 ```
+
+## Next Steps
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Introduce an LLM Agent →](introduce_an_llm_agent.md)** · Tutorial
+
+-   **[Supported Models and where each is adapted →](../reference/supported_models.md)** · Reference
+
+-   **[Model `clone()` and `reset()` →](../reference/model_clone_reset.md)** · Reference
+
+</div>

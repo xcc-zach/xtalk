@@ -1,6 +1,14 @@
-X-Talk keeps most models and execution on the server side. The client is mainly responsible for microphone access, audio streaming, WebSocket messaging, and lightweight session logic.
+# Start the Service
+
+This tutorial ends with a browser page that holds a spoken conversation with X-Talk. You will write a one-button client page and a `server.py` that serves it together with the X-Talk Realtime API.
+
+Before starting, complete the [Quickstart](../quickstart.md) so that X-Talk is installed and a `config.json` with working ASR, LLM and TTS models exists.
+
+X-Talk keeps most models and execution on the server side. The client is responsible for microphone access, audio streaming, WebSocket messaging, and lightweight session logic.
 
 ## Client setup
+
+Pick one of the two ways to load the client library. Both produce the same `index.html`: a page with a **Start conversation** button that opens a session to `/v1/realtime?model=xtalk` on the current host.
 
 ### npm
 
@@ -66,9 +74,17 @@ Using a CDN, create `index.html`:
 </html>
 ```
 
+`createSession(wsUrl)` uses default input and output settings. The full option set is listed in [Client Session Config](../reference/client_session_config.md).
+
 ## Server setup
 
-Follow the [Quick Start](../quickstart.md) to install X-Talk and create a JSON configuration file.
+The server has two jobs: return `index.html` at `/`, and expose the X-Talk Realtime API. `Xtalk.from_config()` loads the models from `config.json`, and `create_asgi_app()` turns the instance into an ASGI application that FastAPI mounts. `LifespanManager` forwards FastAPI's startup and shutdown to that mounted application so models are loaded and released with the host.
+
+Install the host dependencies:
+
+```bash
+pip install fastapi uvicorn asgi-lifespan
+```
 
 Create `server.py`:
 
@@ -109,9 +125,9 @@ Start the server:
 uvicorn server:app --host 0.0.0.0 --port 11995
 ```
 
-After startup, open `http://localhost:11995`.
+Uvicorn prints `Uvicorn running on http://0.0.0.0:11995` once the models are loaded. Open `http://localhost:11995` in the browser; the page shows the **Start conversation** button.
 
-After clicking **Start conversation** for the first time, the browser needs to load ONNX Runtime and VAD from public CDNs. Wait for the browser's microphone permission prompt; the conversation starts successfully after the prompt appears and permission is granted.
+Click **Start conversation**. On the first click the browser loads ONNX Runtime and the VAD model from public CDNs, so a few seconds pass before anything happens. Then the browser asks for microphone permission. Grant it; the conversation is running once the prompt is gone. Say something and the reply plays back through the speakers.
 
 ## Full example
 
@@ -122,5 +138,14 @@ For a fuller example including static files, templates, upload UI, session switc
 - [`examples/sample_app/static/js/index.js`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/js/index.js)
 - [`examples/sample_app/templates/index.html`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/templates/index.html)
 
+## Next Steps
 
-See [Realtime API](realtime_api.md) for lifecycle composition and host-owned authentication, knowledge indexing and recording storage. Install FastAPI and asgi-lifespan when using the framework example.
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Configure the Service →](config_the_service.md)** · Tutorial
+
+-   **[Mount in FastAPI under a path prefix →](../how_to/mount_in_fastapi.md)** · How-to
+
+-   **[Client Session Config →](../reference/client_session_config.md)** · Reference
+
+</div>

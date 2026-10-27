@@ -1,0 +1,14 @@
+.md-typeset .next-step-cards > ul > li {
+  position: relative;
+}
+
+.md-typeset .next-step-cards > ul > li a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.md-typeset .next-step-cards > ul > li:focus-within {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}

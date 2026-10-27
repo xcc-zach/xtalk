@@ -1,40 +1,14 @@
+# Bot2Bot
+
 *Experimental feature*
 
-X-Talk can bridge multiple frontend sessions into one shared browser-side audio bus so that bots hear a continuous audio stream instead of only microphone input.
+This tutorial ends with two X-Talk sessions in one browser page talking to each other through a shared audio bus, with the option of your own microphone joining the same stream. You will create the bridge, point two bot sessions at it, feed each bot's spoken output back in, and shut everything down cleanly.
 
-This tutorial documents the current frontend-only bot-to-bot bridge API:
-
-- the shared bus is created with `createAudioBridge()`,
-- each bot session uses `inputConfig.mode = "web_bridge"`,
-- user audio may optionally be captured directly by the bridge,
-- bot output audio is published back into the bridge so other bots can respond.
-
-`createAudioBridge()` is the package-level entrypoint. It detects the current frontend platform and currently resolves to the Web bridge implementation.
-
-## When to use it
-
-Use the web audio bridge when you want one browser page to:
-
-- connect multiple X-Talk sessions at the same time,
-- let bots respond to other bots' spoken output,
-- optionally inject real user microphone audio into the same shared stream,
-- keep the server contract unchanged and do the routing on the frontend.
-
-This API is currently Web-only. It lives under [`frontend/src/platforms`](https://github.com/xcc-zach/xtalk/tree/main/frontend/src/platforms).
-
-## Shared stream model
-
-The bridge maintains one continuous PCM stream at `16000` Hz.
-
-- When nobody is speaking, the stream contains silence.
-- When the user or a bot publishes audio, that audio is mixed into the stream.
-- Every bot configured with `mode: "web_bridge"` keeps receiving frames from the same shared stream, except for audio chunks that bot published itself.
-
-This means the bridge does not route bot audio point-to-point. Instead, all publishers write into one shared stream, and all bridge-backed bot sessions read from it, while each bot's own published audio is filtered out from its local input stream.
+Before starting, complete [Start the Service](start_the_service.md) so that a server is running and `createSession()` works from your page. The design behind the shared stream is explained in [Audio Bridge Model](../explanation/audio_bridge.md).
 
 ## Create the bridge
 
-Import the bridge constructor from the client bundle:
+`createAudioBridge()` is the package-level entrypoint. It detects the current frontend platform and currently resolves to the Web bridge implementation. Import it from the client bundle:
 
 ```ts
 import { createAudioBridge } from "xtalk-client";
@@ -42,38 +16,7 @@ import { createAudioBridge } from "xtalk-client";
 const bridge = createAudioBridge();
 ```
 
-The public bridge instance API is:
-
-```ts
-type WebBridgeParticipantId = string;
-
-interface WebAudioBridgeUserInputConfig {
-    sourceId?: WebBridgeParticipantId;
-    sampleRate?: number;
-    enableVAD?: boolean;
-    enableEnhancer?: boolean;
-    vadRedemptionMs?: number;
-}
-
-interface WebAudioBridgePublishOptions {
-    sourceId: WebBridgeParticipantId;
-    sampleRate: number;
-}
-
-interface WebAudioBridge {
-    openUserInput(config?: WebAudioBridgeUserInputConfig): Promise<void>;
-    closeUserInput(): Promise<void>;
-    publishAudio(
-        pcmChunkInt16: ArrayBuffer,
-        options: WebAudioBridgePublishOptions,
-    ): void;
-    publishSpeechStart(sourceId: WebBridgeParticipantId): void;
-    publishSpeechEnd(sourceId: WebBridgeParticipantId): void;
-    close(): Promise<void>;
-}
-```
-
-The concrete type names shown here describe the current Web implementation. The package root only exports `createAudioBridge()`, not these Web-specific types.
+The bridge now maintains one continuous 16 kHz PCM stream that contains silence until someone publishes audio. Its instance API is listed in [Audio Bridge](../reference/audio_bridge.md).
 
 ## Configure a bot session
 
@@ -101,6 +44,8 @@ The bridge-related input fields are:
 - `bridge`: the `WebAudioBridge` instance to subscribe to.
 - `autoEmitVad`: whether audio published by this bot should also trigger frontend VAD events when re-injected into the shared stream.
 - `vadRedemptionMs`: the speech-end redemption window used when `autoEmitVad` is enabled.
+
+After `await botA.open()`, this bot hears the bridge stream. Nobody has published audio yet, so it hears silence and stays quiet.
 
 ## Publish bot output back into the bridge
 
@@ -163,6 +108,8 @@ With this setup:
 - bot output is written back into that stream,
 - bots can continue replying to other bots' replies.
 
+Once one bot produces a reply, the other hears it and answers, and the exchange keeps going until you stop the sessions.
+
 ## Let the bridge capture real user audio
 
 If you want the browser microphone to also feed the shared stream, open user input directly on the bridge:
@@ -177,13 +124,13 @@ await bridge.openUserInput({
 });
 ```
 
-The meaning of these fields is intentionally aligned with the existing web microphone input config:
+The browser asks for microphone permission at this call. The meaning of these fields is intentionally aligned with the existing web microphone input config:
 
 - `enableVAD`: whether frontend VAD should emit `speechStart` and `speechEnd` for user audio.
 - `enableEnhancer`: whether frontend enhancement runs before user audio is published.
 - `vadRedemptionMs`: how long silence must last before user speech is considered finished.
 
-If you do not want the bridge to capture the user microphone, do not call `openUserInput()`.
+Speak, and both bots hear you. If you do not want the bridge to capture the user microphone, do not call `openUserInput()`.
 
 ## Full example
 
@@ -252,10 +199,14 @@ await botB.close();
 await bridge.close();
 ```
 
-## Current limitations
+After `bridge.close()` resolves, no session reads from the stream and the bots stop answering each other.
 
-- The bridge currently exists only for the Web platform.
-- The shared bus is implemented on the frontend and does not change server-side agent configuration.
-- `participantId` is not a server-side speaker id. It is only a frontend bridge identifier.
-- A bot does not hear the audio it just published back into the bridge itself.
-- When several bots publish output back into the same stream, they may continue responding to each other indefinitely until you stop them.
+## Next Steps
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[Audio Bridge Model: how the shared stream mixes and filters audio →](../explanation/audio_bridge.md)** · Explanation
+
+-   **[Audio Bridge: instance API and limitations →](../reference/audio_bridge.md)** · Reference
+
+</div>

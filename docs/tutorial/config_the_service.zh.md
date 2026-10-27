@@ -1,8 +1,12 @@
 # 配置服务
 
+完成本教程后，服务会运行在您自己编写的配置之上：您将读懂配置文件结构、替换一个模型、在分阶段配置中添加一个 Python 工具，并开启会话录音。
+
+开始前请先完成[启动服务](start_the_service.zh.md)，确保 `server.py` 能用快速开始中的 `config.json` 运行。
+
 ## 配置文件
 
-如[启动服务](start_the_service.zh.md) 中所述，`Xtalk.from_config(path/to/config.json)`读取配置文件来实例化X-Talk。最简配置文件内容如下：
+`Xtalk.from_config(path/to/config.json)` 读取配置文件来实例化 X-Talk。最简配置文件内容如下：
 
 ```json
 {
@@ -31,9 +35,10 @@
 }
 ```
 
-键值如`asr`代表模型类型，`type`代表该模型类型选择的模型，`params`为模型初始化参数。
+键值如 `asr` 代表模型类型，`type` 代表该模型类型选择的模型，`params` 为模型初始化参数。
 
-例如，模型类型为`llm_agent`的`DefaultAgent` 的定义位于 [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py)：
+`params` 直接对应所选类的构造函数。例如，模型类型为 `llm_agent` 的 `DefaultAgent` 定义位于 [`src/xtalk/models/agents/default.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/agents/default.py)：
+
 ```python
 class DefaultAgent(Agent):
     def __init__(
@@ -48,7 +53,8 @@ class DefaultAgent(Agent):
         ...
 ```
 
-为了与初始化参数匹配，配置项应写成这样：
+要让这个 Agent 使用本地部署的 OpenAI 兼容 LLM，把 `llm_agent` 块替换为：
+
 ```json
 {
   "llm_agent": {
@@ -64,16 +70,16 @@ class DefaultAgent(Agent):
 }
 ```
 
-除必需的 `model` 外，其他可选键可以忽略。
+除必需的 `model` 外，其他可选键可以忽略。修改 `config.json` 后重启 `uvicorn`，下一次对话就由本地 LLM 回答。
 
-完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../technical_reference/supported_models.zh.md)。
+完整的模型类型、对应的可选依赖以及其在源码中的适配位置，请参阅[支持的模型](../reference/supported_models.zh.md)。
 
 > **Note**
 > 大多数模型实现都是客户端适配器。您可能还需要按照相应说明启动模型实例本身。
 
 ## 分阶段配置
 
-需要在模型实例化之前为 Agent 添加 Python 工具时，使用 `Xtalk.configure(...)`：
+有些设置是 Python 对象，无法写进 JSON。`Xtalk.configure(...)` 返回一个 builder，允许在模型实例化之前修改已加载的配置。下面用它为 Agent 添加一个 Python 工具：
 
 ```python
 from langchain_core.tools import tool
@@ -100,86 +106,34 @@ xtalk_instance = (
 )
 ```
 
+把 `server.py` 中的 `Xtalk.from_config(...)` 一行替换为这个 builder 并重启。此时问“十二乘七是多少”，回复中的结果由 `multiply` 计算得出。
+
 添加 Agent 工具也可以使用专用方法 `.add_agent_tools([multiply])`。
 
 ## 自定义服务行为
 
-此外，您还可以通过以下配置自定义服务行为，例如是否将会话音频保存到 `logs/` 下：
+模型类型之外的键用于配置服务本身。例如，把每个会话的音频保存到 `logs/` 下：
+
 ```json
     "service_config": {
         "recording": true
     }
 ```
 
-完整的服务配置项列表，请参阅[所有服务配置项](service_config.zh.md)。
+下一次对话结束后，`logs/` 中会出现该会话的录音。
 
+完整的服务配置项列表，请参阅[服务配置项](../reference/service_config.zh.md)。
 
-## 前端配置
+## 下一步
 
-前端通过 `createSession(wsUrl, config)` 接收一个 `SessionConfig`。当前支持三类配置：
+<div class="grid cards next-step-cards" markdown>
 
-- `inputConfig`
-- `outputConfig`
-- `serviceURLs`
+-   **[连接客户端 →](connect_a_client.zh.md)** · Tutorial
 
-例如：
+-   **[服务配置项 →](../reference/service_config.zh.md)** · Reference
 
-```ts
-const session = createSession(wsUrl, {
-    inputConfig: {
-        sampleRate: 16000,
-        enableVAD: true,
-        enableEnhancer: true,
-        vadRedemptionMs: 500,
-        frontendUtilitiesBaseUrl: "/xtalk/frontend-utilities",
-    },
-    outputConfig: {
-        sampleRate: 48000,
-    },
-    serviceURLs: {
-        login: "/api/auth/login",
-        sessions: "/api/sessions",
-        sessionDetail: (sessionId) => `/api/sessions/${sessionId}`,
-        upload: "/api/upload",
-    },
-});
-```
+-   **[支持的模型 →](../reference/supported_models.zh.md)** · Reference
 
-### inputConfig
+-   **[完全本地部署 →](../how_to/deploy_fully_local.zh.md)** · How-to
 
-`inputConfig` 用于配置前端输入音频会话。普通浏览器麦克风模式下，当前最常用的是这些字段：
-
-- `sampleRate`
-  输入音频采样率。默认值为 `16000`。
-- `enableVAD`
-  是否启用前端 VAD。默认值为 `true`。
-- `enableEnhancer`
-  是否启用前端语音增强。默认值为 `true`。
-- `vadRedemptionMs`
-  VAD 的 redemption 窗口，单位为毫秒，默认值为`500`。
-- `frontendUtilitiesBaseUrl`
-  浏览器端 ONNX Runtime、VAD 和 FastEnhancer 资源的基础地址。默认值为 `/xtalk/frontend-utilities`。如果服务端对应路径没有 ONNX Runtime 或 VAD 资源，前端会改从公共 CDN 加载。
-
-### outputConfig
-
-`outputConfig` 当前主要支持：
-
-- `sampleRate`
-  输出播放采样率。默认值为 `48000`。
-
-### serviceURLs
-
-`serviceURLs` 用于覆盖 服务端HTTP 接口地址，当前支持：
-
-- `login`
-- `sessions`
-- `sessionDetail`
-  可以是固定 URL，也可以是 `(sessionId) => URL` 形式的函数。
-- `upload`
-
-如果不显式传入，前端会根据 `wsUrl` 自动推导默认地址：
-
-- `POST /api/auth/login`
-- `GET /api/sessions`
-- `GET /api/sessions/{session_id}`
-- `POST /api/upload`
+</div>

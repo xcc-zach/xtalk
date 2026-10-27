@@ -1,6 +1,14 @@
-X-Talk 的大多数模型与执行逻辑都运行在服务端。客户端主要负责访问麦克风、传输音频、收发 WebSocket 消息，以及处理轻量级的会话逻辑。
+# 启动服务
+
+完成本教程后，您会得到一个可以与 X-Talk 进行语音对话的浏览器页面。您将编写一个只有一个按钮的客户端页面，以及一个同时提供该页面和 X-Talk Realtime API 的 `server.py`。
+
+开始前请先完成[快速开始](../quickstart.zh.md)，确保已安装 X-Talk，并且已有一个配置了可用 ASR、LLM 和 TTS 模型的 `config.json`。
+
+X-Talk 的大多数模型与执行逻辑都运行在服务端。客户端负责访问麦克风、传输音频、收发 WebSocket 消息，以及处理轻量级的会话逻辑。
 
 ## 客户端接入
+
+从下面两种加载客户端库的方式中任选一种。两者生成的 `index.html` 相同：页面上有一个“开始对话”按钮，点击后向当前主机的 `/v1/realtime?model=xtalk` 建立会话。
 
 ### npm
 
@@ -66,9 +74,17 @@ npm install xtalk-client
 </html>
 ```
 
+`createSession(wsUrl)` 使用默认的输入和输出设置。完整配置项见[客户端会话配置](../reference/client_session_config.zh.md)。
+
 ## 服务端接入
 
-参考[快速开始](../quickstart.zh.md)安装 X-Talk 并创建 JSON 配置文件。
+服务端做两件事：在 `/` 返回 `index.html`，并提供 X-Talk Realtime API。`Xtalk.from_config()` 根据 `config.json` 加载模型，`create_asgi_app()` 把实例变成一个可由 FastAPI 挂载的 ASGI 应用。`LifespanManager` 把 FastAPI 的启动和关闭事件转发给这个被挂载的应用，使模型随宿主一起加载和释放。
+
+安装宿主依赖：
+
+```bash
+pip install fastapi uvicorn asgi-lifespan
+```
 
 创建 `server.py`：
 
@@ -109,9 +125,9 @@ app.mount("/", realtime_app)
 uvicorn server:app --host 0.0.0.0 --port 11995
 ```
 
-启动后访问 `http://localhost:11995`。
+模型加载完成后，uvicorn 会打印 `Uvicorn running on http://0.0.0.0:11995`。在浏览器中打开 `http://localhost:11995`，页面显示“开始对话”按钮。
 
-首次点击“开始对话”后，浏览器需要从公共 CDN 加载 ONNX Runtime 和 VAD。请等待浏览器弹出麦克风权限请求；弹出并完成授权后，方为对话启动成功。
+点击“开始对话”。首次点击时，浏览器需要从公共 CDN 加载 ONNX Runtime 和 VAD 模型，因此会有几秒钟没有反应。随后浏览器弹出麦克风权限请求；授权后提示消失，对话即已开始。说一句话，回复会通过扬声器播放出来。
 
 ## 完整示例
 
@@ -121,3 +137,15 @@ uvicorn server:app --host 0.0.0.0 --port 11995
 - [`examples/sample_app/static/css/index.css`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/css/index.css)
 - [`examples/sample_app/static/js/index.js`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/static/js/index.js)
 - [`examples/sample_app/templates/index.html`](https://github.com/xcc-zach/xtalk/blob/main/examples/sample_app/templates/index.html)
+
+## 下一步
+
+<div class="grid cards next-step-cards" markdown>
+
+-   **[配置服务 →](config_the_service.zh.md)** · Tutorial
+
+-   **[以路径前缀挂载到 FastAPI →](../how_to/mount_in_fastapi.zh.md)** · How-to
+
+-   **[客户端会话配置 →](../reference/client_session_config.zh.md)** · Reference
+
+</div>
