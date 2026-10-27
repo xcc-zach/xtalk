@@ -1,0 +1,67 @@
+name: Block Large Files
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+jobs:
+  check-file-size:
+    # Branch deletions also fire push events; there is nothing to check.
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check file sizes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # 1MB = 1 * 1024 * 1024 = 1048576 bytes
+          limit=1048576
+          zero=0000000000000000000000000000000000000000
+
+          # Commits to check: everything reachable from head but not from base.
+          # A new branch has no base (all zeros), and a force push's old tip is
+          # usually not fetched; in both cases fall back to what no other
+          # branch on the remote already contains.
+          if [ "$BASE_SHA" != "$zero" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            range=("$HEAD_SHA" --not "$BASE_SHA")
+            echo "🔍 Checking files introduced in ${BASE_SHA:0:12}..${HEAD_SHA:0:12}..."
+          else
+            range=("$HEAD_SHA" --not --exclude="origin/$BRANCH" --exclude=origin/HEAD --remotes=origin)
+            echo "🔍 No usable base; checking files in ${HEAD_SHA:0:12} not present on any other remote branch..."
+          fi
+
+          # Every blob in that range, i.e. all file contents brought in across
+          # the whole history (including files added in one commit and deleted
+          # in a later one). Run rev-list outside the process substitution so
+          # that `set -e` catches its failures instead of silently passing.
+          objects=$(git rev-list --objects "${range[@]}")
+          mapfile -t large_blobs < <(
+            printf '%s\n' "$objects" \
+              | git cat-file --batch-check='%(objecttype) %(objectsize) %(objectname) %(rest)' \
+              | awk -v limit="$limit" '$1 == "blob" && $2 >= limit'
+          )
+
+          if [ "${#large_blobs[@]}" -eq 0 ]; then
+            echo "✔ All files are smaller than 1MB."
+            exit 0
+          fi
+
+          for entry in "${large_blobs[@]}"; do
+            read -r _ size sha path <<< "$entry"
+            commits=$(git log --format=%h --diff-filter=AM --find-object="$sha" "${range[@]}" | paste -sd' ' -)
+            echo "❌ ERROR: $path is too large ($size bytes >= 1MB), introduced in commit(s): $commits"
+          done
+
+          echo "Uploading files of 1MB or larger is prohibited, even if they are deleted in later commits."
+          echo "Please rewrite the history to drop them (e.g. interactive rebase)."
+          exit 1
