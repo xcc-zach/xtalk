@@ -199,3 +199,7 @@ skills-lock.json
 .vscode/
 
 .mcp.json
+
+kkspec/.local/
+
+kkspec/.table/
