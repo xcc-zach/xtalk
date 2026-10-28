@@ -173,7 +173,11 @@ class AudioConsumer:
             self._ended = False
             self._paused = False
             self._recognition_failed = False
-            self._preview_revision = 0
+            if item_id != self._item_id:
+                # Resuming the same input item after a pause must keep the
+                # preview revision monotonic, otherwise clients drop the
+                # resumed previews as stale.
+                self._preview_revision = 0
             self._item_id = item_id
             self._turn_id = turn_id
             self._segment_id = segment_id

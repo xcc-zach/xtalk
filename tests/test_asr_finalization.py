@@ -76,6 +76,44 @@ class _BlankFinalASR(ASR):
         return _BlankFinalASR()
 
 
+class _GrowingASR(ASR):
+    """Return a longer transcript on every streaming call."""
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    def recognize(self, audio: bytes) -> str:
+        """Return an empty one-shot recognition result."""
+
+        del audio
+        return ""
+
+    def recognize_stream(
+        self,
+        audio: bytes,
+        *,
+        is_final: bool = False,
+        chat_history: str | None = None,
+    ) -> str:
+        """Append one more token for each streaming recognition call."""
+
+        del audio
+        del is_final
+        del chat_history
+        self._calls += 1
+        return "词" * self._calls
+
+    def reset(self) -> None:
+        """Start the next utterance from an empty transcript."""
+
+        self._calls = 0
+
+    def clone(self) -> "_GrowingASR":
+        """Return a fresh growing recognizer."""
+
+        return _GrowingASR()
+
+
 class _BlockingASR(ASR):
     """Hold a streaming recognition result until the test releases it."""
 
@@ -182,6 +220,36 @@ class ASRFinalizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(events[1], ASRResultFinal)
         self.assertEqual(events[0].text, _BlankFinalASR.PARTIAL_TEXT)
         self.assertEqual(events[1].text, _BlankFinalASR.PARTIAL_TEXT)
+
+    async def test_resumed_item_keeps_preview_revision_monotonic(self) -> None:
+        """Continue preview revisions when the same input item resumes after a pause."""
+
+        event_bus = EventBus(enable_history=True)
+        consumer = AudioConsumer(
+            event_bus=event_bus,
+            session_id="session",
+            models=Models({ASR: _GrowingASR()}),
+        )
+        self.addAsyncCleanup(consumer.shutdown)
+
+        await consumer.start(turn_id=1, item_id="item_1")
+        await consumer._recognize_and_publish(b"segment-one")
+        await consumer.pause()
+        await consumer.start(turn_id=1, item_id="item_1")
+        await consumer._recognize_and_publish(b"segment-two")
+        await consumer.end()
+        await consumer.start(turn_id=2, item_id="item_2")
+        await consumer._recognize_and_publish(b"next-turn")
+
+        partials = [
+            event for event in event_bus.get_history()
+            if isinstance(event, ASRResultPartial)
+        ]
+        self.assertEqual(
+            [(event.item_id, event.revision) for event in partials],
+            [("item_1", 1), ("item_1", 2), ("item_1", 3), ("item_2", 1)],
+        )
+        self.assertTrue(partials[1].speech_pause)
 
     async def test_abort_drops_in_flight_recognition_result(self) -> None:
         """Do not publish stale speech text after a text turn aborts audio."""
