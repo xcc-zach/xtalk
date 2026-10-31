@@ -484,7 +484,8 @@ class Xtalk:
                 await send({"type": "websocket.close", "code": 1008})
                 return
             connection = RealtimeConnection(receive, send)
-            await connection.accept()
+            offered = scope.get("subprotocols", [])
+            await connection.accept("realtime" if "realtime" in offered else None)
             task = asyncio.current_task()
             tasks.add(task)
             waiter = None

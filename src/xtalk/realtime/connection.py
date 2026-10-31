@@ -23,9 +23,19 @@ class RealtimeConnection:
         self._sender = None
         self._disconnected = False
 
-    async def accept(self):
-        """Accept the connection and start its ordered output task."""
-        await self._send({"type": "websocket.accept"})
+    async def accept(self, subprotocol: str | None = None):
+        """Accept the connection and start its ordered output task.
+
+        Parameters
+        ----------
+        subprotocol : str | None, optional
+            Subprotocol selected from the client's offer. Browsers fail the
+            handshake when they offered subprotocols and none is selected.
+        """
+        message = {"type": "websocket.accept"}
+        if subprotocol is not None:
+            message["subprotocol"] = subprotocol
+        await self._send(message)
         self._sender = asyncio.create_task(self._drain())
 
     async def receive(self):
