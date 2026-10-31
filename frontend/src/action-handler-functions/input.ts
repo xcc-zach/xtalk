@@ -1,8 +1,17 @@
 import type { ActionToFunctionMap } from "./handler-types";
 import { onVadSpeechStart, onVadSpeechEnd } from "./utils";
+import type { BaseEncoding } from "../bases/encoding";
 import { createEncoding } from "../encoding";
 
-const encoding = createEncoding();
+let encoding: BaseEncoding | null = null;
+
+/** Create the platform encoder on first use so importing stays platform-free. */
+function getEncoding(): BaseEncoding {
+    if (!encoding) {
+        encoding = createEncoding();
+    }
+    return encoding;
+}
 
 const inputMap: ActionToFunctionMap = {
     "xtalk.audio.mix.delta": async (data, websocket, conversation) => {
@@ -20,7 +29,7 @@ const inputMap: ActionToFunctionMap = {
             return;
         }
         const sampleRate = typeof data?.sample_rate === "number" ? data.sample_rate : 48000;
-        const pcmChunkInt16 = encoding.decodeBase64(audioBase64);
+        const pcmChunkInt16 = getEncoding().decodeBase64(audioBase64);
         conversation.emitFullAudioChunk(pcmChunkInt16, sampleRate);
     }
 };

@@ -6,7 +6,7 @@
 
 # Interface: Session
 
-Defined in: session/types.ts:40
+Defined in: session/types.ts:42
 
 Public session controller exposed by the frontend entrypoint.
 
@@ -16,7 +16,7 @@ Public session controller exposed by the frontend entrypoint.
 
 > **muted**: `boolean`
 
-Defined in: session/types.ts:80
+Defined in: session/types.ts:82
 
 Whether microphone capture is currently muted.
 
@@ -26,7 +26,7 @@ Whether microphone capture is currently muted.
 
 > `readonly` **state**: `object`
 
-Defined in: session/types.ts:58
+Defined in: session/types.ts:60
 
 Current conversation state snapshot.
 
@@ -104,7 +104,7 @@ Current conversation state snapshot.
 
 > **changeVoice**(`voiceName`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:86
+Defined in: session/types.ts:88
 
 Requests a voice change for subsequent assistant synthesis.
 
@@ -126,7 +126,7 @@ Target voice identifier.
 
 > **close**(): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:48
+Defined in: session/types.ts:50
 
 Closes the active runtime connection and audio resources.
 
@@ -140,7 +140,7 @@ Closes the active runtime connection and audio resources.
 
 > **onFullAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:76
+Defined in: session/types.ts:78
 
 Registers a callback for merged full-duplex PCM chunks.
 
@@ -162,7 +162,7 @@ Full audio listener.
 
 > **onInputAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:64
+Defined in: session/types.ts:66
 
 Registers a callback for microphone input PCM chunks.
 
@@ -184,7 +184,7 @@ Input audio listener.
 
 > **onOutputAudioChunk**(`callback`): `void`
 
-Defined in: session/types.ts:70
+Defined in: session/types.ts:72
 
 Registers a callback for speaker output PCM chunks.
 
@@ -206,7 +206,7 @@ Output audio listener.
 
 > **onStateChange**(`callback`): `void`
 
-Defined in: session/types.ts:54
+Defined in: session/types.ts:56
 
 Registers a callback that runs whenever the conversation state changes.
 
@@ -228,7 +228,7 @@ State change listener.
 
 > **open**(): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:44
+Defined in: session/types.ts:46
 
 Opens the Realtime connection and its audio resources.
 
@@ -242,7 +242,7 @@ Opens the Realtime connection and its audio resources.
 
 > **restoreHistory**(`messages`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:97
+Defined in: session/types.ts:99
 
 Injects external text history without generating a reply.
 
@@ -262,7 +262,7 @@ Injects external text history without generating a reply.
 
 > **sendText**(`text`): `Promise`&lt;`void`&gt;
 
-Defined in: session/types.ts:95
+Defined in: session/types.ts:97
 
 Submits a finalized text turn through the connected realtime session.
 

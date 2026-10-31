@@ -19,7 +19,9 @@ import {
 export {
     createAudioBridge,
     getPlatformRuntime,
+    registerPlatformRuntime,
 };
+export type { PlatformRuntime };
 export type {
     WebAudioBridge,
     WebAudioBridgePublishOptions,
@@ -28,14 +30,40 @@ export type {
     WebBridgeParticipantId,
 } from "./web-audio-bridge";
 
+/**
+ * Factories that supply every platform-specific resource used by a session.
+ *
+ * Register a custom runtime with {@link registerPlatformRuntime} to run the
+ * client outside a browser, for example inside automated tests.
+ */
 type PlatformRuntime = {
+    /** Creates the microphone or bridge-backed audio source. */
     createInputAudioSession(config: InputAudioSessionConfig): BaseInputAudioSession;
+    /** Creates the speaker-backed playback sink. */
     createOutputAudioSession(config: OutputAudioSessionConfig): BaseOutputAudioSession;
+    /** Creates the transport used for the Realtime connection. */
     createWebSocket(url: string | URL, protocols?: string | string[]): BaseWebSocket;
+    /** Resolves after the given delay. */
     delay(milliseconds: number): Promise<void>;
+    /** Creates the scheduler used to defer observer callbacks. */
     createDeferredTaskScheduler(): BaseDeferredTaskScheduler;
+    /** Creates the Base64 and PCM encoder. */
     createEncoding(): BaseEncoding;
 };
+
+let registeredRuntime: PlatformRuntime | null = null;
+
+/**
+ * Use an explicit platform runtime instead of browser detection.
+ *
+ * Call this before creating a session. A later call replaces the runtime for
+ * sessions created afterwards; sessions already created keep their resources.
+ *
+ * @param runtime Platform runtime supplying every session resource.
+ */
+function registerPlatformRuntime(runtime: PlatformRuntime): void {
+    registeredRuntime = runtime;
+}
 
 enum Platform {
     Web,
@@ -74,6 +102,9 @@ const WEB_PLATFORM_RUNTIME: PlatformRuntime = {
 };
 
 function getPlatformRuntime(): PlatformRuntime {
+    if (registeredRuntime) {
+        return registeredRuntime;
+    }
     switch (detectPlatform()) {
         case Platform.Web:
             return WEB_PLATFORM_RUNTIME;

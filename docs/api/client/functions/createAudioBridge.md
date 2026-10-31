@@ -8,7 +8,7 @@
 
 > **createAudioBridge**(): `WebAudioBridge`
 
-Defined in: platforms/index.ts:90
+Defined in: platforms/index.ts:121
 
 Create an audio bridge for the detected frontend platform.
 

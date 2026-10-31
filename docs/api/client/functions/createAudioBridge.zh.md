@@ -8,7 +8,7 @@
 
 > **createAudioBridge**(): `WebAudioBridge`
 
-定义于： platforms/index.ts:90
+定义于： platforms/index.ts:121
 
 为检测到的前端平台创建音频桥接器。
 

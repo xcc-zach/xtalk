@@ -6,7 +6,7 @@
 
 # 接口： Session
 
-定义于： session/types.ts:40
+定义于： session/types.ts:42
 
 前端入口导出的公共会话控制器。
 
@@ -16,7 +16,7 @@
 
 > **muted**: `boolean`
 
-定义于： session/types.ts:80
+定义于： session/types.ts:82
 
 麦克风采集当前是否静音。
 
@@ -26,7 +26,7 @@
 
 > `readonly` **state**: `object`
 
-定义于： session/types.ts:58
+定义于： session/types.ts:60
 
 当前对话状态快照。
 
@@ -104,7 +104,7 @@
 
 > **changeVoice**(`voiceName`): `Promise`&lt;`void`&gt;
 
-定义于： session/types.ts:86
+定义于： session/types.ts:88
 
 请求修改后续助手语音合成使用的音色。
 
@@ -126,7 +126,7 @@
 
 > **close**(): `Promise`&lt;`void`&gt;
 
-定义于： session/types.ts:48
+定义于： session/types.ts:50
 
 关闭当前连接并释放音频资源。
 
@@ -140,7 +140,7 @@
 
 > **onFullAudioChunk**(`callback`): `void`
 
-定义于： session/types.ts:76
+定义于： session/types.ts:78
 
 注册合并后的全双工 PCM 音频块回调。
 
@@ -162,7 +162,7 @@
 
 > **onInputAudioChunk**(`callback`): `void`
 
-定义于： session/types.ts:64
+定义于： session/types.ts:66
 
 注册麦克风输入 PCM 音频块回调。
 
@@ -184,7 +184,7 @@
 
 > **onOutputAudioChunk**(`callback`): `void`
 
-定义于： session/types.ts:70
+定义于： session/types.ts:72
 
 注册扬声器输出 PCM 音频块回调。
 
@@ -206,7 +206,7 @@
 
 > **onStateChange**(`callback`): `void`
 
-定义于： session/types.ts:54
+定义于： session/types.ts:56
 
 注册对话状态变更回调。
 
@@ -228,7 +228,7 @@
 
 > **open**(): `Promise`&lt;`void`&gt;
 
-定义于： session/types.ts:44
+定义于： session/types.ts:46
 
 打开 Realtime 连接及音频资源。
 
@@ -242,7 +242,7 @@
 
 > **restoreHistory**(`messages`): `Promise`&lt;`void`&gt;
 
-定义于： session/types.ts:97
+定义于： session/types.ts:99
 
 注入外部文本历史，不触发回复。
 
@@ -262,7 +262,7 @@
 
 > **sendText**(`text`): `Promise`&lt;`void`&gt;
 
-定义于： session/types.ts:95
+定义于： session/types.ts:97
 
 通过已连接的 Realtime 会话提交完整文本轮次。
 
