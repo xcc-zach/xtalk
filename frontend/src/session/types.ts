@@ -22,6 +22,8 @@ type AudioChunkCallback = (pcmChunkInt16: ArrayBuffer, sampleRate: number) => vo
  * Configuration overrides used when creating a session.
  */
 interface SessionConfig {
+    /** Known mode lets hosts skip application history for a fresh Live call. */
+    mode?: "cascade" | "end_to_end";
     /** Request binary PCM output; defaults to compatible Base64 JSON. */
     outputAudioEncoding?: "base64" | "binary_pcm";
     /**

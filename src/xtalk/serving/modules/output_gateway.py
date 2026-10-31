@@ -11,13 +11,17 @@ import numpy as np
 import soxr
 
 from ...models import Models
-from ..event_bus import EventBus
+from ..event_bus import EventBus, EventDispatchMode
 from ..events import (
     ASRFailed,
     ASRResultFinal,
     ASRResultPartial,
+    AudioStreamControlRequested,
     BinaryAudioHeader,
     CaptionUpdated,
+    EndToEndAudioChunkReady,
+    EndToEndSignal,
+    EndToEndTranscriptDelta,
     ErrorOccurred,
     FullAudioFrameReady,
     LatencyMetricsUpdated,
@@ -122,6 +126,56 @@ class OutputGateway(EventListenerMixin):
                 },
             },
         }
+
+        self._stream_transport_failed = False
+        profile = self.config.get("_end_to_end_profile")
+        if profile:
+            self._session["xtalk"]["end_to_end"] = profile
+            self._session["audio"]["input"]["format"]["rate"] = profile["media"]["sample_rate"]
+            self._session["audio"]["output"]["format"]["rate"] = profile["media"]["sample_rate"]
+            self._session["audio"]["input"]["turn_detection"] = None
+            self._session["audio"]["output"]["voice"] = profile["metadata"].get("voice", "default")
+
+    async def _report_stream_failure(self, stream_id: str) -> None:
+        """Notify the call owner once when a Realtime write fails."""
+        if self._stream_transport_failed: return
+        self._stream_transport_failed = True
+        await self.event_bus.publish(AudioStreamControlRequested(
+            session_id=self.session_id, stream_id=stream_id, command="_transport_failure"),
+            mode=EventDispatchMode.WAIT_UNTIL_COMPLETE)
+
+    async def _stream_signal(self, event: EndToEndSignal) -> None:
+        """Send a normalized Live control through the ordered Realtime transport."""
+        actions = {"audio_stream_start": "xtalk.audio_stream.started", "audio_stream_end": "xtalk.audio_stream.ended",
+                   "end_to_end_error": "xtalk.audio_stream.error"}
+        try:
+            await self.send_signal({"type": actions[event.action], **event.data})
+        except Exception:
+            await self._report_stream_failure(event.data["stream_id"])
+            raise
+
+    async def _stream_audio(self, event: EndToEndAudioChunkReady) -> None:
+        """Deliver continuous PCM using the negotiated JSON or binary envelope."""
+        try:
+            if self._session["xtalk"]["output_audio_encoding"] == "base64":
+                await self.send_signal({"type": "xtalk.audio_stream.delta", "stream_id": event.stream_id,
+                                        "delta": base64.b64encode(event.audio_data).decode("ascii")})
+            else:
+                header = json.dumps({"version": 1, "type": "xtalk.audio_stream.delta", "event_id": "evt_" + uuid4().hex,
+                                     "stream_id": event.stream_id}, separators=(",", ":")).encode()
+                await self.websocket.send_bytes(len(header).to_bytes(4, "big") + header + event.audio_data)
+        except Exception:
+            await self._report_stream_failure(event.stream_id)
+            raise
+
+    async def _stream_transcript(self, event: EndToEndTranscriptDelta) -> None:
+        """Preserve independent transcript fragments in the Realtime extension."""
+        try:
+            await self.send_signal({"type": "xtalk.transcript.delta", **{
+                key: value for key, value in vars(event).items() if key not in {"session_id", "timestamp"}}})
+        except Exception:
+            await self._report_stream_failure(event.stream_id)
+            raise
 
     # ── WebSocket helpers ───────────────────────────────────────────
 
@@ -235,7 +289,12 @@ class OutputGateway(EventListenerMixin):
 
     async def _send_session_created(self):
         """Announce a ready temporary Realtime session."""
-        await self.send_signal({"type": "session.created", "session": self._session})
+        try:
+            await self.send_signal({"type": "session.created", "session": self._session})
+        except Exception:
+            profile = self.config.get("_end_to_end_profile")
+            if profile is None: raise
+            await self._report_stream_failure(profile["stream_id"])
 
     @staticmethod
     def _map_playback(event):

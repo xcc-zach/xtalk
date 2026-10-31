@@ -13,6 +13,8 @@ type BaseWebSocketMessageEvent = {
 
 type BaseWebSocketEventType = 'open' | 'message' | 'close' | 'error';
 abstract class BaseWebSocket {
+    /** Unsent transport bytes when reported by the platform. */
+    get bufferedAmount(): number { return 0; }
     abstract ready(): boolean;
 
     abstract send(data: string | ArrayBuffer): void;
