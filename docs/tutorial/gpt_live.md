@@ -24,6 +24,14 @@ cp examples/sample_app/configs/openai_gpt_live.example.json \
 
 Set `end_to_end.params.api_key` in the local config to your API key. GPTLive reads this field exclusively. The local config is Git-ignored; the `.example.json` template contains a placeholder. The key stays on the server.
 
+To test a key with an ordinary GPT call, copy the placeholder script:
+
+```bash
+cp examples/sample_app/test_openai_key.example.py examples/sample_app/test_openai_key.py
+```
+
+Fill the copied script's `api_key` and run it with Python. The local `test_openai_key.py` is Git-ignored; commit only the placeholder templates.
+
 ```bash
 PYTHONPATH=src python examples/sample_app/configurable_server.py \
   --port 7636 \

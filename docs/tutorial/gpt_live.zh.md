@@ -24,6 +24,14 @@ cp examples/sample_app/configs/openai_gpt_live.example.json \
 
 在本地配置的 `end_to_end.params.api_key` 中填写 API key。GPTLive 仅从该字段读取密钥。本地配置已加入 Git 忽略；`.example.json` 模板使用占位符。密钥保留在服务端。
 
+如需通过普通 GPT 调用测试密钥，先复制占位脚本：
+
+```bash
+cp examples/sample_app/test_openai_key.example.py examples/sample_app/test_openai_key.py
+```
+
+在复制后的脚本中填写 `api_key`，用 Python 运行。本地 `test_openai_key.py` 已加入 Git 忽略；提交时只包含使用占位符的模板。
+
 ```bash
 PYTHONPATH=src python examples/sample_app/configurable_server.py \
   --port 7636 \
