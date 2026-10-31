@@ -79,6 +79,31 @@ If you are unsure whether an idea fits the current roadmap, feel free to open an
    * Please ensure the base branch is set to `dev`, not `main`.
    * PRs targeting `main` may be asked to retarget `dev`.
 
+## Running the Tests
+
+Both suites exercise the real conversation pipeline with mock models, so they
+run without GPUs, model services or sound cards.
+
+Backend (from the repository root):
+
+```bash
+pip install -e ".[test]"
+python -m pytest
+```
+
+Frontend (requires Node 22.18 or newer and the Python backend installed as
+above, because the tests start `python -m tests.support.server` as a mock
+backend; set `XTALK_PYTHON` to pick the interpreter):
+
+```bash
+cd frontend
+npm ci
+npm test
+```
+
+`npm test` builds `dist/` first and then runs `tests/**/*.test.ts` with the
+Node test runner.
+
 ## Licensing
 
 By contributing, you agree that your contributions will be licensed under the **Apache License 2.0**, consistent with the project license.
