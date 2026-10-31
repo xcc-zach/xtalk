@@ -19,6 +19,8 @@ from ..events import (
     ASRResultFinal,
     ASRResultPartial,
     AudioFrameReceived,
+    AudioStreamControlRequested,
+    AudioStreamReady,
     ClientEvent,
     ClockSyncReceived,
     ConversationItemCreate,
@@ -475,7 +477,7 @@ class InputGateway(EventListenerMixin):
         """
         message = {}
         try:
-            if len(text_message.encode()) > 1024 * 1024:
+            if len(text_message.encode()) > (65536 if self.config.get("_end_to_end_profile") else 1024 * 1024):
                 raise ValueError("Message exceeds one MiB")
             message = json.loads(text_message)
             if not isinstance(message, dict):
@@ -527,6 +529,33 @@ class InputGateway(EventListenerMixin):
                 error_type="server_error",
             )
 
+    async def _unsupported_live_input(self, message):
+        """Reject controls outside the negotiated single-call capabilities."""
+        await self._error("unsupported_capability", "Control is unavailable in single-call Live", message.get("event_id"))
+
+    async def _handle_stream_control(self, message):
+        """Validate stream identity and dispatch one Live readiness or control event."""
+        profile = self.config.get("_end_to_end_profile")
+        if profile is None:
+            raise ValueError("Continuous streams require an EndToEnd model")
+        kind = message["type"].rsplit(".", 1)[1]
+        allowed = {"type", "event_id", "stream_id"}
+        if kind == "progress": allowed.add("played_samples")
+        if kind == "input_muted": allowed.add("muted")
+        if message.keys() - allowed or message.get("stream_id") != profile["stream_id"]:
+            raise ValueError("Invalid or stale audio stream control")
+        if kind == "ready":
+            if not self.config.get("_live_protocol_negotiated"):
+                raise ValueError("Rebuild and refresh the frontend: Live protocol version 2 required")
+            event = AudioStreamReady(session_id=self.session_id, stream_id=profile["stream_id"])
+        else:
+            if kind == "input_muted" and type(message.get("muted")) is not bool:
+                raise ValueError("muted must be boolean")
+            command = {"progress": "audio_stream_progress", "input_muted": "set_input_muted", "close": "close_audio_stream"}[kind]
+            event = AudioStreamControlRequested(session_id=self.session_id, stream_id=profile["stream_id"], command=command,
+                                                data={key: message[key] for key in ("played_samples", "muted") if key in message})
+        await self.event_bus.publish(event, mode=EventDispatchMode.WAIT_UNTIL_COMPLETE)
+
     async def _handle_audio_append(self, message):
         """Handle the registered input_audio_buffer.append input.
 
@@ -554,6 +583,13 @@ class InputGateway(EventListenerMixin):
         """
         if len(pcm) % 2 or self._buffered_bytes + len(pcm) > 24000 * 2 * 60:
             raise ValueError("Invalid PCM or audio buffer exceeds 60 seconds")
+        if self.config.get("_end_to_end_profile"):
+            await self.event_bus.publish(
+                AudioFrameReceived(session_id=self.session_id, audio_data=pcm,
+                                   sample_rate=self.input_sample_rate),
+                mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
+            )
+            return
         self._buffered_bytes += len(pcm)
         converted = self._resampler.resample_chunk(
             np.frombuffer(pcm, dtype="<i2")
@@ -781,6 +817,24 @@ class InputGateway(EventListenerMixin):
                 else:
                     target[key] = value
 
+        if self.config.get("_end_to_end_profile"):
+            if update.get("xtalk", {}).get("end_to_end_protocol") != 2:
+                raise ValueError("Rebuild and refresh the frontend: Live protocol version 2 required")
+            merge(candidate, update)
+            candidate = _SESSION_ADAPTER.validate_python(candidate)
+            comparable = copy.deepcopy(candidate)
+            comparable["xtalk"] = current["xtalk"]
+            if comparable != current or candidate["xtalk"].get("end_to_end") != current["xtalk"]["end_to_end"]:
+                raise ValueError("Live media, instructions, voice and capabilities are fixed for this call")
+            if self.config.get("_live_protocol_negotiated") and candidate["xtalk"]["output_audio_encoding"] != current["xtalk"]["output_audio_encoding"]:
+                raise ValueError("Cannot change audio encoding during a Live call")
+            self._service.output_gateway.set_session_configuration(candidate)
+            self.config["_live_protocol_negotiated"] = True
+            await self._emit("session.updated", session=candidate)
+            return
+        for direction in ("input", "output"):
+            if update.get("audio", {}).get(direction, {}).get("format", {}).get("rate", 24000) != 24000:
+                raise ValueError("Cascade Realtime audio requires 24000 Hz")
         # Re-enabling VAD restores the documented defaults before merging.
         detection_patch = update.get("audio", {}).get("input", {}).get("turn_detection")
         if candidate["audio"]["input"]["turn_detection"] is None and isinstance(

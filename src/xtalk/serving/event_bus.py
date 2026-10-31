@@ -242,6 +242,8 @@ class EventBus:
             EventDispatchMode,
             str,
         ] = EventDispatchMode.RETURN_AFTER_DISPATCH,
+        *,
+        require_success: bool = False,
     ) -> bool:
         """Publish an event to all matching handlers.
 
@@ -253,6 +255,9 @@ class EventBus:
             Return and propagation behavior. Long canonical strings and the
             short aliases ``dispatch``, ``wait``, and ``wait_stoppable`` are
             accepted.
+        require_success : bool, optional
+            For ``WAIT_UNTIL_COMPLETE``, return ``False`` if no handler exists
+            or any handler fails. Default dispatch keeps its historical behavior.
 
         Returns
         -------
@@ -260,6 +265,11 @@ class EventBus:
             ``True`` on success, otherwise ``False``.
         """
         dispatch_mode = EventDispatchMode.parse(mode)
+        if (
+            require_success
+            and dispatch_mode is not EventDispatchMode.WAIT_UNTIL_COMPLETE
+        ):
+            raise ValueError("require_success needs WAIT_UNTIL_COMPLETE")
         try:
             self._stats["events_published"] += 1
 
@@ -278,14 +288,15 @@ class EventBus:
             if not handlers:
                 if self._enable_history and stoppable:
                     self._add_to_history(event)
-                return True
+                return not require_success
 
             if dispatch_mode is EventDispatchMode.WAIT_UNTIL_COMPLETE:
                 # Preserve priority order for event chains that require deterministic
                 # completion before returning.
+                errors: list[Exception] | None = [] if require_success else None
                 for handler in handlers:
-                    await self._handle_event_safe(handler, event)
-                return True
+                    await self._handle_event_safe(handler, event, errors=errors)
+                return not errors
 
             if stoppable:
                 for handler in handlers:
@@ -347,6 +358,8 @@ class EventBus:
         self,
         handler: EventHandler,
         event: Event,
+        *,
+        errors: list[Exception] | None = None,
     ) -> EventPropagation:
         """
         Safely handle an event, capturing exceptions.
@@ -369,6 +382,8 @@ class EventBus:
             return EventPropagation.CONTINUE
 
         except Exception as e:
+            if errors is not None:
+                errors.append(e)
             handler.error_count += 1
             handler.last_error = e
             self._stats["errors_occurred"] += 1

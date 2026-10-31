@@ -1,5 +1,11 @@
 export { BaseInputAudioSession, BaseOutputAudioSession };
-export type { InputAudioSessionConfig, OutputAudioSessionConfig, OutputAudioStopResult };
+export type { InputAudioSessionConfig, OutputAudioSessionConfig, OutputAudioStopResult, AudioStreamProgress };
+
+/** Cumulative playback counters for one continuous PCM stream. */
+interface AudioStreamProgress {
+    stream_id: string;
+    played_samples: number;
+}
 
 interface InputAudioSessionConfig {
     /**
@@ -71,6 +77,17 @@ interface OutputAudioStopResult {
     unconfirmedPlayedMs: number;
 }
 abstract class BaseOutputAudioSession {
+    /** Whether this platform implements continuous PCM playback. */
+    get supportsContinuousAudio(): boolean { return false; }
+    /** Begin one negotiated continuous stream. */
+    startAudioStream(_streamId: string): void { throw new Error("Continuous audio unavailable on this platform"); }
+    /** Admit a continuous PCM frame, independent of TTS response boundaries. */
+    async pushStreamAudioChunk(_pcm: ArrayBuffer): Promise<void> { throw new Error("Continuous audio unavailable"); }
+    /** Stop continuous output and report samples actually played. */
+    endAudioStream(): void | Promise<void> { }
+    /** Register a continuous playback counter observer. */
+    onAudioStreamProgress(callback: (progress: AudioStreamProgress) => void): void { this.streamProgressCallback = callback; }
+    protected streamProgressCallback(_progress: AudioStreamProgress): void { }
     abstract open(): Promise<void>;
     abstract close(): Promise<void>;
     abstract pause(): Promise<void>;

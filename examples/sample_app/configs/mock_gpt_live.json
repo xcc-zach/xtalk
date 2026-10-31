@@ -1,0 +1,22 @@
+{
+  "end_to_end": {
+    "type": "GPTLive",
+    "params": {
+      "api_key": "local-fixture",
+      "base_url": "ws://127.0.0.1:8765/v1/live/sessions",
+      "delegation": {
+        "type": "responses",
+        "responses": {
+          "model": "fixture",
+          "tools": [],
+          "tool_choice": "none"
+        }
+      },
+      "sample_rate": 24000
+    }
+  },
+  "service_config": {
+    "enable_persistence": false,
+    "data_dir": "data/mock-live"
+  }
+}

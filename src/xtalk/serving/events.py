@@ -19,7 +19,7 @@ from typing import (
 
 from pydantic import ConfigDict, Field, field_validator, with_config
 from pydantic.dataclasses import dataclass as validated_dataclass
-from typing_extensions import TypedDict, is_typeddict
+from typing_extensions import NotRequired, TypedDict, is_typeddict
 
 from ..models.agents.interfaces import AgentOutput
 
@@ -53,6 +53,72 @@ class Event:
     @property
     def event_type(self) -> str:
         return self.TYPE
+
+
+@dataclass
+class ServiceRuntimeStarted(Event):
+    """Announce initialized gateways for a continuous session."""
+
+    TYPE: ClassVar[str] = "service.runtime_started"
+    mode: str = "cascade"
+
+
+@dataclass
+class AudioStreamReady(Event):
+    """Confirm that the client has opened its negotiated audio devices."""
+
+    TYPE: ClassVar[str] = "audio.stream_ready"
+    stream_id: str = ""
+
+
+@dataclass
+class AudioStreamControlRequested(Event):
+    """Carry validated client input, output, close, or progress control."""
+
+    TYPE: ClassVar[str] = "audio.stream_control"
+    stream_id: str = ""
+    command: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EndToEndSignal(Event):
+    """Carry a neutral continuous-session signal for gateways and observers.
+
+    Parameters
+    ----------
+    action : str
+        Client action such as state, transcript, usage, control, or stream end.
+    data : dict
+        Typed-by-action fields; transcript text is never playback-confirmed.
+    """
+
+    TYPE: ClassVar[str] = "end_to_end.signal"
+    action: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EndToEndAudioChunkReady(Event):
+    """Deliver raw output PCM for a connection stream."""
+
+    TYPE: ClassVar[str] = "end_to_end.audio"
+    stream_id: str = ""
+    audio_data: bytes = b""
+
+
+@dataclass
+class EndToEndTranscriptDelta(Event):
+    """Preserve one generated transcript fragment and its approximate timing."""
+
+    TYPE: ClassVar[str] = "end_to_end.transcript"
+    stream_id: str = ""
+    arrival_sequence: int = 0
+    speaker: str = ""
+    delta: str = ""
+    start_ms: float = 0
+    end_ms: float = 0
+    provider_event_id: str | None = None
 
 
 def create_event_class(
@@ -973,7 +1039,7 @@ class PCMFormat(TypedDict):
     """The supported mono signed little-endian PCM16 wire format."""
 
     type: Literal["audio/pcm"]
-    rate: Literal[24000]
+    rate: Literal[16000, 24000]
 
 
 @with_config(ConfigDict(strict=True, extra="forbid"))
@@ -1035,6 +1101,8 @@ class SessionExtensions(TypedDict):
     """Configure Xtalk-specific transport behavior for one session."""
 
     output_audio_encoding: Literal["base64", "binary_pcm"]
+    end_to_end: NotRequired[dict[str, Any]]
+    end_to_end_protocol: NotRequired[Literal[2]]
 
 
 class BinaryAudioHeader(TypedDict):
