@@ -46,6 +46,25 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+        with:
+          # setuptools_scm derives the package version from git history.
+          fetch-depth: 0
+
+      # The frontend tests talk to the Python mock backend as a subprocess.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install the Python backend
+        working-directory: .
+        run: |
+          uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --system -e ".[test]"
 
       - uses: actions/setup-node@v7
         with:
