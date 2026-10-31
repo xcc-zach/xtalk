@@ -55,10 +55,10 @@ xtalk/
     - send_json 接收结构化 JSON 消息，RealtimeConnection 内部完成序列化及文本入队；通用入队实现使用私有方法，不要求调用方先序列化。
     - send_bytes(data: bytes) 仅负责二进制传输，音频封装属于 OutputGateway；文本和二进制统一按实际载荷字节数计入既有八 MiB 预算并保持入队顺序。
     - 不为应用层 ping/pong 单独保留 send_text；按 Realtime 协议不支持应用层 ping/pong 的约定删除遗留 pong 序列化发送路径，不借此新增 ping/pong 能力。结构化控制事件统一调用 send_json；WebSocket 传输层 ping/pong 由传输栈处理。
-    - 更新连接测试替身与调用方，验证公开接口不再依赖 send_text，JSON 序列化及有序发送行为保持一致。
+    - 调用方只使用公开接口，不依赖 send_text，JSON 序列化及有序发送行为保持一致。
 - OutputGateway 在既有回复和混合音频输出入口选择编码，共用既有 PCM 转换及事件 ID 生成路径；不通过先 Base64 编码再解码得到二进制载荷。
 - 前端协议处理位于 ActionHandler 和现有处理器，session/runtime 保持通用消息转交；浏览器 binaryType 与必要的 Blob 转 ArrayBuffer 操作仅在 frontend/src/platforms 内实现，跨平台代码只依赖现有平台抽象及 Web-first 类型。
-- 在 tests/realtime/test_connection.py、test_output.py 和输入配置测试补充后端验证，在 frontend/tests 补充协商、二进制解析、播放和异常测试；更新 docs/reference/realtime_api.md 与 realtime_api.zh.md，说明：如何启用并等待协商确认、按 WebSocket 消息类型识别音频编码、解析二进制头及 PCM 载荷、关联回复/混合音频、复用播放与块确认，以及处理非法消息；同时说明默认 Base64 兼容行为及两种编码互斥。两份协议文档保持一致。本变更不修改模型、提示词或推理逻辑，不要求新增独立示例客户端。
+- 更新 docs/reference/realtime_api.md 与 realtime_api.zh.md，说明：如何启用并等待协商确认、按 WebSocket 消息类型识别音频编码、解析二进制头及 PCM 载荷、关联回复/混合音频、复用播放与块确认，以及处理非法消息；同时说明默认 Base64 兼容行为及两种编码互斥。两份协议文档保持一致。本变更不修改模型、提示词或推理逻辑，不要求新增独立示例客户端。
 
 ```mermaid
 flowchart LR

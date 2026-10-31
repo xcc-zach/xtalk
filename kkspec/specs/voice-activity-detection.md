@@ -37,12 +37,9 @@
 
 ```text
 xtalk/
-├── src/xtalk/
-│   ├── models/vad/interfaces.py             # 通用单帧与批量模型契约及顺序回退
-│   └── serving/modules/vad_manager.py       # 帧缓冲、批量调度、说话事件和生命周期管理
-└── tests/
-    ├── test_vad_batching.py                 # 接口回退、批量调度及兼容性测试
-    └── test_text_input.py                   # 文本中断和声学检测恢复测试
+└── src/xtalk/
+    ├── models/vad/interfaces.py             # 通用单帧与批量模型契约及顺序回退
+    └── serving/modules/vad_manager.py       # 帧缓冲、批量调度、说话事件和生命周期管理
 ```
 
 ```mermaid
