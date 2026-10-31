@@ -42,7 +42,7 @@
     "docs": "typedoc --options typedoc.json",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run build",
-    "test": "node --test tests/*.test.cjs"
+    "test": "npm run build && node --test \"tests/**/*.test.ts\""
   },
   "devDependencies": {
     "html-webpack-plugin": "^5.6.6",
