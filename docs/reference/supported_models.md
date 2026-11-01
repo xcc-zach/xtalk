@@ -271,6 +271,61 @@ on Apple Silicon.
 
 </details>
 
+<details markdown="1">
+<summary>XTurnixLLM</summary>
+
+**Dependency:** None
+
+**Path:** [`src/xtalk/models/turn_detector/xturnix_llm.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix_llm.py)
+
+Runs XTurnix and, while XTurnix keeps listening, periodically asks an LLM whether the user has finished and is addressing the assistant. See [Turn Detection Pipeline](../explanation/turn_detector.md#xturnixllm-waiting-window) for the mechanism.
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `llm` | required | `ChatOpenAI` parameters or a chat model instance. Reasoning switches and request timeouts go here. |
+| `base_url` / `timeout` / `max_model_len` | same as XTurnix | XTurnix server settings. |
+| `llm_interval` | `1.0` | Seconds between LLM requests, also the delay before the first one. |
+| `llm_timeout` | `10.0` | Seconds after the window start beyond which no new LLM request is sent. |
+| `llm_output_reason` | `true` | Whether the LLM is asked to output a `reason` field. |
+
+LLM without reasoning (reasoning disabled on a vLLM-served Qwen3):
+
+```json
+{
+  "type": "XTurnixLLM",
+  "params": {
+    "base_url": "http://127.0.0.1:8000",
+    "llm": {
+      "model": "Qwen/Qwen3-30B-A3B",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "api_key": "EMPTY",
+      "temperature": 0,
+      "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
+LLM with reasoning (DashScope Qwen with thinking enabled), so the extra `reason` field is dropped:
+
+```json
+{
+  "type": "XTurnixLLM",
+  "params": {
+    "base_url": "http://127.0.0.1:8000",
+    "llm": {
+      "model": "qwen-plus",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "<DASHSCOPE_API_KEY>",
+      "extra_body": {"enable_thinking": true}
+    },
+    "llm_output_reason": false
+  }
+}
+```
+
+</details>
+
 ## Speaker Diarization
 
 **Name in config**: `speaker_diarization`

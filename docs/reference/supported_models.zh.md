@@ -266,6 +266,61 @@ Turn detector 用于判断用户是否已经说完，并决定系统何时开始
 
 </details>
 
+<details markdown="1">
+<summary>XTurnixLLM</summary>
+
+**依赖：** 无
+
+**路径：** [`src/xtalk/models/turn_detector/xturnix_llm.py`](https://github.com/xcc-zach/xtalk/blob/main/src/xtalk/models/turn_detector/xturnix_llm.py)
+
+运行 XTurnix，并在 XTurnix 持续等待期间定时询问 LLM：用户是否已说完，且是在对助手说话。机制见[轮次检测流程](../explanation/turn_detector.zh.md#xturnixllm-等待窗口)。
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `llm` | 必填 | `ChatOpenAI` 参数或聊天模型实例；推理开关与请求超时在这里配置。 |
+| `base_url` / `timeout` / `max_model_len` | 同 XTurnix | XTurnix 服务配置。 |
+| `llm_interval` | `1.0` | 相邻 LLM 请求的间隔秒数，也是首次请求的延迟。 |
+| `llm_timeout` | `10.0` | 距窗口起点超过该秒数后不再发起新的 LLM 请求。 |
+| `llm_output_reason` | `true` | 是否要求 LLM 输出 `reason` 字段。 |
+
+不带推理的 LLM（关闭 vLLM 部署的 Qwen3 的推理）：
+
+```json
+{
+  "type": "XTurnixLLM",
+  "params": {
+    "base_url": "http://127.0.0.1:8000",
+    "llm": {
+      "model": "Qwen/Qwen3-30B-A3B",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "api_key": "EMPTY",
+      "temperature": 0,
+      "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}
+    }
+  }
+}
+```
+
+带推理的 LLM（开启推理的 DashScope Qwen），因此不再要求输出 `reason` 字段：
+
+```json
+{
+  "type": "XTurnixLLM",
+  "params": {
+    "base_url": "http://127.0.0.1:8000",
+    "llm": {
+      "model": "qwen-plus",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "<DASHSCOPE_API_KEY>",
+      "extra_body": {"enable_thinking": true}
+    },
+    "llm_output_reason": false
+  }
+}
+```
+
+</details>
+
 ## 说话人分离
 
 **配置中的名称**：`speaker_diarization`
