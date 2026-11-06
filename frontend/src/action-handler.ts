@@ -183,6 +183,9 @@ class ActionHandler {
                         || ![header.output_index, header.content_index].every(value => Number.isInteger(value) && value >= 0)) throw new Error("Missing audio identity");
                     if (header.response_id !== this.activeAudioResponse || this.retiredAudioResponses.has(header.response_id)) return;
                     await this.handleAction(header.type, {...header, pcm}, websocket, conversation, output);
+                } else if (header.type === "xtalk.audio_stream.delta") {
+                    if (conversation.state.mode !== "end_to_end" || typeof header.stream_id !== "string" || !header.stream_id) throw new Error("Invalid continuous stream identity");
+                    await this.handleAction(header.type, {...header, pcm}, websocket, conversation, output);
                 } else if (header.type === "xtalk.audio.mix.delta") {
                     if (header.format !== "pcm_s16le" || !Number.isInteger(header.channels) || header.channels <= 0
                         || !Number.isInteger(header.sample_rate) || header.sample_rate <= 0 || pcm.byteLength % (2 * header.channels)) throw new Error("Invalid mixed PCM format");
@@ -217,7 +220,10 @@ class ActionHandler {
         if (handler) {
             await handler(data, websocket, conversation, outputAudioSession);
             if (action === "session.created") {
-                websocket.sendJson({type: "session.update", session: {type: "realtime", xtalk: {output_audio_encoding: this.requestedEncoding}}});
+                websocket.sendJson({type: "session.update", session: {type: "realtime", xtalk: {
+                    output_audio_encoding: this.requestedEncoding,
+                    ...(data.session?.xtalk?.end_to_end ? {end_to_end_protocol: 2} : {}),
+                }}});
             }
             this.notifyActionHandled(action, data);
         } else {

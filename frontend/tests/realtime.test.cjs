@@ -21,6 +21,7 @@ function load(relative) {
             ...load('action-handler-functions/session').default,
             ...load('action-handler-functions/output').default,
             ...load('action-handler-functions/input').default,
+            ...load('action-handler-functions/live').default,
         }};
         if (name === './utils') return {onVadSpeechStart() {}, onVadSpeechEnd() {}};
         if (name === '../encoding') return {createEncoding: () => ({decodeBase64: text => {
@@ -35,6 +36,40 @@ function load(relative) {
 }
 const {Conversation} = load('conversation');
 const {ActionHandler} = load('action-handler');
+
+test('Live uses Realtime negotiation, binary PCM and independent transcript fragments', async () => {
+    const handler = new ActionHandler('binary_pcm');
+    const conversation = new Conversation();
+    conversation.state.mode = 'end_to_end';
+    const sent = [], played = [];
+    const socket = {sendJson: message => sent.push(message)};
+    const output = {
+        startAudioStream(id) { this.id = id; },
+        async pushStreamAudioChunk(pcm) { played.push(Buffer.from(pcm)); },
+        async endAudioStream() { this.id = null; },
+    };
+    const receive = event => handler.handleMessage(JSON.stringify(event), socket, conversation, output);
+    await receive({type: 'session.created', session: {id: 'call', xtalk: {end_to_end: {protocol_version: 2}}}});
+    assert.equal(sent[0].session.xtalk.end_to_end_protocol, 2);
+    await receive({type: 'session.updated', session: {xtalk: {output_audio_encoding: 'binary_pcm'}}});
+    await receive({type: 'xtalk.audio_stream.started', stream_id: 'stream'});
+    await handler.handleMessage(envelope({version: 1, type: 'xtalk.audio_stream.delta', event_id: 'pcm', stream_id: 'stream'}), socket, conversation, output);
+    assert.deepEqual(played[0], Buffer.from([1, 0, 2, 0]));
+    const fragment = {type: 'xtalk.transcript.delta', stream_id: 'stream', arrival_sequence: 1,
+        provider_event_id: 'caption', delta: ' exact text ', speaker: 'assistant', start_ms: 0, end_ms: 20};
+    await receive(fragment);
+    await receive(fragment);
+    assert.equal(conversation.state.transcriptFragments.length, 1);
+    assert.equal(conversation.state.transcriptFragments[0].delta, ' exact text ');
+    assert.equal(conversation.state.messages.length, 0);
+    await receive({type: 'xtalk.audio_stream.error', code: 'command_rejected', message: 'rejected', fatal: false});
+    assert.equal(output.id, 'stream');
+    assert.match(conversation.state.error, /command_rejected/);
+    await receive({type: 'xtalk.audio_stream.ended'});
+    assert.equal(output.id, null);
+    assert.equal(conversation.state.transcriptFragments.length, 1);
+});
+
 function fixture() {
     const handler = new ActionHandler();
     const conversation = new Conversation();

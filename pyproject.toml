@@ -159,6 +159,7 @@ turn-sense = [
   "numpy",
 ]
 example = [
+  "asgi-lifespan",
   "pypdf",
   "fastapi==0.128.0",
   "jinja2",

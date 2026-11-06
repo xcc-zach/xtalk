@@ -10,7 +10,8 @@
     <link rel="stylesheet" href="./static/css/index.css" />
 </head>
 
-<body>
+<body data-conversation-mode="{{ conversation_mode | default('cascade') }}">
+
     <div class="app">
         <button id="drawer-backdrop" class="drawer-backdrop" type="button" tabindex="-1"
             aria-label="关闭侧边栏"></button>
@@ -179,6 +180,7 @@
             </button>
         </header>
 
+        <p id="call-status" class="call-status" role="status" aria-live="polite" hidden></p>
         <main class="workspace">
             <section id="orb-view" class="view-panel orb-view" aria-hidden="false">
                 <button id="btn-show-chat" class="orb-button" type="button" aria-label="显示聊天记录">

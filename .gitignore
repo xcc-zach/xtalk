@@ -199,3 +199,12 @@ skills-lock.json
 .vscode/
 
 .mcp.json
+
+# Local Live credentials
+/examples/sample_app/configs/openai_gpt_live.json
+/examples/sample_app/test_openai_key.py
+
+# Developer build dependencies and cached browser assets
+/frontend/node_modules
+/frontend/dist
+/examples/sample_app/dist

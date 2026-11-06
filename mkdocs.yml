@@ -81,6 +81,8 @@ plugins:
             'Service Configuration': 服务配置项
             Logging: 日志
             'Text Input': 文本输入
+            'GPTLive Demo': GPTLive 示例
+            'End-to-End Live Design': 端到端 Live 设计
             # Tabs under Technical Reference
             'Overall Architecture': 整体架构
             'Realtime API Protocol': Realtime API协议
@@ -118,6 +120,7 @@ nav:
           - 'Introduce Tools': tutorial/tool_design.md
           - 'Text Input': tutorial/text_input.md
           - 'Realtime API': tutorial/realtime_api.md
+          - 'GPTLive Demo': tutorial/gpt_live.md
           - 'Sample Config for Fully Local Deployment': tutorial/sample_config_for_fully_local_deployment.md
           - 'Service Configuration': tutorial/service_config.md
           - Logging: tutorial/logging.md
@@ -134,6 +137,7 @@ nav:
       - 'Supported Models': technical_reference/supported_models.md
       - 'ASR Design': technical_reference/asr_design.md
       - 'TTS Design': technical_reference/tts_design.md
+      - 'End-to-End Live Design': technical_reference/end_to_end_live_spec.md
       - 'Speech Enhancer Design': technical_reference/speech_enhancer_design.md
       - 'VAD Design': technical_reference/vad_design.md
       - 'Turn Detector Design': technical_reference/turn_detector_design.md

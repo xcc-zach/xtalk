@@ -1,14 +1,18 @@
 """Application-owned login, history and upload endpoints."""
 
+import asyncio
+import json
+import uuid
 from pathlib import Path
 from typing import Any
-import uuid
-import json
-import asyncio
-from fastapi import WebSocket, Request, HTTPException, File, Form, UploadFile, status
+
+from fastapi import File, Form, HTTPException, Request, UploadFile, WebSocket, status
+
+from xtalk.models import EndToEnd
+
 from .auth import JWTAuth, extract_bearer_token, resolve_auth_config
-from .persistence import PersistenceStore
 from .knowledge_store import KnowledgeStore
+from .persistence import PersistenceStore
 from .recording_store import RecordingStore
 
 
@@ -220,6 +224,10 @@ class ApplicationHost:
                 user_id = _require_ws_user(websocket)
             except ValueError:
                 await websocket.close(code=1008)
+                return
+            if self.runtime._models.get(EndToEnd) is not None:
+                # Authenticated single-call Live bypasses application history and recording.
+                await self.runtime.create_asgi_app()(websocket.scope, websocket.receive, websocket.send)
                 return
             conversation_id = websocket.query_params.get("conversation_id")
             if conversation_id:

@@ -1142,3 +1142,10 @@ svg {
         transition-duration: 0.01ms !important;
     }
 }
+
+body[data-conversation-mode="end_to_end"] [hidden] {
+    display: none !important;
+}
+
+/* Live call readiness and errors remain visible in both views. */
+.call-status { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 20; max-width: min(90vw, 42rem); padding: .6rem 1rem; border-radius: 12px; background: var(--surface, #182337); color: var(--text, #fff); }

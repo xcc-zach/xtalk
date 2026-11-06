@@ -12,15 +12,15 @@ function getWebSocketURL() {
     return url;
 }
 
+const LIVE_MODE = document.body.dataset.conversationMode === "end_to_end";
 const frontendUtilitiesBaseUrl = resolveAppURL("xtalk/frontend-utilities").toString();
 const inputConfig = {
     frontendUtilitiesBaseUrl,
     enableVAD: true,
 };
 const FRONTEND_VAD_ENABLED = inputConfig.enableVAD !== false;
-const session = createBusinessSession(createSession, getWebSocketURL(), {
-    inputConfig,
-});
+const sessionConfig = {inputConfig, mode: LIVE_MODE ? "end_to_end" : "cascade"};
+const session = createBusinessSession(createSession, getWebSocketURL(), sessionConfig);
 
 const $btnCall = document.getElementById('btn-call');
 const $btnMute = document.getElementById('btn-mute');
@@ -32,6 +32,7 @@ const $voiceSelect = document.getElementById('voice-select');
 const $sessionList = document.getElementById('session-list');
 const $sessionListEmpty = document.getElementById('session-list-empty');
 const $connectionState = document.getElementById('connection-state');
+const $callStatus = document.getElementById('call-status');
 const $streamState = document.getElementById('stream-state');
 const $mutedState = document.getElementById('muted-state');
 const $sessionId = document.getElementById('session-id');
@@ -68,7 +69,6 @@ const $vadRecordingCount = document.getElementById('vad-recording-count');
 const $vadRecordingEmpty = document.getElementById('vad-recording-empty');
 const $vadRecordingList = document.getElementById('vad-recording-list');
 const $toastRegion = document.getElementById('toast-region');
-
 let audioCtx = null;
 let inputAnalyser = null;
 let outputAnalyser = null;
@@ -85,6 +85,7 @@ let recentAudioObjectUrl = null;
 let sessionsCache = [];
 let previousSessionId = null;
 let previousMessageCount = 0;
+let previousError = '';
 let isSessionListLoading = false;
 let refreshSessionsTimer = null;
 let timelineSessionId = null;
@@ -138,12 +139,12 @@ function renderControls() {
     const isLive = isLiveConnection();
     const isMuted = session.muted;
     const isCallPending = isStarting || isStopping;
-    const callAction = isLive ? 'stop' : 'start';
-    const callLabel = isLive ? '停止对话' : '开始对话';
-    const pendingLabel = isStopping ? '正在停止对话' : '正在开始对话';
+    const callAction = isLive || isStarting ? 'stop' : 'start';
+    const callLabel = isLive || isStarting ? '停止对话' : '开始对话';
+    const pendingLabel = isStopping ? '正在停止对话' : '正在连接，点击取消';
 
     $btnCall.dataset.action = callAction;
-    $btnCall.disabled = isCallPending;
+    $btnCall.disabled = isStopping;
     $btnCall.classList.toggle('is-loading', isCallPending);
     $btnCall.setAttribute('aria-label', isCallPending ? pendingLabel : callLabel);
     $btnCall.setAttribute('aria-busy', String(isCallPending));
@@ -158,13 +159,24 @@ function renderControls() {
     $btnUploadFile.disabled = isUploading || !session.state.sessionId;
     $btnUploadFile.classList.toggle('is-loading', isUploading);
     $voiceSelect.disabled = !voiceOptionsLoaded || !isLive;
+    const liveMode = session.state.mode === "end_to_end";
+    for (const element of [$recentAudioDetails, $vadStatusDetails, $btnUploadFile, $voiceSelect,
+        $btnToggleSessions, $btnToggleDebug, $btnNewSession, $btnRefreshSessions]) element.hidden = liveMode;
+    if (liveMode) {
+        $btnUploadFile.disabled = true;
+        $voiceSelect.disabled = true;
+    }
 
+    $callStatus.hidden = !liveMode;
+    $callStatus.textContent = isStopping ? '正在停止通话…'
+        : isStarting ? '正在连接，点击停止按钮可取消…'
+        : session.state.error || (isLive ? (isMuted ? '麦克风已静音' : '可以讲话') : '点击开始对话');
     $connectionState.textContent = isStarting
         ? 'starting'
         : isStopping
             ? 'stopping'
             : session.state.connectionState;
-    $streamState.textContent = session.state.streamState;
+    $streamState.textContent = session.state.error || (session.state.connectionState === 'connected' && LIVE_MODE ? (session.muted ? '麦克风已静音' : '可以讲话') : session.state.streamState);
     $mutedState.textContent = String(isMuted);
     $sessionId.textContent = session.state.sessionId || '--';
     $btnShowChat.dataset.streamState = session.state.streamState;
@@ -268,6 +280,7 @@ function renderSessions() {
 }
 
 async function refreshSessions({ preserveSelection = true } = {}) {
+    if (LIVE_MODE || session.state.mode === "end_to_end") return;
     if (isSessionListLoading) {
         return;
     }
@@ -295,6 +308,7 @@ async function refreshSessions({ preserveSelection = true } = {}) {
 }
 
 function scheduleRefreshSessions() {
+    if (LIVE_MODE || session.state.mode === "end_to_end") return;
     if (refreshSessionsTimer) {
         clearTimeout(refreshSessionsTimer);
     }
@@ -811,7 +825,7 @@ function trimVadPreRoll() {
 }
 
 function appendVadInputAudioChunk(pcmChunkInt16, sampleRate) {
-    if (!FRONTEND_VAD_ENABLED
+    if (session.state.mode === "end_to_end" || !FRONTEND_VAD_ENABLED
         || !(pcmChunkInt16 instanceof ArrayBuffer)
         || pcmChunkInt16.byteLength === 0) {
         return;
@@ -1036,7 +1050,7 @@ function refreshRecentAudioSnapshot(force = false) {
 
 session.onStateChange((state) => {
     currentStreamState = state.streamState;
-    syncFrontendVadState(state.streamState, state.connectionState);
+    if (state.mode !== "end_to_end") syncFrontendVadState(state.streamState, state.connectionState);
     renderControls();
     renderSessions();
     if (!isActive) {
@@ -1046,7 +1060,19 @@ session.onStateChange((state) => {
     if (state.sessionId !== timelineSessionId) {
         resetChatTimeline(state.sessionId);
     }
-    syncConversationMessages(state.messages);
+    if (state.mode === "end_to_end") {
+        // Approximate timestamps order captions for display; they do not define turns.
+        const captions = [];
+        for (const fragment of [...state.transcriptFragments].sort((a, b) => a.start_ms - b.start_ms || a.arrival_sequence - b.arrival_sequence)) {
+            const last = captions[captions.length - 1];
+            if (last?.role === fragment.speaker) last.content += fragment.delta;
+            else captions.push({role: fragment.speaker, content: fragment.delta});
+        }
+        resetChatTimeline(state.sessionId);
+        syncConversationMessages([...captions, ...state.messages]);
+    } else syncConversationMessages(state.messages);
+    if (state.error && state.error !== previousError) showToast(state.error);
+    previousError = state.error;
     const nextToolCall = normalizeToolCall(state.tool_call);
     const nextToolCallKey = buildToolCallCacheKey(nextToolCall);
     if (nextToolCallKey && nextToolCallKey !== toolCallCacheKey) {
@@ -1071,10 +1097,10 @@ session.onStateChange((state) => {
     if (state.sessionId !== previousSessionId) {
         previousSessionId = state.sessionId;
         scheduleRefreshSessions();
-    } else if (state.sessionId && state.messages.length !== previousMessageCount) {
+    } else if (state.sessionId && state.messages.length + state.transcriptFragments.length !== previousMessageCount) {
         scheduleRefreshSessions();
     }
-    previousMessageCount = state.messages.length;
+    previousMessageCount = state.messages.length + state.transcriptFragments.length;
 });
 
 session.onInputAudioChunk((pcmChunkInt16, sampleRate) => {
@@ -1106,9 +1132,9 @@ session.onFullAudioChunk((pcmChunkInt16, sampleRate) => {
 });
 
 $btnCall.addEventListener('click', async () => {
-    if (isStarting) return;
+    if (isStopping) return;
 
-    if (isLiveConnection()) {
+    if (isLiveConnection() || isStarting) {
         isStopping = true;
         renderControls();
         try {
@@ -1132,7 +1158,7 @@ $btnCall.addEventListener('click', async () => {
         startVisualization();
         await refreshSessions();
     } catch (error) {
-        showToast('开始对话失败：' + (error?.message || error));
+        if (!String(error?.message || error).includes('cancelled')) showToast('开始对话失败：' + (error?.message || error));
     } finally {
         isStarting = false;
         renderControls();
@@ -1243,6 +1269,7 @@ function syncVoiceSelectValue(targetName) {
 }
 
 async function loadReferenceAudios() {
+    if (LIVE_MODE) return;
     try {
         const response = await fetch('./api/voices');
         const data = await response.json();

@@ -197,6 +197,7 @@ if record_audio:
 host_embeddings = init_configured_model(slot="embeddings", config=application_config) if "embeddings" in application_config else None
 application_config.pop("embeddings", None)
 xtalk_instance = Xtalk.from_config(application_config)
+conversation_mode = "end_to_end" if "end_to_end" in application_config else "cascade"
 from contextlib import asynccontextmanager
 from asgi_lifespan import LifespanManager
 import sys
@@ -246,7 +247,7 @@ async def get_reference_audios():
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(request=request, name="index.html", context={"conversation_mode": conversation_mode})
 
 
 if __name__ == "__main__":

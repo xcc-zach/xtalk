@@ -6,6 +6,7 @@ import type { Session, SessionConfig } from "./types";
 /** Creates a pure Realtime conversation client without business HTTP calls. */
 export function createSession(websocketURL: string | URL, config: SessionConfig = {}): Session {
     const conversation = new Conversation();
+    conversation.state.mode = config.mode ?? "cascade";
     const actionHandler = new ActionHandler(config.outputAudioEncoding);
     let opened = false;
     let pendingHistory: Parameters<Session["restoreHistory"]>[0] = [];
@@ -18,7 +19,7 @@ export function createSession(websocketURL: string | URL, config: SessionConfig 
     const runtime = createSessionRuntimeController({
         actionHandler, conversation,
         beforeAudioStart: async () => {
-            await sendHistory(pendingHistory);
+            if (conversation.state.mode !== "end_to_end") await sendHistory(pendingHistory);
             pendingHistory = [];
         },
         getAccessToken: () => config.apiKey ?? null,
@@ -28,7 +29,10 @@ export function createSession(websocketURL: string | URL, config: SessionConfig 
         onUnexpectedDisconnect: () => { conversation.state.streamState = "idle"; },
     });
     return {
-        async open() { await runtime.initialize(); opened = true; },
+        async open() {
+            if (conversation.state.mode === "end_to_end") conversation.switch(null, []);
+            await runtime.initialize(); opened = true;
+        },
         async close() { opened = false; await runtime.close(); },
         onStateChange: callback => conversation.onStateChange(callback),
         get state() { return conversation.state; },
@@ -38,14 +42,17 @@ export function createSession(websocketURL: string | URL, config: SessionConfig 
         get muted() { return runtime.muted; },
         set muted(value) { runtime.muted = value; },
         async restoreHistory(messages) {
+            if (conversation.state.mode === "end_to_end") throw new Error("History is unavailable in single-call Live");
             if (!opened) { pendingHistory.push(...messages); return; }
             await sendHistory(messages);
         },
         async changeVoice(voiceName) {
+            if (conversation.state.mode === "end_to_end") throw new Error("Voice is fixed for a Live session");
             const active = runtime.requireRuntime();
             await actionHandler.handleAction("client_change_voice", {voiceName}, active.websocket, conversation, active.outputAudioSession);
         },
         async sendText(text) {
+            if (conversation.state.mode === "end_to_end") throw new Error("Text input is unavailable in Live mode");
             const normalized = text.trim();
             if (!normalized) throw new Error("Text must not be empty");
             const active = runtime.requireRuntime();

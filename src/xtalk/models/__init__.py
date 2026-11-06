@@ -3,28 +3,30 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "ASR",
+    "TTS",
+    "VAD",
     "Agent",
     "AgentContext",
     "AgentOutput",
-    "ASR",
     "Captioner",
     "Embeddings",
+    "EndToEnd",
     "ForcedAligner",
     "ForcedAlignmentUnit",
     "Models",
     "PuntRestorer",
     "Rewriter",
-    "SpeakerEncoder",
     "SpeakerDiarization",
+    "SpeakerEncoder",
     "SpeechEnhancer",
     "SpeechSpeedController",
     "StreamingTextTTS",
-    "TTS",
     "TurnDetector",
-    "VAD",
 ]
 
 _INTERFACE_IMPORTS = {
+    "EndToEnd": ("xtalk.models.end_to_end.interfaces", "EndToEnd"),
     "Agent": ("xtalk.models.agents.interfaces", "Agent"),
     "AgentContext": ("xtalk.models.agents.interfaces", "AgentContext"),
     "AgentOutput": ("xtalk.models.agents.interfaces", "AgentOutput"),

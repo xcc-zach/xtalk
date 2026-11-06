@@ -1,5 +1,11 @@
 export { Conversation };
-export type { ConversationMessage, ConversationState };
+export type { ConversationMessage, ConversationState, TranscriptFragment };
+
+/** One exact caption fragment with approximate provider timing. */
+type TranscriptFragment = {
+    stream_id: string; arrival_sequence: number; speaker: "user" | "assistant";
+    delta: string; start_ms: number; end_ms: number; provider_event_id?: string | null;
+};
 
 type ConversationMessage = {
     /** Source role used for display and incremental update behavior. */
@@ -15,7 +21,7 @@ type ConversationMessage = {
 }
 
 function defaultConversation(): {
-    connectionState: "connected" | "reconnecting" | "disconnected";
+    connectionState: "connecting" | "connected" | "reconnecting" | "disconnected";
     streamState: "idle" | "listening" | "processing" | "speaking";
     sessionId: string | null;
     latency: {
@@ -27,6 +33,10 @@ function defaultConversation(): {
     };
     generatedResponses: Record<string, {text: string; final: boolean}>;
     messages: ConversationMessage[];
+    transcriptFragments: TranscriptFragment[];
+    mode: "cascade" | "end_to_end";
+    capabilities: Record<string, boolean>;
+    error: string;
     thought: string;
     caption: string;
     retrieval: string;
@@ -41,7 +51,7 @@ function defaultConversation(): {
         sessionId: null,
         latency: {},
         generatedResponses: {},
-        messages: [],
+        messages: [], transcriptFragments: [], mode: "cascade", capabilities: {}, error: "",
         thought: "",
         caption: "",
         retrieval: "",
@@ -72,6 +82,15 @@ class Conversation {
             this._state.messages.push({role: "user", itemId, content: text, final});
             this.messagePrefixes.push(undefined);
         }
+        this.notifyStateChange();
+    }
+
+    /** Append independent caption fragments once, preserving exact whitespace. */
+    appendTranscript(fragment: TranscriptFragment): void {
+        if (this._state.transcriptFragments.some(item => item.stream_id === fragment.stream_id &&
+            (item.arrival_sequence === fragment.arrival_sequence ||
+             (!!fragment.provider_event_id && item.provider_event_id === fragment.provider_event_id)))) return;
+        this._state.transcriptFragments.push(fragment);
         this.notifyStateChange();
     }
 
@@ -106,6 +125,7 @@ class Conversation {
     }
 
     switch(sessionId: string | null, messages: ConversationMessage[]): void {
+        this._state.transcriptFragments = [];
         this._state.sessionId = sessionId;
         this._state.messages = messages.map((message) => ({
             ...message,

@@ -5,7 +5,7 @@ from collections.abc import Callable, Coroutine
 from inspect import signature
 from typing import Any, ClassVar
 
-from ..models import Agent, Models
+from ..models import Agent, EndToEnd, Models
 from ..realtime.protocol import InputHandler, OutputHandler
 from . import events as runtime_events
 from .event_bus import EventBus, EventDispatchMode
@@ -14,6 +14,7 @@ from .interfaces import Connection as WebSocket
 from .interfaces import EventListenerMixin, EventOverrides, Manager
 from .modules.asr_manager import ASRManager
 from .modules.captioner_manager import CaptionerManager
+from .modules.end_to_end_manager import EndToEndManager, create_stream_profile
 from .modules.enhancer_manager import EnhancerManager
 from .modules.input_gateway import InputGateway
 from .modules.latency_manager import LatencyManager
@@ -68,6 +69,10 @@ class Service:
         # Per-session config (shared with managers/gateways)
         base_config: dict[str, Any] = dict(service_config) if service_config else {}
         base_config.setdefault("output_modalities", ["audio"])
+        live = models.get(EndToEnd)
+        if live is not None:
+            base_config["_end_to_end_profile"] = create_stream_profile(live, base_config)
+            base_config["input_sample_rate"] = live.audio_profile.sample_rate
         self.service_config = base_config
 
         self.event_bus = EventBus(enable_history=False, max_history=0)
@@ -82,6 +87,8 @@ class Service:
 
         if _event_overrides is None:
             self._register_builtin_handlers()
+            if live is not None:
+                self._register_stream_handlers()
 
         # When _websocket is None this is a prototype instance with no runtime logic
         if _websocket is None:
@@ -107,6 +114,42 @@ class Service:
         )
 
         self.output_gateway._register_custom_outputs(self._effective_output_handlers())
+
+    def _register_stream_handlers(self) -> None:
+        """Register continuous controls once on the service prototype."""
+        for kind in (
+            "xtalk.audio_stream.ready",
+            "xtalk.audio_stream.progress",
+            "xtalk.audio_stream.input_muted",
+            "xtalk.audio_stream.close",
+        ):
+            self.register_input_handler(
+                type=kind, handler=InputGateway._handle_stream_control
+            )
+        for kind in (
+            "input_audio_buffer.commit",
+            "input_audio_buffer.clear",
+            "input_audio_buffer.speech_start",
+            "conversation.item.create",
+            "response.cancel",
+            "response.output_audio.playback.chunk_played",
+            "response.output_audio.playback.finished",
+            "response.output_audio.playback.stopped",
+        ):
+            self.register_input_handler(
+                type=kind, handler=InputGateway._unsupported_live_input
+            )
+        for event, method in (
+            (runtime_events.EndToEndSignal, "_stream_signal"),
+            (runtime_events.EndToEndAudioChunkReady, "_stream_audio"),
+            (runtime_events.EndToEndTranscriptDelta, "_stream_transcript"),
+        ):
+            self.subscribe_event(
+                event_listener_cls=OutputGateway,
+                event_type=event,
+                method_or_handler=method,
+                priority=5,
+            )
 
     def _register_builtin_handlers(self) -> None:
         """Assemble protocol handlers through the public registration APIs."""
@@ -523,7 +566,8 @@ class Service:
             )
         await self.input_gateway.handle_connection(already_accepted=already_accepted)
         await self.event_bus.publish(
-            LLMAgentLoop(session_id=self.session_id),
+            runtime_events.ServiceRuntimeStarted(session_id=self.session_id, mode="end_to_end")
+            if self.models.get(EndToEnd) is not None else LLMAgentLoop(session_id=self.session_id),
             mode=EventDispatchMode.WAIT_UNTIL_COMPLETE,
         )
         await self.input_gateway.handle_message_loop()
@@ -634,11 +678,23 @@ class DefaultService(Service):
         _session_id: str | None = None,
         _event_overrides: dict[type[EventListenerMixin], EventOverrides] | None = None,
     ):
+        if models.get(EndToEnd) is not None and manager_classes is None:
+            from ..models import (
+                ASR,
+                TTS,
+                VAD,
+                SpeakerEncoder,
+                SpeechEnhancer,
+                TurnDetector,
+            )
+            if any(models.get(kind) is not None for kind in (Agent, ASR, TTS, VAD, SpeechEnhancer, SpeakerEncoder, TurnDetector)):
+                raise ValueError("EndToEnd default graph cannot mix cascade models")
         super().__init__(
             models=models,
             service_config=service_config,
             manager_classes=(
-                self.MANAGER_CLASSES if manager_classes is None else manager_classes
+                ([EndToEndManager] if models.get(EndToEnd) is not None else self.MANAGER_CLASSES)
+                if manager_classes is None else manager_classes
             ),
             _websocket=_websocket,
             _session_id=_session_id,
